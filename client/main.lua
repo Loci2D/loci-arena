@@ -290,17 +290,19 @@ end
 
 function draw_debug(sw, sh)
     love.graphics.setColor(0, 0, 0, 0.75)
-    love.graphics.rectangle("fill", sw - 240, 10, 230, 100, 6, 6)
+    love.graphics.rectangle("fill", sw - 240, 10, 230, 120, 6, 6)
 
     local ent_count = #loci.get_entities()
     local me = loci.get_my_entity()
+    local tick_rate = loci.get_server_tick_rate and loci.get_server_tick_rate() or 30
 
     love.graphics.setColor(0.4, 1.0, 0.5, 1)
     love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), sw - 225, 20)
     love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), sw - 225, 40)
     love.graphics.print(string.format("Entities: %d", ent_count), sw - 225, 60)
+    love.graphics.print(string.format("Tick Rate: %d Hz", tick_rate), sw - 225, 80)
     if me then
-        love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 80)
+        love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 100)
     end
 end
 
