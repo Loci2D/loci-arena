@@ -16,9 +16,6 @@ end
 local SERVER_IP = os.getenv("LOCI_SERVER_IP") or "127.0.0.1"
 local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
 
--- World scale: Simulation units (meters) to screen pixels
-local WORLD_SCALE = 16.0
-
 -- UI & State variables
 local connection_status = "Connecting..."
 local rejection_msg = ""
@@ -29,8 +26,13 @@ local show_debug_overlay = false
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
+-- Server authoritative arena boundaries: [-500, +500] (1000x1000 pixels)
+local ARENA_MIN = -500
+local ARENA_MAX = 500
+local ARENA_SIZE = ARENA_MAX - ARENA_MIN
+
 function love.load(arg)
-    -- Linear filter allows smooth sub-pixel movement without pixel snapping jitter
+    -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
     
     local random_suffix = tostring(love.math and love.math.random(1000, 9999) or math.random(1000, 9999))
@@ -99,13 +101,13 @@ local function update_movement()
 end
 
 function love.update(dt)
-    -- Process incoming network packets and internal entity lerp
+    -- Process incoming network packets and smooth entity interpolation
     loci.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
         update_movement()
-        -- Lock camera directly to local player to eliminate asynchronous lerp jitter
+        -- Direct camera binding eliminates lag jitter between camera and player
         cam_x = my_entity.x
         cam_y = my_entity.y
     end
@@ -128,11 +130,11 @@ function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
     elseif key == "space" then
-        -- Primary action intent
+        -- Primary action intent directed toward mouse cursor
         local mx, my = love.mouse.getPosition()
         local sw, sh = love.graphics.getDimensions()
-        local world_target_x = (mx - sw / 2) / WORLD_SCALE + cam_x
-        local world_target_y = (my - sh / 2) / WORLD_SCALE + cam_y
+        local world_target_x = (mx - sw / 2) + cam_x
+        local world_target_y = (my - sh / 2) + cam_y
         
         local me = loci.get_my_entity()
         local origin_x = me and me.x or cam_x
@@ -158,17 +160,17 @@ function love.draw()
     -- 1. Arena World Rendering
     love.graphics.push()
     love.graphics.translate(center_x, center_y)
-    love.graphics.translate(-cam_x * WORLD_SCALE, -cam_y * WORLD_SCALE)
+    love.graphics.translate(-cam_x, -cam_y)
 
-    -- Draw background grid
+    -- Draw background grid & physical collision boundaries
     draw_arena_grid()
 
     -- Draw transient visual effects
     for _, fx in ipairs(visual_fx) do
         local progress = fx.lifetime / fx.max_lifetime
         love.graphics.setColor(1, 0.85, 0.2, progress)
-        local fx_start_x = fx.x * WORLD_SCALE
-        local fx_start_y = fx.y * WORLD_SCALE
+        local fx_start_x = fx.x
+        local fx_start_y = fx.y
         local fx_end_x = fx_start_x + fx.dir_x * 50
         local fx_end_y = fx_start_y + fx.dir_y * 50
         love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
@@ -194,35 +196,47 @@ function love.draw()
 end
 
 function draw_arena_grid()
-    -- Arena floor boundary
-    love.graphics.setColor(0.10, 0.12, 0.16, 1)
-    love.graphics.rectangle("fill", -100 * WORLD_SCALE, -100 * WORLD_SCALE, 200 * WORLD_SCALE, 200 * WORLD_SCALE)
+    -- Outer void background beyond map bounds
+    love.graphics.setColor(0.06, 0.07, 0.10, 1.0)
+    love.graphics.rectangle("fill", -1000, -1000, 2000, 2000)
 
-    -- Playable arena borders (-35 to +35 meters)
-    love.graphics.setColor(0.2, 0.25, 0.35, 0.8)
-    love.graphics.setLineWidth(2)
-    love.graphics.rectangle("line", -35 * WORLD_SCALE, -35 * WORLD_SCALE, 70 * WORLD_SCALE, 70 * WORLD_SCALE)
+    -- Playable arena floor (matching server MapBounds: [-500, +500])
+    love.graphics.setColor(0.10, 0.12, 0.17, 1.0)
+    love.graphics.rectangle("fill", ARENA_MIN, ARENA_MIN, ARENA_SIZE, ARENA_SIZE)
 
-    -- Grid lines every 5 meters
-    love.graphics.setColor(0.18, 0.22, 0.30, 0.4)
+    -- Interior grid lines every 50 pixels
+    love.graphics.setColor(0.18, 0.22, 0.32, 0.35)
     love.graphics.setLineWidth(1)
-    for x = -35 * WORLD_SCALE, 35 * WORLD_SCALE, 5 * WORLD_SCALE do
-        love.graphics.line(x, -35 * WORLD_SCALE, x, 35 * WORLD_SCALE)
+    for x = ARENA_MIN, ARENA_MAX, 50 do
+        love.graphics.line(x, ARENA_MIN, x, ARENA_MAX)
     end
-    for y = -35 * WORLD_SCALE, 35 * WORLD_SCALE, 5 * WORLD_SCALE do
-        love.graphics.line(-35 * WORLD_SCALE, y, 35 * WORLD_SCALE, y)
+    for y = ARENA_MIN, ARENA_MAX, 50 do
+        love.graphics.line(ARENA_MIN, y, ARENA_MAX, y)
     end
 
-    -- Origin crosshair
-    love.graphics.setColor(0.3, 0.4, 0.5, 0.6)
-    love.graphics.line(-15, 0, 15, 0)
-    love.graphics.line(0, -15, 0, 15)
+    -- Outer collision barrier glow
+    love.graphics.setColor(0.25, 0.55, 0.95, 0.25)
+    love.graphics.setLineWidth(5)
+    love.graphics.rectangle("line", ARENA_MIN - 2, ARENA_MIN - 2, ARENA_SIZE + 4, ARENA_SIZE + 4)
+
+    -- Authoritative boundary wall line
+    love.graphics.setColor(0.35, 0.65, 1.0, 0.9)
+    love.graphics.setLineWidth(2)
+    love.graphics.rectangle("line", ARENA_MIN, ARENA_MIN, ARENA_SIZE, ARENA_SIZE)
+
+    -- Origin crosshair at (0, 0)
+    love.graphics.setColor(0.4, 0.6, 0.85, 0.7)
+    love.graphics.setLineWidth(1.5)
+    love.graphics.line(-20, 0, 20, 0)
+    love.graphics.line(0, -20, 0, 20)
+    love.graphics.setColor(0.6, 0.75, 0.9, 0.6)
+    love.graphics.print("(0, 0)", 6, 6)
 end
 
 function draw_entity(ent, is_me)
-    local radius = 16
-    local px = ent.x * WORLD_SCALE
-    local py = ent.y * WORLD_SCALE
+    local radius = 18
+    local px = ent.x
+    local py = ent.y
 
     if is_me then
         love.graphics.setColor(0.2, 0.6, 1.0, 1)
@@ -231,17 +245,17 @@ function draw_entity(ent, is_me)
     end
 
     love.graphics.circle("fill", px, py, radius)
-    love.graphics.setColor(1, 1, 1, 0.8)
+    love.graphics.setColor(1, 1, 1, 0.85)
     love.graphics.setLineWidth(2)
     love.graphics.circle("line", px, py, radius)
 
     -- HP Bar
     local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
     local max_hp = tonumber(ent.max_hp or (ent.properties and ent.properties["max_hp"]) or 100) or 100
-    local bar_w = 40
+    local bar_w = 44
     local bar_h = 5
     local bar_x = px - bar_w / 2
-    local bar_y = py - radius - 12
+    local bar_y = py - radius - 14
 
     love.graphics.setColor(0, 0, 0, 0.7)
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w, bar_h)
@@ -249,7 +263,7 @@ function draw_entity(ent, is_me)
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w * (math.max(0, math.min(1, hp / max_hp))), bar_h)
 
     -- Player label
-    love.graphics.setColor(1, 1, 1, 0.9)
+    love.graphics.setColor(1, 1, 1, 0.95)
     local label = is_me and "YOU" or ("P" .. tostring(ent.id))
     local font = love.graphics.getFont()
     local tw = font:getWidth(label)
@@ -257,33 +271,37 @@ function draw_entity(ent, is_me)
 end
 
 function draw_hud(sw, sh, my_entity)
-    love.graphics.setColor(0, 0, 0, 0.5)
+    love.graphics.setColor(0, 0, 0, 0.55)
     love.graphics.rectangle("fill", 10, 10, 360, 55, 6, 6)
 
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.print("Loci Arena", 20, 16)
-    love.graphics.setColor(0.7, 0.7, 0.8, 1)
+    love.graphics.setColor(0.7, 0.7, 0.85, 1)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
     love.graphics.print("WASD: Move  |  Space: Action  |  F3: Debug", 20, sh - 28)
 
     if rejection_timer > 0 then
-        love.graphics.setColor(0.9, 0.2, 0.2, 0.9)
+        love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
         love.graphics.printf(rejection_msg, 0, 80, sw, "center")
     end
 end
 
 function draw_debug(sw, sh)
     love.graphics.setColor(0, 0, 0, 0.75)
-    love.graphics.rectangle("fill", sw - 220, 10, 210, 80, 6, 6)
+    love.graphics.rectangle("fill", sw - 240, 10, 230, 100, 6, 6)
 
     local ent_count = #loci.get_entities()
+    local me = loci.get_my_entity()
 
     love.graphics.setColor(0.4, 1.0, 0.5, 1)
-    love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), sw - 205, 20)
-    love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), sw - 205, 40)
-    love.graphics.print(string.format("Entities: %d", ent_count), sw - 205, 60)
+    love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), sw - 225, 20)
+    love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), sw - 225, 40)
+    love.graphics.print(string.format("Entities: %d", ent_count), sw - 225, 60)
+    if me then
+        love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 80)
+    end
 end
 
 function love.quit()
