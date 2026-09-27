@@ -1,11 +1,17 @@
 -- Loci Arena - Love2D Client
 -- Entrypoint for the game client connecting to the authoritative loci2d server.
 
--- Setup search paths for the local loci2d SDK
-package.path = package.path .. ";./loci2d/?.lua;./loci2d/lib/?.lua;./src/?.lua;./?.lua"
-package.cpath = package.cpath .. ";./loci2d/lib/?.so;./loci2d/?.so;./?.so"
+-- Setup search paths for the local loci2d SDK (supporting both root and client working directories)
+package.path = package.path .. ";./loci2d/?.lua;./loci2d/lib/?.lua;./client/loci2d/?.lua;./client/loci2d/lib/?.lua;./src/?.lua;./client/src/?.lua;./?.lua;./lib/?.lua"
+package.cpath = package.cpath .. ";./loci2d/lib/?.so;./loci2d/?.so;./client/loci2d/lib/?.so;./client/loci2d/?.so;./?.so;./lib/?.so"
 
-local loci = require("loci_client")
+local ok, loci = pcall(require, "loci_client")
+if not ok then
+    ok, loci = pcall(require, "loci2d.loci_client")
+    if not ok then
+        error("Could not load loci_client SDK module. Details: " .. tostring(loci))
+    end
+end
 
 -- Connection config
 local SERVER_IP = os.getenv("LOCI_SERVER_IP") or "127.0.0.1"
@@ -25,15 +31,24 @@ local cam_scale = 1.0
 function love.load(arg)
     love.graphics.setDefaultFilter("nearest", "nearest")
     
-    print("[Client] Initializing Loci Arena client...")
-    local ok, err = loci.init(SERVER_IP, SERVER_PORT, false)
-    if not ok then
-        connection_status = "Connection error: " .. tostring(err)
-        print("[Client] Failed to initialize connection:", err)
+    local random_suffix = tostring(love.math and love.math.random(1000, 9999) or math.random(1000, 9999))
+    local player_name = "Player_" .. random_suffix
+
+    print(string.format("[Client] Connecting to %s:%d as '%s'...", SERVER_IP, SERVER_PORT, player_name))
+    
+    -- Try local client path first, fallback to root path
+    local ok_connect = loci.connect(SERVER_IP, SERVER_PORT, player_name, "loci2d/lib/")
+    if not ok_connect then
+        ok_connect = loci.connect(SERVER_IP, SERVER_PORT, player_name, "client/loci2d/lib/")
+    end
+
+    if not ok_connect then
+        connection_status = "Connection error"
+        print("[Client] Failed to initialize connection to " .. SERVER_IP .. ":" .. SERVER_PORT)
         return
     end
 
-    connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT
+    connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
 
     -- Event hooks
     loci.on_entity_spawned = function(entity)
@@ -223,7 +238,7 @@ end
 function draw_hud(sw, sh, my_entity)
     -- Top Banner
     love.graphics.setColor(0, 0, 0, 0.5)
-    love.graphics.rectangle("fill", 10, 10, 320, 55, 6, 6)
+    love.graphics.rectangle("fill", 10, 10, 360, 55, 6, 6)
 
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.print("Loci Arena", 20, 16)
@@ -243,16 +258,20 @@ end
 
 function draw_debug(sw, sh)
     love.graphics.setColor(0, 0, 0, 0.75)
-    love.graphics.rectangle("fill", sw - 220, 10, 210, 90, 6, 6)
+    love.graphics.rectangle("fill", sw - 220, 10, 210, 80, 6, 6)
+
+    local ent_count = 0
+    for _ in pairs(loci.get_entities()) do
+        ent_count = ent_count + 1
+    end
 
     love.graphics.setColor(0.4, 1.0, 0.5, 1)
     love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), sw - 205, 20)
-    love.graphics.print(string.format("Ping: %d ms", loci.get_ping_ms and loci.get_ping_ms() or 0), sw - 205, 40)
-    love.graphics.print(string.format("Tick: %d", loci.get_current_tick and loci.get_current_tick() or 0), sw - 205, 60)
-    love.graphics.print(string.format("Entities: %d", loci.get_entities_count and loci.get_entities_count() or 0), sw - 205, 80)
+    love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), sw - 205, 40)
+    love.graphics.print(string.format("Entities: %d", ent_count), sw - 205, 60)
 end
 
 function love.quit()
     print("[Client] Closing connection...")
-    loci.disconnect()
+    loci.disconnect("Client exiting")
 end

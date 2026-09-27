@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -e
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v love >/dev/null 2>&1; then
@@ -8,4 +10,5 @@ if ! command -v love >/dev/null 2>&1; then
 fi
 
 echo "Starting Loci Arena Love2D client..."
-exec love "$ROOT_DIR/client" "$@"
+cd "$ROOT_DIR/client"
+exec love . "$@"
