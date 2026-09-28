@@ -33,6 +33,10 @@ local last_dash_time = 0
 local last_move_dir_x = 1
 local last_move_dir_y = 0
 
+-- Rastrear últimas teclas pressionadas para garantir direção
+local last_movement_dx = 1
+local last_movement_dy = 0
+
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
@@ -111,6 +115,8 @@ local function update_movement()
         local len = math.sqrt(dx * dx + dy * dy)
         last_move_dir_x = dx / len
         last_move_dir_y = dy / len
+        last_movement_dx = dx
+        last_movement_dy = dy
     end
 end
 
