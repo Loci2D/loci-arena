@@ -32,9 +32,9 @@ local last_dash_time = 0
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
--- Server authoritative arena boundaries: [-500, +500] (1000x1000 pixels)
-local ARENA_MIN = -500
-local ARENA_MAX = 500
+-- Server authoritative arena boundaries: [-150, +150] (300x300 pixels)
+local ARENA_MIN = -150
+local ARENA_MAX = 150
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 
 function love.load(arg)
