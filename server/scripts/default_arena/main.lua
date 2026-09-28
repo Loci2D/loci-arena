@@ -11,7 +11,7 @@ local FIREBALL_SPEED = 2.0
 local FIREBALL_LIFETIME = 120  -- ticks (~4 segundos)
 local FIREBALL_DAMAGE = 10
 local FIREBALL_RADIUS = 2
-local FIREBALL_SPAWN_OFFSET = 15.0  -- Aumentado para evitar colisão imediata
+local FIREBALL_SPAWN_OFFSET = 20.0  -- Aumentado drasticamente para evitar colisão
 local HIT_RADIUS = 5.0
 
 -- Configurações de movimento
@@ -110,24 +110,6 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             local spawn_x = px + fb_dir_x * FIREBALL_SPAWN_OFFSET
             local spawn_y = py + fb_dir_y * FIREBALL_SPAWN_OFFSET
             
-            -- Verificar se spawn está em local válido com raycast
-            local spawn_hit = Loci.Physics.raycast(
-                {x = px, y = py},
-                {x = fb_dir_x, y = fb_dir_y},
-                FIREBALL_SPAWN_OFFSET
-            )
-            
-            if spawn_hit then
-                -- Se houver obstáculo no caminho, reduzir offset
-                local hit_x = spawn_hit.x or spawn_x
-                local hit_y = spawn_hit.y or spawn_y
-                local dist_to_hit = math.sqrt((hit_x - px)^2 + (hit_y - py)^2)
-                if dist_to_hit < FIREBALL_SPAWN_OFFSET then
-                    spawn_x = px + fb_dir_x * (dist_to_hit - 1)
-                    spawn_y = py + fb_dir_y * (dist_to_hit - 1)
-                end
-            end
-            
             local fireball_id = Loci.Commands.spawn_entity({
                 position = {x = spawn_x, y = spawn_y},
                 blueprint = "fireball",
@@ -136,7 +118,8 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
                 radius = FIREBALL_RADIUS,
                 properties = {
                     owner = tostring(entity_id),
-                    kind = "fireball"
+                    kind = "fireball",
+                    collision_enabled = "false"
                 }
             })
             
