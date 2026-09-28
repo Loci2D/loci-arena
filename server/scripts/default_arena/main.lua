@@ -217,20 +217,25 @@ function on_tick(tick)
         else
             local near = Loci.get_entities_in_radius(pos, HIT_RADIUS)
             for _, id in ipairs(near) do
-                if keep and id ~= fb.id and id ~= fb.owner and not destroyed[id] then
-                    local entity_kind = Loci.get_entity_property(id, "kind")
-                    if is_player(id) then
-                        apply_damage(id, FIREBALL_DAMAGE)
-                        if not destroyed[fb.id] then
-                            Loci.Commands.destroy_entity(fb.id)
-                            destroyed[fb.id] = true
-                        end
-                        keep = false
-                    elseif entity_kind == "fireball" then
-                        if fb.id < id and not destroyed[fb.id] then
-                            Loci.Commands.destroy_entity(fb.id)
-                            destroyed[fb.id] = true
+                if keep and id ~= fb.id and not destroyed[id] then
+                    -- Não colidir com o dono da fireball
+                    if id == fb.owner then
+                        -- Pular colisão com o dono
+                    else
+                        local entity_kind = Loci.get_entity_property(id, "kind")
+                        if is_player(id) then
+                            apply_damage(id, FIREBALL_DAMAGE)
+                            if not destroyed[fb.id] then
+                                Loci.Commands.destroy_entity(fb.id)
+                                destroyed[fb.id] = true
+                            end
                             keep = false
+                        elseif entity_kind == "fireball" then
+                            if fb.id < id and not destroyed[fb.id] then
+                                Loci.Commands.destroy_entity(fb.id)
+                                destroyed[fb.id] = true
+                                keep = false
+                            end
                         end
                     end
                 end
