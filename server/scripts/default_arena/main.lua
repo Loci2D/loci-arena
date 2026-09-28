@@ -74,7 +74,6 @@ function on_move_intent(entity_id, dir_x, dir_y)
     -- Rastrear direção
     if dir_x ~= 0 or dir_y ~= 0 then
         last_move_directions[entity_id] = {x = dir_x, y = dir_y}
-        Loci.Log.info("[Arena] Stored move direction for entity " .. tostring(entity_id) .. ": " .. dir_x .. ", " .. dir_y)
     end
     
     -- Normalizar movimento
@@ -106,9 +105,6 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             if last_dir then
                 fb_dir_x = last_dir.x
                 fb_dir_y = last_dir.y
-                Loci.Log.info("[Arena] Fireball direction: " .. fb_dir_x .. ", " .. fb_dir_y)
-            else
-                Loci.Log.info("[Arena] No last direction, using default")
             end
             
             local spawn_x = px + fb_dir_x * FIREBALL_SPAWN_OFFSET

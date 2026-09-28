@@ -264,12 +264,23 @@ function draw_arena_grid()
 end
 
 function draw_entity(ent, is_me)
-    -- Raio visual ajustado para corresponder ao raio de colisão do servidor (2.0)
-    -- Escala: 1 unidade = 1 pixel, então raio 2.0 = 2px, mas para visibilidade usamos 8px
-    local radius = 8
     local px = ent.x
     local py = ent.y
-
+    
+    -- Renderização específica para fireballs
+    local is_fireball = ent.properties and ent.properties.kind == "fireball"
+    
+    if is_fireball then
+        love.graphics.setColor(1.0, 0.5, 0.2, 1)
+        love.graphics.circle("fill", px, py, 5)
+        love.graphics.setColor(1.0, 0.8, 0.3, 0.8)
+        love.graphics.circle("line", px, py, 5)
+        love.graphics.circle("line", px, py, 7)
+        return
+    end
+    
+    -- Renderização para jogadores
+    local radius = 8
     if is_me then
         love.graphics.setColor(0.2, 0.6, 1.0, 1)
     else
