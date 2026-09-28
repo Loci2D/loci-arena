@@ -23,6 +23,12 @@ local rejection_timer = 0
 local visual_fx = {}
 local show_debug_overlay = false
 
+-- Sistema de Dash - detecção de double-tap
+local last_key_time = {}
+local DASH_DOUBLE_TAP_TIME = 0.3
+local DASH_COOLDOWN = 1.0
+local last_dash_time = 0
+
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
@@ -32,7 +38,6 @@ local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 
 function love.load(arg)
-    -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
     
     local random_suffix = tostring(love.math and love.math.random(1000, 9999) or math.random(1000, 9999))
@@ -53,7 +58,6 @@ function love.load(arg)
 
     connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
 
-    -- Event hooks
     loci.on_entity_spawned = function(entity)
         print(string.format("[Event] Entity spawned: ID %s at (%.1f, %.1f)", tostring(entity.id), entity.x, entity.y))
     end
@@ -63,7 +67,6 @@ function love.load(arg)
     end
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
-        -- Hook for HUD/UI state updates (HP, score, buffs)
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
@@ -101,23 +104,19 @@ local function update_movement()
 end
 
 function love.update(dt)
-    -- Process incoming network packets and smooth entity interpolation
     loci.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
         update_movement()
-        -- Direct camera binding eliminates lag jitter between camera and player
         cam_x = my_entity.x
         cam_y = my_entity.y
     end
 
-    -- Update rejection message timer
     if rejection_timer > 0 then
         rejection_timer = rejection_timer - dt
     end
 
-    -- Update visual effects
     for i = #visual_fx, 1, -1 do
         visual_fx[i].lifetime = visual_fx[i].lifetime - dt
         if visual_fx[i].lifetime <= 0 then
@@ -127,10 +126,38 @@ function love.update(dt)
 end
 
 function love.keypressed(key)
+    -- Sistema de Dash - detecta double-tap
+    local current_time = love.timer.getTime()
+    local last_time = last_key_time[key] or 0
+    
+    if current_time - last_time < DASH_DOUBLE_TAP_TIME and current_time - last_dash_time > DASH_COOLDOWN then
+        local my_entity = loci.get_my_entity()
+        if my_entity then
+            local dir_x, dir_y = 0, 0
+            
+            if key == "w" or key == "up" then
+                dir_y = -1
+            elseif key == "s" or key == "down" then
+                dir_y = 1
+            elseif key == "a" or key == "left" then
+                dir_x = -1
+            elseif key == "d" or key == "right" then
+                dir_x = 1
+            end
+            
+            local dash_target_x = my_entity.x + dir_x * 100
+            local dash_target_y = my_entity.y + dir_y * 100
+            loci.send_action(3, dash_target_x, dash_target_y)
+            
+            last_dash_time = current_time
+        end
+    end
+    
+    last_key_time[key] = current_time
+
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
     elseif key == "space" then
-        -- Primary action intent directed toward mouse cursor
         local mx, my = love.mouse.getPosition()
         local sw, sh = love.graphics.getDimensions()
         local world_target_x = (mx - sw / 2) + cam_x
@@ -149,6 +176,11 @@ function love.keypressed(key)
         end
 
         loci.send_action(1, dir_x, dir_y)
+    elseif key == "e" then
+        local my_entity = loci.get_my_entity()
+        if my_entity then
+            loci.send_action(4, my_entity.x, my_entity.y)
+        end
     end
 end
 
@@ -157,15 +189,12 @@ function love.draw()
     local center_x = sw / 2
     local center_y = sh / 2
 
-    -- 1. Arena World Rendering
     love.graphics.push()
     love.graphics.translate(center_x, center_y)
     love.graphics.translate(-cam_x, -cam_y)
 
-    -- Draw background grid & physical collision boundaries
     draw_arena_grid()
 
-    -- Draw transient visual effects
     for _, fx in ipairs(visual_fx) do
         local progress = fx.lifetime / fx.max_lifetime
         love.graphics.setColor(1, 0.85, 0.2, progress)
@@ -177,7 +206,6 @@ function love.draw()
         love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
     end
 
-    -- Draw all network entities
     local my_entity = loci.get_my_entity()
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
@@ -186,25 +214,20 @@ function love.draw()
 
     love.graphics.pop()
 
-    -- 2. HUD & UI Layer
     draw_hud(sw, sh, my_entity)
 
-    -- 3. Debug Overlay
     if show_debug_overlay then
         draw_debug(sw, sh)
     end
 end
 
 function draw_arena_grid()
-    -- Outer void background beyond map bounds
     love.graphics.setColor(0.06, 0.07, 0.10, 1.0)
     love.graphics.rectangle("fill", -1000, -1000, 2000, 2000)
 
-    -- Playable arena floor (matching server MapBounds: [-500, +500])
     love.graphics.setColor(0.10, 0.12, 0.17, 1.0)
     love.graphics.rectangle("fill", ARENA_MIN, ARENA_MIN, ARENA_SIZE, ARENA_SIZE)
 
-    -- Interior grid lines every 50 pixels
     love.graphics.setColor(0.18, 0.22, 0.32, 0.35)
     love.graphics.setLineWidth(1)
     for x = ARENA_MIN, ARENA_MAX, 50 do
@@ -214,17 +237,14 @@ function draw_arena_grid()
         love.graphics.line(ARENA_MIN, y, ARENA_MAX, y)
     end
 
-    -- Outer collision barrier glow
     love.graphics.setColor(0.25, 0.55, 0.95, 0.25)
     love.graphics.setLineWidth(5)
     love.graphics.rectangle("line", ARENA_MIN - 2, ARENA_MIN - 2, ARENA_SIZE + 4, ARENA_SIZE + 4)
 
-    -- Authoritative boundary wall line
     love.graphics.setColor(0.35, 0.65, 1.0, 0.9)
     love.graphics.setLineWidth(2)
     love.graphics.rectangle("line", ARENA_MIN, ARENA_MIN, ARENA_SIZE, ARENA_SIZE)
 
-    -- Origin crosshair at (0, 0)
     love.graphics.setColor(0.4, 0.6, 0.85, 0.7)
     love.graphics.setLineWidth(1.5)
     love.graphics.line(-20, 0, 20, 0)
@@ -234,7 +254,9 @@ function draw_arena_grid()
 end
 
 function draw_entity(ent, is_me)
-    local radius = 18
+    -- Raio visual ajustado para corresponder ao raio de colisão do servidor (2.0)
+    -- Escala: 1 unidade = 1 pixel, então raio 2.0 = 2px, mas para visibilidade usamos 8px
+    local radius = 8
     local px = ent.x
     local py = ent.y
 
@@ -248,26 +270,47 @@ function draw_entity(ent, is_me)
     love.graphics.setColor(1, 1, 1, 0.85)
     love.graphics.setLineWidth(2)
     love.graphics.circle("line", px, py, radius)
+    
+    -- Visual effects for status (ajustados para raio menor)
+    if ent.properties and ent.properties.status_slow == "true" then
+        love.graphics.setColor(0.3, 0.6, 1.0, 0.4)
+        love.graphics.circle("fill", px, py, 10)
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.circle("line", px, py, 10)
+    end
+    
+    if ent.properties and ent.properties.dash_active == "true" then
+        love.graphics.setColor(1.0, 0.8, 0.2, 0.5)
+        love.graphics.circle("fill", px, py, 11)
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.circle("line", px, py, 11)
+    end
+    
+    if ent.properties and ent.properties.shield_active == "true" then
+        love.graphics.setColor(0.2, 0.8, 0.9, 0.5)
+        love.graphics.circle("fill", px, py, 12)
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.circle("line", px, py, 12)
+        love.graphics.circle("line", px, py, 14)
+    end
 
-    -- HP Bar
     local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
     local max_hp = tonumber(ent.max_hp or (ent.properties and ent.properties["max_hp"]) or 100) or 100
-    local bar_w = 44
-    local bar_h = 5
+    local bar_w = 24
+    local bar_h = 4
     local bar_x = px - bar_w / 2
-    local bar_y = py - radius - 14
+    local bar_y = py - radius - 10
 
     love.graphics.setColor(0, 0, 0, 0.7)
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w, bar_h)
     love.graphics.setColor(0.2, 0.9, 0.3, 1)
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w * (math.max(0, math.min(1, hp / max_hp))), bar_h)
 
-    -- Player label
     love.graphics.setColor(1, 1, 1, 0.95)
     local label = is_me and "YOU" or ("P" .. tostring(ent.id))
     local font = love.graphics.getFont()
     local tw = font:getWidth(label)
-    love.graphics.print(label, px - tw / 2, py - 7)
+    love.graphics.print(label, px - tw / 2, py - radius - 5)
 end
 
 function draw_hud(sw, sh, my_entity)
@@ -280,7 +323,7 @@ function draw_hud(sw, sh, my_entity)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Move  |  Space: Action  |  F3: Debug", 20, sh - 28)
+    love.graphics.print("WASD: Move  |  Space: Fireball  |  E: Shield  |  DD: Dash  |  F3: Debug", 20, sh - 28)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
