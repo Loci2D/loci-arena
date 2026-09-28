@@ -114,6 +114,10 @@ end
 function on_action(entity_id, ability_id, dir_x, dir_y)
     Loci.Log.info("[Arena] Action from entity " .. tostring(entity_id) .. " -> Ability: " .. tostring(ability_id))
     
+    -- Garantir que dir_x e dir_y não são nil
+    if not dir_x then dir_x = 1 end
+    if not dir_y then dir_y = 0 end
+    
     if ability_id == 1 then
         -- Fireball
         local pos = Loci.get_entity_position(entity_id)
