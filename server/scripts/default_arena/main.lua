@@ -11,7 +11,7 @@ local FIREBALL_SPEED = 2.0
 local FIREBALL_LIFETIME = 120  -- ticks (~4 segundos)
 local FIREBALL_DAMAGE = 10
 local FIREBALL_RADIUS = 2
-local FIREBALL_SPAWN_OFFSET = 10.0  -- Aumentado para evitar colisão imediata
+local FIREBALL_SPAWN_OFFSET = 15.0  -- Aumentado para evitar colisão imediata
 local HIT_RADIUS = 5.0
 
 -- Configurações de movimento
