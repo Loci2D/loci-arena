@@ -153,14 +153,6 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
         end
         return false, "Direção inválida para dash"
     end
-    elseif ability_id == 4 then
-        -- Escudo
-        shield_active_list[#shield_active_list + 1] = {
-            entity_id = entity_id,
-            end_tick = current_tick + SHIELD_DURATION
-        }
-        Loci.Commands.set_property(entity_id, "shield_active", "true")
-    end
     
     return true
 end
