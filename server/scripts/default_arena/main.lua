@@ -88,27 +88,16 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
         if pos then
             local px, py = pos:x_float(), pos:y_float()
             
-            -- Pegar direção (atual ou última)
-            local vel = Loci.get_entity_velocity(entity_id)
+            -- Pegar direção (última movimento ou padrão)
+            local last_dir = last_move_directions[entity_id]
             local dir_x, dir_y = 1, 0
-            
-            if vel then
-                local vx, vy = vel:x_float(), vel:y_float()
-                local len = math.sqrt(vx * vx + vy * vy)
-                if len > 0.1 then
-                    dir_x = vx / len
-                    dir_y = vy / len
-                else
-                    local last_dir = last_move_directions[entity_id]
-                    if last_dir then
-                        dir_x = last_dir.x
-                        dir_y = last_dir.y
-                    end
-                end
+            if last_dir then
+                dir_x = last_dir.x
+                dir_y = last_dir.y
             end
             
-            local spawn_x = px + dx * FIREBALL_SPAWN_OFFSET
-            local spawn_y = py + dy * FIREBALL_SPAWN_OFFSET
+            local spawn_x = px + dir_x * FIREBALL_SPAWN_OFFSET
+            local spawn_y = py + dir_y * FIREBALL_SPAWN_OFFSET
             
             local fireball_id = Loci.Commands.spawn_entity({
                 position = {x = spawn_x, y = spawn_y},
