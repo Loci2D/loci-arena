@@ -151,8 +151,28 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             local pos = Loci.get_entity_position(entity_id)
             if pos then
                 local px, py = pos:x_float(), pos:y_float()
+                
+                -- Usar raycast para verificar se o caminho está livre
+                local hit = Loci.Physics.raycast(
+                    {x = px, y = py},
+                    {x = dash_dir_x, y = dash_dir_y},
+                    DASH_DISTANCE
+                )
+                
                 local new_x = px + dash_dir_x * DASH_DISTANCE
                 local new_y = py + dash_dir_y * DASH_DISTANCE
+                
+                -- Se houver colisão, reduzir a distância
+                if hit then
+                    local hit_x = hit.x or new_x
+                    local hit_y = hit.y or new_y
+                    local dist_to_hit = math.sqrt((hit_x - px)^2 + (hit_y - py)^2)
+                    if dist_to_hit < DASH_DISTANCE then
+                        new_x = px + dash_dir_x * (dist_to_hit - 1)
+                        new_y = py + dash_dir_y * (dist_to_hit - 1)
+                    end
+                end
+                
                 Loci.Commands.set_position(entity_id, {x = new_x, y = new_y})
                 dash_cooldowns[entity_id] = current_tick + DASH_COOLDOWN
                 return true
