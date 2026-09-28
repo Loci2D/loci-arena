@@ -11,7 +11,7 @@ local FIREBALL_SPEED = 2.0
 local FIREBALL_LIFETIME = 120  -- ticks (~4 segundos)
 local FIREBALL_DAMAGE = 10
 local FIREBALL_RADIUS = 2
-local FIREBALL_SPAWN_OFFSET = 0.0
+local FIREBALL_SPAWN_OFFSET = 5.0  -- Aumentado para evitar colisão imediata
 local HIT_RADIUS = 5.0
 
 -- Configurações de movimento
@@ -105,9 +105,6 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             if last_dir then
                 fb_dir_x = last_dir.x
                 fb_dir_y = last_dir.y
-                Loci.Log.info("[Arena] Fireball - Last dir: " .. fb_dir_x .. ", " .. fb_dir_y)
-            else
-                Loci.Log.info("[Arena] Fireball - No last dir, using default 1, 0")
             end
             
             local spawn_x = px + fb_dir_x * FIREBALL_SPAWN_OFFSET
