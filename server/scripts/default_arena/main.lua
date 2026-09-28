@@ -11,7 +11,7 @@ local FIREBALL_SPEED = 2.0
 local FIREBALL_LIFETIME = 120  -- ticks (~4 segundos)
 local FIREBALL_DAMAGE = 10
 local FIREBALL_RADIUS = 2
-local FIREBALL_SPAWN_OFFSET = 5.0  -- Aumentado para evitar colisão imediata
+local FIREBALL_SPAWN_OFFSET = 10.0  -- Aumentado para evitar colisão imediata
 local HIT_RADIUS = 5.0
 
 -- Configurações de movimento
@@ -220,7 +220,7 @@ function on_tick(tick)
                 if keep and id ~= fb.id and not destroyed[id] then
                     -- Não colidir com o dono da fireball
                     if id == fb.owner then
-                        Loci.Log.info("[Arena] Skipping collision with owner: fb=" .. fb.id .. " owner=" .. fb.owner .. " entity=" .. id)
+                        -- Pular colisão com o dono
                     else
                         local entity_kind = Loci.get_entity_property(id, "kind")
                         if is_player(id) then
