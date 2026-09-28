@@ -173,6 +173,14 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             return false, "Invalid direction for dash"
         end
         
+        -- Converter para números se vierem como strings
+        local dx = tonumber(dir_x) or dir_x
+        local dy = tonumber(dir_y) or dir_y
+        
+        if not dx or not dy then
+            return false, "Invalid direction for dash"
+        end
+        
         local cooldown_end = 0
         for _, cd in ipairs(dash_cooldowns_list) do
             if cd.entity_id == entity_id then
@@ -185,10 +193,10 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             local pos = Loci.get_entity_position(entity_id)
             if pos then
                 local px, py = pos:x_float(), pos:y_float()
-                local len_sq = dir_x * dir_x + dir_y * dir_y
+                local len_sq = dx * dx + dy * dy
                 if len_sq > 0.01 then
-                    local new_x = px + dir_x * DASH_DISTANCE
-                    local new_y = py + dir_y * DASH_DISTANCE
+                    local new_x = px + dx * DASH_DISTANCE
+                    local new_y = py + dy * DASH_DISTANCE
                     Loci.Commands.set_position(entity_id, {x = new_x, y = new_y})
                     dash_cooldowns_list[#dash_cooldowns_list + 1] = {
                         entity_id = entity_id,
