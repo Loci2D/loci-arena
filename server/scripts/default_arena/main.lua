@@ -165,6 +165,10 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
         end
     elseif ability_id == 3 then
         -- Dash
+        if not dir_x or not dir_y then
+            return false, "Invalid direction for dash"
+        end
+        
         local cooldown_end = 0
         for _, cd in ipairs(dash_cooldowns_list) do
             if cd.entity_id == entity_id then
