@@ -75,9 +75,12 @@ end
 function on_action(entity_id, ability_id, dir_x, dir_y)
     Loci.Log.info("[Arena] Action from entity " .. tostring(entity_id) .. " -> Ability: " .. tostring(ability_id))
     
-    -- Garantir que dir_x e dir_y não são nil
-    if not dir_x then dir_x = 1 end
-    if not dir_y then dir_y = 0 end
+    -- Converter e garantir que dir_x e dir_y são números válidos
+    local dx = tonumber(dir_x)
+    local dy = tonumber(dir_y)
+    
+    if not dx then dx = 1 end
+    if not dy then dy = 0 end
     
     if ability_id == 1 then
         -- Fireball
@@ -104,8 +107,8 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
                 end
             end
             
-            local spawn_x = px + dir_x * FIREBALL_SPAWN_OFFSET
-            local spawn_y = py + dir_y * FIREBALL_SPAWN_OFFSET
+            local spawn_x = px + dx * FIREBALL_SPAWN_OFFSET
+            local spawn_y = py + dy * FIREBALL_SPAWN_OFFSET
             
             local fireball_id = Loci.Commands.spawn_entity({
                 position = {x = spawn_x, y = spawn_y},
@@ -120,7 +123,7 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             })
             
             if fireball_id then
-                Loci.Commands.set_velocity(fireball_id, {x = dir_x * FIREBALL_SPEED, y = dir_y * FIREBALL_SPEED})
+                Loci.Commands.set_velocity(fireball_id, {x = dx * FIREBALL_SPEED, y = dy * FIREBALL_SPEED})
                 fireballs[#fireballs + 1] = {
                     id = fireball_id,
                     owner = entity_id,
@@ -135,14 +138,14 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             return false, "Dash em cooldown"
         end
         
-        -- dir_x e dir_y já chegam normalizados do SDK Love2D
-        local len_sq = dir_x * dir_x + dir_y * dir_y
+        -- dx e dy já são números normalizados
+        local len_sq = dx * dx + dy * dy
         if len_sq > 0.01 then
             local pos = Loci.get_entity_position(entity_id)
             if pos then
                 local px, py = pos:x_float(), pos:y_float()
-                local new_x = px + dir_x * DASH_DISTANCE
-                local new_y = py + dir_y * DASH_DISTANCE
+                local new_x = px + dx * DASH_DISTANCE
+                local new_y = py + dy * DASH_DISTANCE
                 Loci.Commands.set_position(entity_id, {x = new_x, y = new_y})
                 dash_cooldowns[entity_id] = current_tick + DASH_COOLDOWN
                 return true
