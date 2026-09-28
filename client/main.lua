@@ -145,9 +145,8 @@ function love.keypressed(key)
                 dir_x = 1
             end
             
-            local dash_target_x = my_entity.x + dir_x * 100
-            local dash_target_y = my_entity.y + dir_y * 100
-            loci.send_action(3, dash_target_x, dash_target_y)
+            -- Enviar direção normalizada para o dash
+            loci.send_action(3, dir_x, dir_y)
             
             last_dash_time = current_time
         end
