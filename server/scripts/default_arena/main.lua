@@ -126,7 +126,7 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
                 Loci.Commands.set_velocity(fireball_id, {x = fb_dir_x * FIREBALL_SPEED, y = fb_dir_y * FIREBALL_SPEED})
                 fireballs[#fireballs + 1] = {
                     id = fireball_id,
-                    owner = entity_id,
+                    owner = entity_id,  -- Armazenar como número para comparação correta
                     expires_at = current_tick + FIREBALL_LIFETIME
                 }
             end
@@ -220,7 +220,7 @@ function on_tick(tick)
                 if keep and id ~= fb.id and not destroyed[id] then
                     -- Não colidir com o dono da fireball
                     if id == fb.owner then
-                        -- Pular colisão com o dono
+                        Loci.Log.info("[Arena] Skipping collision with owner: fb=" .. fb.id .. " owner=" .. fb.owner .. " entity=" .. id)
                     else
                         local entity_kind = Loci.get_entity_property(id, "kind")
                         if is_player(id) then
