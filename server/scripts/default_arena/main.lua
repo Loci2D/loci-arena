@@ -2,7 +2,7 @@
 -- This script runs inside the loci2d server environment.
 -- Rules, physics modifications, damage and game mechanics must be handled here.
 
--- Arena personalizada com fireball, dash, slow e escudo
+-- Arena personalizada com fireball e dash
 local fireballs = {}
 local current_tick = 0
 
@@ -18,19 +18,9 @@ local HIT_RADIUS = 5.0
 local PLAYER_SPEED = 5.0
 
 -- Configurações de dash
-local DASH_DISTANCE = 5.0  -- Dash curto para teste
+local DASH_DISTANCE = 25.0
 local DASH_COOLDOWN = 30
-local dash_cooldowns_list = {}
-
--- Configurações de slow
-local SLOW_FACTOR = 0.5
-local SLOW_DURATION = 30
-local slow_active_list = {}
-
--- Configurações de escudo
-local SHIELD_DURATION = 180
-local SHIELD_REDUCTION = 0.5
-local shield_active_list = {}
+local dash_cooldowns = {}
 
 -- Rastrear última direção de movimento
 local last_move_directions = {}
@@ -43,29 +33,9 @@ end
 
 -- Função para aplicar dano
 local function apply_damage(entity_id, damage)
-    -- Verificar escudo
-    local shield_active = false
-    for _, shield in ipairs(shield_active_list) do
-        if shield.entity_id == entity_id then
-            shield_active = true
-            break
-        end
-    end
-    
-    if shield_active then
-        damage = damage * SHIELD_REDUCTION
-    end
-    
     local current_hp = Loci.get_entity_property(entity_id, "hp") or 100
     local new_hp = current_hp - damage
     Loci.Commands.set_property(entity_id, "hp", tostring(new_hp))
-    
-    -- Aplicar slow
-    slow_active_list[#slow_active_list + 1] = {
-        entity_id = entity_id,
-        end_tick = current_tick + SLOW_DURATION
-    }
-    Loci.Commands.set_property(entity_id, "status_slow", "true")
     
     if new_hp <= 0 then
         Loci.Commands.destroy_entity(entity_id)
@@ -83,15 +53,6 @@ function on_player_join(entity_id)
 end
 
 function on_move_intent(entity_id, dir_x, dir_y)
-    -- Verificar slow
-    local speed = PLAYER_SPEED
-    for _, slow in ipairs(slow_active_list) do
-        if slow.entity_id == entity_id then
-            speed = speed * SLOW_FACTOR
-            break
-        end
-    end
-    
     -- Rastrear direção
     if dir_x ~= 0 or dir_y ~= 0 then
         last_move_directions[entity_id] = {x = dir_x, y = dir_y}
@@ -105,8 +66,8 @@ function on_move_intent(entity_id, dir_x, dir_y)
     end
     
     Loci.Commands.set_velocity(entity_id, {
-        x = dir_x * speed,
-        y = dir_y * speed
+        x = dir_x * PLAYER_SPEED,
+        y = dir_y * PLAYER_SPEED
     })
     return true
 end
@@ -167,45 +128,28 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
                 }
             end
         end
-    elseif ability_id == 3 then
+    elseif ability_id == 2 then
         -- Dash
-        if not dir_x or not dir_y then
-            return false, "Invalid direction for dash"
+        local cooldown_end = dash_cooldowns[entity_id] or 0
+        if current_tick < cooldown_end then
+            return false, "Dash em cooldown"
         end
         
-        -- Converter para números se vierem como strings
-        local dx = tonumber(dir_x) or dir_x
-        local dy = tonumber(dir_y) or dir_y
-        
-        if not dx or not dy then
-            return false, "Invalid direction for dash"
-        end
-        
-        local cooldown_end = 0
-        for _, cd in ipairs(dash_cooldowns_list) do
-            if cd.entity_id == entity_id then
-                cooldown_end = cd.end_tick
-                break
-            end
-        end
-        
-        if current_tick >= cooldown_end then
+        -- dir_x e dir_y já chegam normalizados do SDK Love2D
+        local len_sq = dir_x * dir_x + dir_y * dir_y
+        if len_sq > 0.01 then
             local pos = Loci.get_entity_position(entity_id)
             if pos then
                 local px, py = pos:x_float(), pos:y_float()
-                local len_sq = dx * dx + dy * dy
-                if len_sq > 0.01 then
-                    local new_x = px + dx * DASH_DISTANCE
-                    local new_y = py + dy * DASH_DISTANCE
-                    Loci.Commands.set_position(entity_id, {x = new_x, y = new_y})
-                    dash_cooldowns_list[#dash_cooldowns_list + 1] = {
-                        entity_id = entity_id,
-                        end_tick = current_tick + DASH_COOLDOWN
-                    }
-                    Loci.Commands.set_property(entity_id, "dash_active", "true")
-                end
+                local new_x = px + dir_x * DASH_DISTANCE
+                local new_y = py + dir_y * DASH_DISTANCE
+                Loci.Commands.set_position(entity_id, {x = new_x, y = new_y})
+                dash_cooldowns[entity_id] = current_tick + DASH_COOLDOWN
+                return true
             end
         end
+        return false, "Direção inválida para dash"
+    end
     elseif ability_id == 4 then
         -- Escudo
         shield_active_list[#shield_active_list + 1] = {
@@ -233,39 +177,6 @@ end
 function on_tick(tick)
     current_tick = tick
     
-    -- Gerenciar slow
-    local active_slow = {}
-    for _, slow in ipairs(slow_active_list) do
-        if tick >= slow.end_tick then
-            Loci.Commands.set_property(slow.entity_id, "status_slow", "false")
-        else
-            active_slow[#active_slow + 1] = slow
-        end
-    end
-    slow_active_list = active_slow
-    
-    -- Gerenciar dash cooldowns
-    local active_dash_cd = {}
-    for _, cd in ipairs(dash_cooldowns_list) do
-        if tick >= cd.end_tick then
-        else
-            active_dash_cd[#active_dash_cd + 1] = cd
-        end
-    end
-    dash_cooldowns_list = active_dash_cd
-    
-    -- Gerenciar escudo
-    local active_shield = {}
-    for _, shield in ipairs(shield_active_list) do
-        if tick >= shield.end_tick then
-            Loci.Commands.set_property(shield.entity_id, "shield_active", "false")
-        else
-            active_shield[#active_shield + 1] = shield
-        end
-    end
-    shield_active_list = active_shield
-    
-    -- Gerenciar fireballs
     if #fireballs == 0 then
         return
     end

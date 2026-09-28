@@ -145,8 +145,8 @@ function love.keypressed(key)
                 dir_x = 1
             end
             
-            -- Enviar direção normalizada para o dash
-            loci.send_action(3, dir_x, dir_y)
+            -- Enviar direção normalizada para o dash (ability 2 conforme Trello)
+            loci.send_action(2, dir_x, dir_y)
             
             last_dash_time = current_time
         end
@@ -270,27 +270,12 @@ function draw_entity(ent, is_me)
     love.graphics.setLineWidth(2)
     love.graphics.circle("line", px, py, radius)
     
-    -- Visual effects for status (ajustados para raio menor)
-    if ent.properties and ent.properties.status_slow == "true" then
-        love.graphics.setColor(0.3, 0.6, 1.0, 0.4)
+    -- Visual effect for Dash
+    if ent.properties and ent.properties.dash_active == "true" then
+        love.graphics.setColor(1.0, 0.8, 0.2, 0.5)
         love.graphics.circle("fill", px, py, 10)
         love.graphics.setColor(1, 1, 1)
         love.graphics.circle("line", px, py, 10)
-    end
-    
-    if ent.properties and ent.properties.dash_active == "true" then
-        love.graphics.setColor(1.0, 0.8, 0.2, 0.5)
-        love.graphics.circle("fill", px, py, 11)
-        love.graphics.setColor(1, 1, 1)
-        love.graphics.circle("line", px, py, 11)
-    end
-    
-    if ent.properties and ent.properties.shield_active == "true" then
-        love.graphics.setColor(0.2, 0.8, 0.9, 0.5)
-        love.graphics.circle("fill", px, py, 12)
-        love.graphics.setColor(1, 1, 1)
-        love.graphics.circle("line", px, py, 12)
-        love.graphics.circle("line", px, py, 14)
     end
 
     local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
