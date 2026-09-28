@@ -34,10 +34,33 @@ elif [ -f "$LOCAL_LOCI_DEBUG" ]; then
     exit 0
 fi
 
-# 3. Try GitHub Releases download via gh or curl
-echo "-> Attempting to download ${VERSION} from GitHub (Loci2D/loci2d)..."
+# 3. Detect Platform and Download from GitHub Releases
+OS_TYPE="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH_TYPE="$(uname -m)"
+
+case "$OS_TYPE" in
+    linux*)
+        PATTERN="loci2d-linux-x86_64"
+        ;;
+    darwin*)
+        if [ "$ARCH_TYPE" = "arm64" ]; then
+            PATTERN="loci2d-macos-arm64"
+        else
+            PATTERN="loci2d-macos-x86_64"
+        fi
+        ;;
+    msys*|mingw*|cygwin*)
+        PATTERN="loci2d-windows-x86_64.exe"
+        TARGET_BIN="$BIN_DIR/loci2d.exe"
+        ;;
+    *)
+        PATTERN="loci2d-linux-x86_64"
+        ;;
+esac
+
+echo "-> Attempting to download ${VERSION} (${PATTERN}) from GitHub (Loci2D/loci2d)..."
 if command -v gh >/dev/null 2>&1; then
-    if gh release download "$VERSION" --repo Loci2D/loci2d --pattern "*linux*" -O "$TARGET_BIN" 2>/dev/null; then
+    if gh release download "$VERSION" --repo Loci2D/loci2d --pattern "$PATTERN" -O "$TARGET_BIN" 2>/dev/null; then
         chmod +x "$TARGET_BIN"
         echo "[OK] Downloaded loci2d binary successfully!"
         exit 0

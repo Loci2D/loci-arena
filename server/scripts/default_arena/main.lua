@@ -2,6 +2,8 @@
 -- This script runs inside the loci2d server environment.
 -- Rules, physics modifications, damage and game mechanics must be handled here.
 
+-- Movement speed in units per tick.
+-- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
 local SPEED = 5.0
 
 function on_player_join(entity_id)
@@ -15,7 +17,14 @@ function on_player_join(entity_id)
 end
 
 function on_move_intent(entity_id, dir_x, dir_y)
-    -- Normalize or clamp if necessary, then set server authoritative velocity
+    -- Normalize movement vector so diagonal movement doesn't provide a speed boost
+    local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
+    if len > 0 then
+        dir_x = dir_x / len
+        dir_y = dir_y / len
+    end
+
+    -- Set server authoritative velocity (displacement per tick)
     Loci.Commands.set_velocity(entity_id, {
         x = dir_x * SPEED,
         y = dir_y * SPEED
