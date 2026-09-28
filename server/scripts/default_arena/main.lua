@@ -18,7 +18,7 @@ local HIT_RADIUS = 5.0
 local PLAYER_SPEED = 5.0
 
 -- Configurações de dash
-local DASH_DISTANCE = 25.0
+local DASH_DISTANCE = 50.0
 local DASH_COOLDOWN = 30
 local dash_cooldowns_list = {}
 
