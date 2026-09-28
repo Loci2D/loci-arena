@@ -1,0 +1,30 @@
+[package]
+name = "loci2d"
+version = "0.6.5-sdk.3"
+edition = "2024"
+default-run = "loci2d"
+license = "MIT"
+authors = ["Luiz André Furlan"]
+
+[dependencies]
+chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+prost = "0.13"
+dotenvy = "0.15"
+fixed = { version = "1.28", features = ["serde"] }
+sha2 = "0.10"
+ctrlc = "3.4"
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
+
+
+[build-dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3.0"
+
+[dev-dependencies]
+tempfile = "3.10"
+criterion = "0.5"
+
+[[bench]]
+name = "benchmark"
+harness = false

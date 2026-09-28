@@ -1,0 +1,391 @@
+use loci2d::config::ServerConfig;
+use loci2d::game_loop::tick::GameLoop;
+use loci2d::network::server::run_server;
+use loci2d::replay::player::ReplayPlayer;
+use loci2d::world::instance::Instance;
+use std::net::UdpSocket;
+use std::process;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::thread;
+
+fn print_help() {
+    println!(
+        "loci2d - High-Performance Authoritative 2D Game Server & Deterministic Replay Engine\n"
+    );
+    println!("USAGE:");
+    println!("  loci2d [OPTIONS]\n");
+    println!("OPTIONS:");
+    println!("  --record <FILE>              Enable live match recording to a .loci file");
+    println!("  --replay <FILE>              Load and execute a .loci replay file");
+    println!("  --verify                     Run headless deterministic replay verification");
+    println!("  --checkpoint-interval <N>    Checkpoint frequency in ticks (default: 60)");
+    println!("  --seed <N>                   Random PRNG seed for match instance (default: 42)");
+    println!("  --map <NAME>                 Map arena identifier (default: default_arena)");
+    println!("  --speed <FLOAT>              Replay playback speed multiplier (default: 1.0)");
+    println!(
+        "  --broadcast <ADDR>           Spectator UDP broadcast destination (e.g. 127.0.0.1:4000)"
+    );
+    println!("  --help, -h                   Show this help message");
+}
+
+fn spawn_console_listener(running: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
+        while running.load(Ordering::Relaxed) {
+            line.clear();
+            if stdin.read_line(&mut line).is_ok() {
+                let trimmed = line.trim();
+                if trimmed.eq_ignore_ascii_case("quit")
+                    || trimmed.eq_ignore_ascii_case("stop")
+                    || trimmed.eq_ignore_ascii_case("exit")
+                    || trimmed.eq_ignore_ascii_case("q")
+                {
+                    println!(
+                        "[Server] Shutdown command received ('{}'). Stopping gracefully...",
+                        trimmed
+                    );
+                    running.store(false, Ordering::Relaxed);
+                    break;
+                }
+            } else {
+                // EOF on stdin (e.g. piped input or Ctrl+D)
+                running.store(false, Ordering::Relaxed);
+                break;
+            }
+        }
+    });
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    let mut record_file: Option<String> = None;
+    let mut replay_file: Option<String> = None;
+    let mut verify_mode = false;
+    let mut checkpoint_interval: u64 = 60;
+    let mut seed: u64 = 42;
+    let mut map_name = "default_arena".to_string();
+    let mut replay_speed = 1.0f32;
+    let mut broadcast_addr: Option<String> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--record" => {
+                if i + 1 < args.len() {
+                    record_file = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --record requires a file path argument");
+                    process::exit(1);
+                }
+            }
+            "--replay" => {
+                if i + 1 < args.len() {
+                    replay_file = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --replay requires a file path argument");
+                    process::exit(1);
+                }
+            }
+            "--verify" => {
+                verify_mode = true;
+                i += 1;
+            }
+            "--checkpoint-interval" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u64>() {
+                        Ok(v) => checkpoint_interval = v,
+                        Err(_) => {
+                            eprintln!(
+                                "Error: --checkpoint-interval requires a valid integer value (e.g. 60)"
+                            );
+                            process::exit(1);
+                        }
+                    }
+                    i += 2;
+                } else {
+                    eprintln!("Error: --checkpoint-interval requires an integer value");
+                    process::exit(1);
+                }
+            }
+            "--seed" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u64>() {
+                        Ok(v) => seed = v,
+                        Err(_) => {
+                            eprintln!("Error: --seed requires a valid integer value (e.g. 42)");
+                            process::exit(1);
+                        }
+                    }
+                    i += 2;
+                } else {
+                    eprintln!("Error: --seed requires an integer value");
+                    process::exit(1);
+                }
+            }
+            "--map" => {
+                if i + 1 < args.len() {
+                    map_name = args[i + 1].clone();
+                    i += 2;
+                } else {
+                    eprintln!("Error: --map requires a string value");
+                    process::exit(1);
+                }
+            }
+            "--speed" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<f32>() {
+                        Ok(v) => replay_speed = v,
+                        Err(_) => {
+                            eprintln!(
+                                "Error: --speed requires a valid float value (e.g. 1.0, 2.0)"
+                            );
+                            process::exit(1);
+                        }
+                    }
+                    i += 2;
+                } else {
+                    eprintln!("Error: --speed requires a float value");
+                    process::exit(1);
+                }
+            }
+            "--broadcast" => {
+                if i + 1 < args.len() {
+                    broadcast_addr = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --broadcast requires an IP:PORT address");
+                    process::exit(1);
+                }
+            }
+            "--help" | "-h" => {
+                print_help();
+                return;
+            }
+            _ => {
+                eprintln!("Unknown argument: '{}'. Use --help for usage.", args[i]);
+                process::exit(1);
+            }
+        }
+    }
+
+    // 1. Validation for --verify
+    if verify_mode && replay_file.is_none() {
+        eprintln!("Error: --verify requires a replay file specified via --replay <FILE>");
+        process::exit(1);
+    }
+
+    // 2. Replay Modes (Headless Verification vs Live Spectator Broadcast)
+    if let Some(ref path) = replay_file {
+        if verify_mode {
+            // 2.1 Headless Replay Verification Mode
+            println!(
+                "[Replay] Loading replay file '{}' for headless verification...",
+                path
+            );
+            let mut player = match ReplayPlayer::load_from_file(path) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("[Replay] Failed to load replay file: {}", e);
+                    process::exit(1);
+                }
+            };
+
+            let header = player.header();
+            println!(
+                "[Replay] Header: magic={} version={} tick_rate={}Hz seed={} map='{}'",
+                header.magic, header.version, header.tick_rate, header.random_seed, header.map_name
+            );
+            println!(
+                "[Replay] Loaded {} frames and {} checkpoints.",
+                player.frames().len(),
+                player.checkpoints().len()
+            );
+
+            // In verify mode, load the local script to enable hash verification
+            let mut instance = loci2d::world::instance::Instance::new(
+                header.instance_id,
+                header.tick_rate,
+                60,
+                header.random_seed,
+            );
+            let script_path = format!("scripts/{}/main.lua", header.map_name);
+            if let Ok(script_content) = std::fs::read_to_string(&script_path) {
+                println!(
+                    "[Verify] Loading local script from '{}' for hash verification",
+                    script_path
+                );
+                if let Err(e) = instance.load_script(&script_content) {
+                    eprintln!("[Verify] Failed to load script: {}", e);
+                    process::exit(1);
+                }
+            }
+
+            match player.verify_determinism_with_instance(&mut instance) {
+                Ok(report) => {
+                    println!("\n✅ {}", report);
+                    process::exit(0);
+                }
+                Err(desync) => {
+                    eprintln!("\n❌ {}", desync);
+                    process::exit(1);
+                }
+            }
+        } else {
+            // 2.2 Live Spectator Replay Broadcast Mode
+            let cfg = ServerConfig::from_env();
+            let bind_target = if let Some(ref addr) = broadcast_addr {
+                addr.clone()
+            } else {
+                println!(
+                    "[Spectator] No --broadcast specified, using server default: {}",
+                    cfg.bind_addr
+                );
+                cfg.bind_addr
+            };
+
+            println!(
+                "[Spectator] Starting Replay Broadcast Server for '{}' at {} ({:.1}x speed)",
+                path, bind_target, replay_speed
+            );
+
+            let mut player = match ReplayPlayer::load_from_file(path) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("[Spectator] Failed to load replay file: {}", e);
+                    process::exit(1);
+                }
+            };
+
+            let socket = match UdpSocket::bind(&bind_target) {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    eprintln!(
+                        "[Spectator] Failed to bind UDP socket to '{}': {}",
+                        bind_target, e
+                    );
+                    process::exit(1);
+                }
+            };
+
+            let (intent_tx, intent_rx) = mpsc::channel();
+            let net_socket = Arc::clone(&socket);
+            thread::spawn(move || {
+                run_server(net_socket, intent_tx);
+            });
+
+            let running = Arc::new(AtomicBool::new(true));
+
+            // Ctrl+C and console listener for graceful spectator server shutdown
+            let r_ctrlc = Arc::clone(&running);
+            let _ = ctrlc::set_handler(move || {
+                println!("\n[Spectator] Shutdown signal received (Ctrl+C). Stopping broadcast...");
+                r_ctrlc.store(false, Ordering::Relaxed);
+            });
+            spawn_console_listener(Arc::clone(&running));
+
+            println!(
+                "[Spectator] Type 'stop' or 'quit' (or press Ctrl+C) to shut down the spectator server.\n"
+            );
+            player.broadcast_live(socket, intent_rx, replay_speed, cfg.max_spectators, running);
+            println!("[Spectator] Replay broadcast completed.");
+            process::exit(0);
+        }
+    }
+
+    // 3. Standard Authoritative Server Mode (with optional live match recording)
+    let cfg = ServerConfig::from_env();
+    println!(
+        "[Config] bind_addr={} tick_rate={} Hz client_timeout={}s",
+        cfg.bind_addr, cfg.tick_rate, cfg.client_timeout_secs
+    );
+
+    let socket = UdpSocket::bind(&cfg.bind_addr).expect("Failed to bind UDP socket");
+    let socket = Arc::new(socket);
+    println!("[Server] Bound to {}", socket.local_addr().unwrap());
+
+    let (intent_tx, intent_rx) = mpsc::channel();
+    let tick_rate = cfg.tick_rate;
+    let client_timeout_secs = cfg.client_timeout_secs;
+
+    let net_socket = Arc::clone(&socket);
+    let _net_thread = thread::spawn(move || {
+        run_server(net_socket, intent_tx);
+    });
+
+    let (script_hash, script_payload) = {
+        let mut temp_instance = Instance::new(1, tick_rate, client_timeout_secs, seed);
+        let script_path = format!("scripts/{}/main.lua", map_name);
+        if let Ok(script_content) = std::fs::read_to_string(&script_path) {
+            println!("[Script] Loading script from '{}'", script_path);
+            if let Err(e) = temp_instance.load_script(&script_content) {
+                eprintln!("[Script] Failed to load script: {}", e);
+                process::exit(1);
+            }
+            println!(
+                "[Script] Script loaded successfully (hash: {})",
+                temp_instance.script_hash
+            );
+            (temp_instance.script_hash.clone(), temp_instance.script_payload.clone())
+        } else {
+            println!(
+                "[Script] No script found at '{}', running without game logic",
+                script_path
+            );
+            ("".to_string(), "".to_string())
+        }
+    };
+
+    let mut game_loop = GameLoop::new(tick_rate);
+    let running = game_loop.running_handle();
+
+    if let Some(record_path) = record_file {
+        println!(
+            "[Replay] Live match recording enabled -> '{}' (checkpoint interval: {} ticks)",
+            record_path, checkpoint_interval
+        );
+        game_loop.enable_recording(
+            1,
+            seed,
+            map_name.clone(),
+            checkpoint_interval,
+            record_path,
+            script_hash,
+            script_payload,
+        );
+    }
+
+    // Ctrl+C handler for graceful match saving
+    let r_ctrlc = Arc::clone(&running);
+    let _ = ctrlc::set_handler(move || {
+        println!("\n[Server] Shutdown signal received (Ctrl+C). Saving recording and stopping...");
+        r_ctrlc.store(false, Ordering::Relaxed);
+    });
+
+    // Console stdin listener for 'stop' / 'quit' command
+    spawn_console_listener(Arc::clone(&running));
+    println!(
+        "[Server] Server running. Type 'stop' or 'quit' (or press Ctrl+C) to shut down and save match recording.\n"
+    );
+
+    let map_name_clone = map_name.clone();
+    let loop_socket = Arc::clone(&socket);
+    let loop_thread = thread::spawn(move || {
+        let mut instance = Instance::new(1, tick_rate, client_timeout_secs, seed);
+        instance.logging_enabled = true;
+        let script_path = format!("scripts/{}/main.lua", map_name_clone);
+        if let Ok(script_content) = std::fs::read_to_string(&script_path) {
+            let _ = instance.load_script(&script_content);
+        }
+        game_loop.start(instance, intent_rx, loop_socket);
+    });
+
+    let _ = loop_thread.join();
+    println!("[Server] Shutdown complete.");
+    process::exit(0);
+}

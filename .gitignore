@@ -1,22 +1,3 @@
-# Loci2D Server Binary
-/bin/loci2d*
-!/bin/.gitkeep
-
-# Environment files
+/target
 .env
-*.env.local
-
-# Logs & Replays
-*.log
-*.loci
-replays/
-
-# OS specific files
 .DS_Store
-Thumbs.db
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*~
