@@ -74,6 +74,7 @@ function on_move_intent(entity_id, dir_x, dir_y)
     -- Rastrear direção
     if dir_x ~= 0 or dir_y ~= 0 then
         last_move_directions[entity_id] = {x = dir_x, y = dir_y}
+        Loci.Log.info("[Arena] Stored move direction for entity " .. tostring(entity_id) .. ": " .. dir_x .. ", " .. dir_y)
     end
     
     -- Normalizar movimento
