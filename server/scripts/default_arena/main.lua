@@ -22,6 +22,11 @@ local DASH_DISTANCE = 25.0
 local DASH_COOLDOWN = 30
 local dash_cooldowns = {}
 
+-- Configurações de escudo
+local SHIELD_DURATION = 180  -- ticks (~6 segundos)
+local SHIELD_REDUCTION = 0.5  -- 50% de redução de dano
+local shield_active = {}  -- [entity_id] = end_tick
+
 -- Rastrear última direção de movimento
 local last_move_directions = {}
 
@@ -33,6 +38,12 @@ end
 
 -- Função para aplicar dano
 local function apply_damage(entity_id, damage)
+    -- Verificar escudo
+    local shield_end = shield_active[entity_id]
+    if shield_end and current_tick < shield_end then
+        damage = damage * SHIELD_REDUCTION
+    end
+    
     local current_hp = Loci.get_entity_property(entity_id, "hp") or 100
     local new_hp = current_hp - damage
     Loci.Commands.set_property(entity_id, "hp", tostring(new_hp))
@@ -90,14 +101,14 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             
             -- Pegar direção (última movimento ou padrão)
             local last_dir = last_move_directions[entity_id]
-            local dir_x, dir_y = 1, 0
+            local fb_dir_x, fb_dir_y = 1, 0
             if last_dir then
-                dir_x = last_dir.x
-                dir_y = last_dir.y
+                fb_dir_x = last_dir.x
+                fb_dir_y = last_dir.y
             end
             
-            local spawn_x = px + dir_x * FIREBALL_SPAWN_OFFSET
-            local spawn_y = py + dir_y * FIREBALL_SPAWN_OFFSET
+            local spawn_x = px + fb_dir_x * FIREBALL_SPAWN_OFFSET
+            local spawn_y = py + fb_dir_y * FIREBALL_SPAWN_OFFSET
             
             local fireball_id = Loci.Commands.spawn_entity({
                 position = {x = spawn_x, y = spawn_y},
@@ -112,7 +123,7 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             })
             
             if fireball_id then
-                Loci.Commands.set_velocity(fireball_id, {x = dx * FIREBALL_SPEED, y = dy * FIREBALL_SPEED})
+                Loci.Commands.set_velocity(fireball_id, {x = fb_dir_x * FIREBALL_SPEED, y = fb_dir_y * FIREBALL_SPEED})
                 fireballs[#fireballs + 1] = {
                     id = fireball_id,
                     owner = entity_id,
@@ -141,6 +152,10 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             end
         end
         return false, "Direção inválida para dash"
+    elseif ability_id == 4 then
+        -- Escudo
+        shield_active[entity_id] = current_tick + SHIELD_DURATION
+        Loci.Commands.set_property(entity_id, "shield_active", "true")
     end
     
     return true
@@ -160,6 +175,14 @@ end
 
 function on_tick(tick)
     current_tick = tick
+    
+    -- Gerenciar escudo ativo
+    for entity_id, shield_end in pairs(shield_active) do
+        if tick >= shield_end then
+            Loci.Commands.set_property(entity_id, "shield_active", "false")
+            shield_active[entity_id] = nil
+        end
+    end
     
     if #fireballs == 0 then
         return

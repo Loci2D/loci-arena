@@ -32,9 +32,9 @@ local last_dash_time = 0
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
--- Server authoritative arena boundaries: [-150, +150] (300x300 pixels)
-local ARENA_MIN = -150
-local ARENA_MAX = 150
+-- Server authoritative arena boundaries: [-500, +500] (1000x1000 pixels)
+local ARENA_MIN = -500
+local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 
 function love.load(arg)
@@ -126,33 +126,44 @@ function love.update(dt)
 end
 
 function love.keypressed(key)
-    -- Sistema de Dash - detecta double-tap
-    local current_time = love.timer.getTime()
-    local last_time = last_key_time[key] or 0
-    
-    if current_time - last_time < DASH_DOUBLE_TAP_TIME and current_time - last_dash_time > DASH_COOLDOWN then
-        local my_entity = loci.get_my_entity()
-        if my_entity then
-            local dir_x, dir_y = 0, 0
-            
-            if key == "w" or key == "up" then
-                dir_y = -1
-            elseif key == "s" or key == "down" then
-                dir_y = 1
-            elseif key == "a" or key == "left" then
-                dir_x = -1
-            elseif key == "d" or key == "right" then
-                dir_x = 1
-            end
-            
-            -- Enviar direção normalizada para o dash (ability 2 conforme Trello)
-            loci.send_action(2, dir_x, dir_y)
-            
-            last_dash_time = current_time
+    -- Sistema de Dash - detecta double-tap apenas em teclas de movimento
+    local dash_keys = {"w", "a", "s", "d", "up", "down", "left", "right"}
+    local is_dash_key = false
+    for _, k in ipairs(dash_keys) do
+        if key == k then
+            is_dash_key = true
+            break
         end
     end
     
-    last_key_time[key] = current_time
+    if is_dash_key then
+        local current_time = love.timer.getTime()
+        local last_time = last_key_time[key] or 0
+        
+        if current_time - last_time < DASH_DOUBLE_TAP_TIME and current_time - last_dash_time > DASH_COOLDOWN then
+            local my_entity = loci.get_my_entity()
+            if my_entity then
+                local dir_x, dir_y = 0, 0
+                
+                if key == "w" or key == "up" then
+                    dir_y = -1
+                elseif key == "s" or key == "down" then
+                    dir_y = 1
+                elseif key == "a" or key == "left" then
+                    dir_x = -1
+                elseif key == "d" or key == "right" then
+                    dir_x = 1
+                end
+                
+                -- Enviar direção normalizada para o dash (ability 2 conforme Trello)
+                loci.send_action(2, dir_x, dir_y)
+                
+                last_dash_time = current_time
+            end
+        end
+        
+        last_key_time[key] = current_time
+    end
 
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
@@ -178,7 +189,7 @@ function love.keypressed(key)
     elseif key == "e" then
         local my_entity = loci.get_my_entity()
         if my_entity then
-            loci.send_action(4, my_entity.x, my_entity.y)
+            loci.send_action(4, 0, 0)
         end
     end
 end
@@ -276,6 +287,16 @@ function draw_entity(ent, is_me)
         love.graphics.circle("fill", px, py, 10)
         love.graphics.setColor(1, 1, 1)
         love.graphics.circle("line", px, py, 10)
+    end
+    
+    -- Visual effect for Shield (aura contínua)
+    if ent.properties and ent.properties.shield_active == "true" then
+        love.graphics.setColor(0.2, 0.8, 0.9, 0.3)
+        love.graphics.circle("fill", px, py, 12)
+        love.graphics.setColor(0.2, 0.8, 0.9, 0.6)
+        love.graphics.setLineWidth(2)
+        love.graphics.circle("line", px, py, 12)
+        love.graphics.circle("line", px, py, 14)
     end
 
     local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
