@@ -125,8 +125,7 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
                 radius = FIREBALL_RADIUS,
                 properties = {
                     owner = tostring(entity_id),
-                    kind = "fireball",
-                    collision_enabled = "false"
+                    kind = "fireball"
                 }
             })
             
@@ -203,11 +202,20 @@ function on_collision(entity_a_id, entity_b_id)
     local kind_a = Loci.get_entity_property(entity_a_id, "kind")
     local kind_b = Loci.get_entity_property(entity_b_id, "kind")
     
+    -- Verificar se alguma das entidades é fireball
     if kind_a == "fireball" then
-        Loci.Commands.destroy_entity(entity_a_id)
+        local owner_a = Loci.get_entity_property(entity_a_id, "owner")
+        -- Não destruir se colidiu com o dono
+        if entity_b_id ~= tonumber(owner_a) then
+            Loci.Commands.destroy_entity(entity_a_id)
+        end
     end
     if kind_b == "fireball" then
-        Loci.Commands.destroy_entity(entity_b_id)
+        local owner_b = Loci.get_entity_property(entity_b_id, "owner")
+        -- Não destruir se colidiu com o dono
+        if entity_a_id ~= tonumber(owner_b) then
+            Loci.Commands.destroy_entity(entity_b_id)
+        end
     end
 end
 
@@ -246,24 +254,16 @@ function on_tick(tick)
             local near = Loci.get_entities_in_radius(pos, HIT_RADIUS)
             for _, id in ipairs(near) do
                 if keep and id ~= fb.id and not destroyed[id] then
-                    -- Não colidir com o dono da fireball (skip completamente)
-                    if id == fb.owner then
-                        -- Não fazer nada - fireball atravessa o dono
-                    else
-                        local entity_kind = Loci.get_entity_property(id, "kind")
-                        if is_player(id) then
-                            apply_damage(id, FIREBALL_DAMAGE)
-                            if not destroyed[fb.id] then
-                                Loci.Commands.destroy_entity(fb.id)
-                                destroyed[fb.id] = true
-                            end
+                    local entity_kind = Loci.get_entity_property(id, "kind")
+                    if is_player(id) then
+                        -- Colidiu com inimigo - aplicar dano
+                        apply_damage(id, FIREBALL_DAMAGE)
+                    elseif entity_kind == "fireball" then
+                        -- Colidiu com outra fireball - destruir ambas
+                        if fb.id < id and not destroyed[fb.id] then
+                            Loci.Commands.destroy_entity(fb.id)
+                            destroyed[fb.id] = true
                             keep = false
-                        elseif entity_kind == "fireball" then
-                            if fb.id < id and not destroyed[fb.id] then
-                                Loci.Commands.destroy_entity(fb.id)
-                                destroyed[fb.id] = true
-                                keep = false
-                            end
                         end
                     end
                 end
