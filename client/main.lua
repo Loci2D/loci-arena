@@ -29,6 +29,10 @@ local DASH_DOUBLE_TAP_TIME = 0.3
 local DASH_COOLDOWN = 1.0
 local last_dash_time = 0
 
+-- Rastrear última direção de movimento para habilidades
+local last_move_dir_x = 1
+local last_move_dir_y = 0
+
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
@@ -101,6 +105,13 @@ local function update_movement()
         last_sent_dy = dy
         loci.send_move(dx, dy)
     end
+    
+    -- Rastrear última direção normalizada para habilidades
+    if dx ~= 0 or dy ~= 0 then
+        local len = math.sqrt(dx * dx + dy * dy)
+        last_move_dir_x = dx / len
+        last_move_dir_y = dy / len
+    end
 end
 
 function love.update(dt)
@@ -168,23 +179,12 @@ function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
     elseif key == "space" then
-        local mx, my = love.mouse.getPosition()
-        local sw, sh = love.graphics.getDimensions()
-        local world_target_x = (mx - sw / 2) + cam_x
-        local world_target_y = (my - sh / 2) + cam_y
-        
-        local me = loci.get_my_entity()
-        local origin_x = me and me.x or cam_x
-        local origin_y = me and me.y or cam_y
-        local dir_x = world_target_x - origin_x
-        local dir_y = world_target_y - origin_y
-        local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
-        if len > 0 then
-            dir_x, dir_y = dir_x / len, dir_y / len
-        else
-            dir_x, dir_y = 1, 0
+        -- Fireball usa última direção de movimento
+        local dir_x, dir_y = 1, 0
+        if last_move_dir_x ~= 0 or last_move_dir_y ~= 0 then
+            dir_x = last_move_dir_x
+            dir_y = last_move_dir_y
         end
-
         loci.send_action(1, dir_x, dir_y)
     elseif key == "e" then
         local my_entity = loci.get_my_entity()

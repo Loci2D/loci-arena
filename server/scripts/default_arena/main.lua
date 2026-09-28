@@ -93,13 +93,6 @@ end
 function on_action(entity_id, ability_id, dir_x, dir_y)
     Loci.Log.info("[Arena] Action from entity " .. tostring(entity_id) .. " -> Ability: " .. tostring(ability_id))
     
-    -- Converter e garantir que dir_x e dir_y são números válidos
-    local dx = tonumber(dir_x)
-    local dy = tonumber(dir_y)
-    
-    if not dx then dx = 1 end
-    if not dy then dy = 0 end
-    
     if ability_id == 1 then
         -- Fireball
         local pos = Loci.get_entity_position(entity_id)
@@ -145,14 +138,21 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             return false, "Dash em cooldown"
         end
         
-        -- dx e dy já são números normalizados
-        local len_sq = dx * dx + dy * dy
+        -- Usar última direção de movimento
+        local last_dir = last_move_directions[entity_id]
+        local dash_dir_x, dash_dir_y = 1, 0
+        if last_dir then
+            dash_dir_x = last_dir.x
+            dash_dir_y = last_dir.y
+        end
+        
+        local len_sq = dash_dir_x * dash_dir_x + dash_dir_y * dash_dir_y
         if len_sq > 0.01 then
             local pos = Loci.get_entity_position(entity_id)
             if pos then
                 local px, py = pos:x_float(), pos:y_float()
-                local new_x = px + dx * DASH_DISTANCE
-                local new_y = py + dy * DASH_DISTANCE
+                local new_x = px + dash_dir_x * DASH_DISTANCE
+                local new_y = py + dash_dir_y * DASH_DISTANCE
                 Loci.Commands.set_position(entity_id, {x = new_x, y = new_y})
                 dash_cooldowns[entity_id] = current_tick + DASH_COOLDOWN
                 return true
