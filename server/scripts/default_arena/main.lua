@@ -25,7 +25,7 @@ local dash_cooldowns = {}
 -- Configurações de escudo
 local SHIELD_DURATION = 180  -- ticks (~6 segundos)
 local SHIELD_REDUCTION = 0.5  -- 50% de redução de dano
-local shield_active = {}  -- [entity_id] = end_tick
+local shield_active_list = {}  -- lista de {entity_id, end_tick}
 
 -- Rastrear última direção de movimento
 local last_move_directions = {}
@@ -39,8 +39,15 @@ end
 -- Função para aplicar dano
 local function apply_damage(entity_id, damage)
     -- Verificar escudo
-    local shield_end = shield_active[entity_id]
-    if shield_end and current_tick < shield_end then
+    local shield_active = false
+    for _, shield in ipairs(shield_active_list) do
+        if shield.entity_id == entity_id and current_tick < shield.end_tick then
+            shield_active = true
+            break
+        end
+    end
+    
+    if shield_active then
         damage = damage * SHIELD_REDUCTION
     end
     
@@ -154,7 +161,10 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
         return false, "Direção inválida para dash"
     elseif ability_id == 4 then
         -- Escudo
-        shield_active[entity_id] = current_tick + SHIELD_DURATION
+        shield_active_list[#shield_active_list + 1] = {
+            entity_id = entity_id,
+            end_tick = current_tick + SHIELD_DURATION
+        }
         Loci.Commands.set_property(entity_id, "shield_active", "true")
     end
     
@@ -177,12 +187,15 @@ function on_tick(tick)
     current_tick = tick
     
     -- Gerenciar escudo ativo
-    for entity_id, shield_end in pairs(shield_active) do
-        if tick >= shield_end then
-            Loci.Commands.set_property(entity_id, "shield_active", "false")
-            shield_active[entity_id] = nil
+    local active_shields = {}
+    for _, shield in ipairs(shield_active_list) do
+        if tick >= shield.end_tick then
+            Loci.Commands.set_property(shield.entity_id, "shield_active", "false")
+        else
+            active_shields[#active_shields + 1] = shield
         end
     end
+    shield_active_list = active_shields
     
     if #fireballs == 0 then
         return
