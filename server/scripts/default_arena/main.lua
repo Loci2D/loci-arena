@@ -110,6 +110,24 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
             local spawn_x = px + fb_dir_x * FIREBALL_SPAWN_OFFSET
             local spawn_y = py + fb_dir_y * FIREBALL_SPAWN_OFFSET
             
+            -- Verificar se spawn está em local válido com raycast
+            local spawn_hit = Loci.Physics.raycast(
+                {x = px, y = py},
+                {x = fb_dir_x, y = fb_dir_y},
+                FIREBALL_SPAWN_OFFSET
+            )
+            
+            if spawn_hit then
+                -- Se houver obstáculo no caminho, reduzir offset
+                local hit_x = spawn_hit.x or spawn_x
+                local hit_y = spawn_hit.y or spawn_y
+                local dist_to_hit = math.sqrt((hit_x - px)^2 + (hit_y - py)^2)
+                if dist_to_hit < FIREBALL_SPAWN_OFFSET then
+                    spawn_x = px + fb_dir_x * (dist_to_hit - 1)
+                    spawn_y = py + fb_dir_y * (dist_to_hit - 1)
+                end
+            end
+            
             local fireball_id = Loci.Commands.spawn_entity({
                 position = {x = spawn_x, y = spawn_y},
                 blueprint = "fireball",
@@ -238,9 +256,9 @@ function on_tick(tick)
             local near = Loci.get_entities_in_radius(pos, HIT_RADIUS)
             for _, id in ipairs(near) do
                 if keep and id ~= fb.id and not destroyed[id] then
-                    -- Não colidir com o dono da fireball
+                    -- Não colidir com o dono da fireball (skip completamente)
                     if id == fb.owner then
-                        -- Pular colisão com o dono
+                        -- Não fazer nada - fireball atravessa o dono
                     else
                         local entity_kind = Loci.get_entity_property(id, "kind")
                         if is_player(id) then
