@@ -107,6 +107,13 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
                 fb_dir_y = last_dir.y
             end
             
+            -- Normalizar direção
+            local len = math.sqrt(fb_dir_x * fb_dir_x + fb_dir_y * fb_dir_y)
+            if len > 0.01 then
+                fb_dir_x = fb_dir_x / len
+                fb_dir_y = fb_dir_y / len
+            end
+            
             local spawn_x = px + fb_dir_x * FIREBALL_SPAWN_OFFSET
             local spawn_y = py + fb_dir_y * FIREBALL_SPAWN_OFFSET
             
