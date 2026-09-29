@@ -234,7 +234,7 @@ function draw_arena_grid()
 end
 
 function draw_entity(ent, is_me)
-    local radius = 18
+    local radius = 2
     local px = ent.x
     local py = ent.y
 
