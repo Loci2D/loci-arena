@@ -361,11 +361,7 @@ function draw_debug(sw, sh)
 end
 
 function love.focus(focused)
-    if not focused then
-        print("[Client] Window lost focus - continuing network updates")
-    else
-        print("[Client] Window regained focus")
-    end
+    -- Window focus change - network updates continue with backgroundupdates=true
 end
 
 function love.quit()
