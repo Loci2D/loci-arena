@@ -233,18 +233,35 @@ function on_collision(entity_a_id, entity_b_id)
     local kind_a = Loci.get_entity_property(entity_a_id, "kind")
     local kind_b = Loci.get_entity_property(entity_b_id, "kind")
     
-    -- Verificar se alguma das entidades é fireball
+    -- Fireball A colidiu com algo
     if kind_a == "fireball" then
         local owner_a = Loci.get_entity_property(entity_a_id, "owner")
-        -- Não destruir se colidiu com o dono
-        if entity_b_id ~= tonumber(owner_a) then
+        -- Se colidiu com jogador que não é o dono, aplicar dano e destruir
+        if kind_b == "player" and entity_b_id ~= tonumber(owner_a) then
+            apply_damage(entity_b_id, FIREBALL_DAMAGE)
+            Loci.Commands.destroy_entity(entity_a_id)
+        -- Se colidiu com outra fireball de dono diferente, destruir ambas
+        elseif kind_b == "fireball" then
+            local owner_b = Loci.get_entity_property(entity_b_id, "owner")
+            if owner_a ~= owner_b then
+                Loci.Commands.destroy_entity(entity_a_id)
+                Loci.Commands.destroy_entity(entity_b_id)
+            end
+        -- Se colidiu com parede/obstáculo, destruir
+        elseif entity_b_id ~= tonumber(owner_a) then
             Loci.Commands.destroy_entity(entity_a_id)
         end
     end
+    
+    -- Fireball B colidiu com algo (caso reverso)
     if kind_b == "fireball" then
         local owner_b = Loci.get_entity_property(entity_b_id, "owner")
-        -- Não destruir se colidiu com o dono
-        if entity_a_id ~= tonumber(owner_b) then
+        -- Se colidiu com jogador que não é o dono, aplicar dano e destruir
+        if kind_a == "player" and entity_a_id ~= tonumber(owner_b) then
+            apply_damage(entity_a_id, FIREBALL_DAMAGE)
+            Loci.Commands.destroy_entity(entity_b_id)
+        -- Se colidiu com parede/obstáculo, destruir
+        elseif entity_a_id ~= tonumber(owner_b) then
             Loci.Commands.destroy_entity(entity_b_id)
         end
     end
