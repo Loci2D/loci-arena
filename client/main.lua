@@ -12,6 +12,9 @@ if not ok then
     end
 end
 
+local push = require("src.push")
+local GAME_WIDTH, GAME_HEIGHT = 1280, 720
+
 -- Connection config
 local SERVER_IP = os.getenv("LOCI_SERVER_IP") or "127.0.0.1"
 local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
@@ -26,7 +29,7 @@ local show_debug_overlay = false
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
-local VISUAL_SCALE = 4 -- Pixels per Meter (escala para desenho)
+local VISUAL_SCALE = 8 -- Pixels per Meter (escala para desenho)
 
 -- Server authoritative arena boundaries: [-500, +500] (1000x1000 pixels)
 local ARENA_MIN = -500
@@ -37,6 +40,12 @@ function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
     
+    push:setupScreen(GAME_WIDTH, GAME_HEIGHT, 1280, 720, {
+        fullscreen = false,
+        resizable = true,
+        pixelperfect = false
+    })
+
     local random_suffix = tostring(love.math and love.math.random(1000, 9999) or math.random(1000, 9999))
     local player_name = "Player_" .. random_suffix
 
@@ -128,13 +137,19 @@ function love.update(dt)
     end
 end
 
+function love.resize(w, h)
+    push:resize(w, h)
+end
+
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
     elseif key == "space" then
         -- Primary action intent directed toward mouse cursor
-        local mx, my = love.mouse.getPosition()
-        local sw, sh = love.graphics.getDimensions()
+        local mx, my = push:toGame(love.mouse.getPosition())
+        if not mx then return end
+
+        local sw, sh = GAME_WIDTH, GAME_HEIGHT
         local world_target_x = (mx - sw / 2) + cam_x
         local world_target_y = (my - sh / 2) + cam_y
         
@@ -155,7 +170,9 @@ function love.keypressed(key)
 end
 
 function love.draw()
-    local sw, sh = love.graphics.getDimensions()
+    push:start()
+
+    local sw, sh = GAME_WIDTH, GAME_HEIGHT
     local center_x = sw / 2
     local center_y = sh / 2
 
@@ -195,6 +212,8 @@ function love.draw()
     if show_debug_overlay then
         draw_debug(sw, sh)
     end
+
+    push:finish()
 end
 
 function draw_arena_grid()
