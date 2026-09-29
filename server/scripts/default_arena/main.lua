@@ -27,6 +27,11 @@ local SHIELD_DURATION = 180  -- ticks (~6 segundos)
 local SHIELD_REDUCTION = 0.5  -- 50% de redução de dano
 local shield_active_list = {}  -- lista de {entity_id, end_tick}
 
+-- Configurações de slow
+local SLOW_FACTOR = 0.5  -- 50% da velocidade normal
+local SLOW_DURATION = 30  -- ticks (~1 segundo)
+local slow_active_list = {}  -- lista de {entity_id, end_tick}
+
 -- Rastrear última direção de movimento
 local last_move_directions = {}
 
@@ -34,6 +39,15 @@ local last_move_directions = {}
 local function is_player(entity_id)
     local kind = Loci.get_entity_property(entity_id, "kind")
     return kind == "player"
+end
+
+-- Função para aplicar slow
+local function apply_slow(entity_id)
+    slow_active_list[#slow_active_list + 1] = {
+        entity_id = entity_id,
+        end_tick = current_tick + SLOW_DURATION
+    }
+    Loci.Commands.set_property(entity_id, "status_slow", "true")
 end
 
 -- Função para aplicar dano
@@ -54,6 +68,9 @@ local function apply_damage(entity_id, damage)
     local current_hp = Loci.get_entity_property(entity_id, "hp") or 100
     local new_hp = current_hp - damage
     Loci.Commands.set_property(entity_id, "hp", tostring(new_hp))
+    
+    -- Aplicar slow quando recebe dano
+    apply_slow(entity_id)
     
     if new_hp <= 0 then
         Loci.Commands.destroy_entity(entity_id)
@@ -83,9 +100,18 @@ function on_move_intent(entity_id, dir_x, dir_y)
         dir_y = dir_y / len
     end
     
+    -- Verificar se está em slow
+    local speed = PLAYER_SPEED
+    for _, slow in ipairs(slow_active_list) do
+        if slow.entity_id == entity_id and current_tick < slow.end_tick then
+            speed = PLAYER_SPEED * SLOW_FACTOR
+            break
+        end
+    end
+    
     Loci.Commands.set_velocity(entity_id, {
-        x = dir_x * PLAYER_SPEED,
-        y = dir_y * PLAYER_SPEED
+        x = dir_x * speed,
+        y = dir_y * speed
     })
     return true
 end
@@ -128,6 +154,11 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
                     kind = "fireball"
                 }
             })
+            
+            -- Tornar fireball intangível ao dono (API set_intangible)
+            if Loci.set_intangible then
+                Loci.set_intangible(fireball_id, true)
+            end
             
             if fireball_id then
                 Loci.Commands.set_velocity(fireball_id, {x = fb_dir_x * FIREBALL_SPEED, y = fb_dir_y * FIREBALL_SPEED})
@@ -232,6 +263,18 @@ function on_tick(tick)
         end
     end
     shield_active_list = active_shields
+    
+    -- Gerenciar slow ativo
+    local active_slow = {}
+    for _, slow in ipairs(slow_active_list) do
+        if tick >= slow.end_tick then
+            -- Slow terminou, restaurar velocidade normal
+            Loci.Commands.set_property(slow.entity_id, "status_slow", "false")
+        else
+            active_slow[#active_slow + 1] = slow
+        end
+    end
+    slow_active_list = active_slow
     
     if #fireballs == 0 then
         return
