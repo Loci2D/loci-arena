@@ -7,6 +7,7 @@ function love.conf(t)
     t.window.minwidth = 800
     t.window.minheight = 600
     t.window.vsync = 1
+    t.window.backgroundupdates = true
     t.modules.joystick = true
     t.modules.audio = true
 end

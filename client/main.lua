@@ -122,7 +122,7 @@ end
 
 function love.update(dt)
     loci.update(dt)
-    
+
     local my_entity = loci.get_my_entity()
     if my_entity then
         update_movement()
@@ -357,6 +357,14 @@ function draw_debug(sw, sh)
     love.graphics.print(string.format("Tick Rate: %d Hz", tick_rate), sw - 225, 80)
     if me then
         love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 100)
+    end
+end
+
+function love.focus(focused)
+    if not focused then
+        print("[Client] Window lost focus - continuing network updates")
+    else
+        print("[Client] Window regained focus")
     end
 end
 

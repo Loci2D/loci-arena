@@ -2,6 +2,10 @@
 -- This script runs inside the loci2d server environment.
 -- Rules, physics modifications, damage and game mechanics must be handled here.
 
+-- Arena bounds (deve corresponder ao cliente: -500 a +500)
+local ARENA_MIN = -500
+local ARENA_MAX = 500
+
 -- Arena personalizada com fireball e dash
 local fireballs = {}
 local current_tick = 0
@@ -79,7 +83,7 @@ end
 
 function on_player_join(entity_id)
     Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
-    
+
     Loci.Commands.set_property(entity_id, "team", "1")
     Loci.Commands.set_property(entity_id, "hp", "100")
     Loci.Commands.set_property(entity_id, "max_hp", "100")
@@ -118,13 +122,13 @@ end
 
 function on_action(entity_id, ability_id, dir_x, dir_y)
     Loci.Log.info("[Arena] Action from entity " .. tostring(entity_id) .. " -> Ability: " .. tostring(ability_id))
-    
+
     if ability_id == 1 then
         -- Fireball
         local pos = Loci.get_entity_position(entity_id)
         if pos then
             local px, py = pos:x_float(), pos:y_float()
-            
+
             -- Pegar direção (última movimento ou padrão)
             local last_dir = last_move_directions[entity_id]
             local fb_dir_x, fb_dir_y = 1, 0
@@ -132,17 +136,23 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
                 fb_dir_x = last_dir.x
                 fb_dir_y = last_dir.y
             end
-            
+
             -- Normalizar direção
             local len = math.sqrt(fb_dir_x * fb_dir_x + fb_dir_y * fb_dir_y)
             if len > 0.01 then
                 fb_dir_x = fb_dir_x / len
                 fb_dir_y = fb_dir_y / len
             end
-            
+
+            -- Verificar se spawn está dentro dos limites
             local spawn_x = px + fb_dir_x * FIREBALL_SPAWN_OFFSET
             local spawn_y = py + fb_dir_y * FIREBALL_SPAWN_OFFSET
-            
+
+            if spawn_x < ARENA_MIN or spawn_x > ARENA_MAX or spawn_y < ARENA_MIN or spawn_y > ARENA_MAX then
+                -- Spawn fora dos limites, não criar fireball
+                return false, "Fireball spawn out of bounds"
+            end
+
             local fireball_id = Loci.Commands.spawn_entity({
                 position = {x = spawn_x, y = spawn_y},
                 blueprint = "fireball",
@@ -154,18 +164,20 @@ function on_action(entity_id, ability_id, dir_x, dir_y)
                     kind = "fireball"
                 }
             })
-            
+
             -- Tornar fireball intangível ao dono (API set_intangible)
             if Loci.set_intangible then
                 Loci.set_intangible(fireball_id, true)
             end
-            
+
             if fireball_id then
                 Loci.Commands.set_velocity(fireball_id, {x = fb_dir_x * FIREBALL_SPEED, y = fb_dir_y * FIREBALL_SPEED})
                 fireballs[#fireballs + 1] = {
                     id = fireball_id,
                     owner = entity_id,  -- Armazenar como número para comparação correta
-                    expires_at = current_tick + FIREBALL_LIFETIME
+                    expires_at = current_tick + FIREBALL_LIFETIME,
+                    spawn_pos = {x = spawn_x, y = spawn_y},  -- Guardar posição inicial
+                    direction = {x = fb_dir_x, y = fb_dir_y}  -- Guardar direção
                 }
             end
         end
@@ -232,10 +244,11 @@ end
 function on_collision(entity_a_id, entity_b_id)
     local kind_a = Loci.get_entity_property(entity_a_id, "kind")
     local kind_b = Loci.get_entity_property(entity_b_id, "kind")
-    
+
     -- Fireball A colidiu com algo
     if kind_a == "fireball" then
         local owner_a = Loci.get_entity_property(entity_a_id, "owner")
+
         -- Se colidiu com jogador que não é o dono, aplicar dano e destruir
         if kind_b == "player" and entity_b_id ~= tonumber(owner_a) then
             apply_damage(entity_b_id, FIREBALL_DAMAGE)
@@ -247,29 +260,32 @@ function on_collision(entity_a_id, entity_b_id)
                 Loci.Commands.destroy_entity(entity_a_id)
                 Loci.Commands.destroy_entity(entity_b_id)
             end
-        -- Se colidiu com parede/obstáculo, destruir
-        elseif entity_b_id ~= tonumber(owner_a) then
+        -- Se colidiu com qualquer outra coisa (parede/obstáculo), destruir
+        else
             Loci.Commands.destroy_entity(entity_a_id)
         end
     end
-    
+
     -- Fireball B colidiu com algo (caso reverso)
     if kind_b == "fireball" then
         local owner_b = Loci.get_entity_property(entity_b_id, "owner")
+
         -- Se colidiu com jogador que não é o dono, aplicar dano e destruir
         if kind_a == "player" and entity_a_id ~= tonumber(owner_b) then
             apply_damage(entity_a_id, FIREBALL_DAMAGE)
             Loci.Commands.destroy_entity(entity_b_id)
-        -- Se colidiu com parede/obstáculo, destruir
-        elseif entity_a_id ~= tonumber(owner_b) then
+        -- Se colidiu com qualquer outra coisa (parede/obstáculo), destruir
+        else
             Loci.Commands.destroy_entity(entity_b_id)
         end
     end
+
+    -- Player-player collision - não fazer nada (motor de física trata)
 end
 
 function on_tick(tick)
     current_tick = tick
-    
+
     -- Gerenciar escudo ativo
     local active_shields = {}
     for _, shield in ipairs(shield_active_list) do
@@ -280,7 +296,7 @@ function on_tick(tick)
         end
     end
     shield_active_list = active_shields
-    
+
     -- Gerenciar slow ativo
     local active_slow = {}
     for _, slow in ipairs(slow_active_list) do
@@ -292,44 +308,69 @@ function on_tick(tick)
         end
     end
     slow_active_list = active_slow
-    
+
     if #fireballs == 0 then
         return
     end
-    
+
     local alive = {}
     local destroyed = {}
-    
+
     for _, fb in ipairs(fireballs) do
         local keep = true
-        local pos = Loci.get_entity_position(fb.id)
-        
-        if not pos or tick >= fb.expires_at then
+
+        if tick >= fb.expires_at then
             if not destroyed[fb.id] then
                 Loci.Commands.destroy_entity(fb.id)
                 destroyed[fb.id] = true
             end
             keep = false
         else
-            local near = Loci.get_entities_in_radius(pos, HIT_RADIUS)
-            for _, id in ipairs(near) do
-                if keep and id ~= fb.id and not destroyed[id] then
-                    local entity_kind = Loci.get_entity_property(id, "kind")
-                    if is_player(id) then
-                        -- Colidiu com inimigo - aplicar dano
-                        apply_damage(id, FIREBALL_DAMAGE)
-                    elseif entity_kind == "fireball" then
-                        -- Colidiu com outra fireball - destruir ambas
-                        if fb.id < id and not destroyed[fb.id] then
-                            Loci.Commands.destroy_entity(fb.id)
-                            destroyed[fb.id] = true
-                            keep = false
+            -- Calcular posição manualmente baseada no spawn e direção
+            local elapsed_ticks = tick - (fb.expires_at - FIREBALL_LIFETIME)
+            local distance_traveled = elapsed_ticks * FIREBALL_SPEED
+            local px = fb.spawn_pos.x + fb.direction.x * distance_traveled
+            local py = fb.spawn_pos.y + fb.direction.y * distance_traveled
+
+            -- Verificar colisão com paredes da arena
+            if px < ARENA_MIN or px > ARENA_MAX or py < ARENA_MIN or py > ARENA_MAX then
+                if not destroyed[fb.id] then
+                    Loci.Commands.destroy_entity(fb.id)
+                    destroyed[fb.id] = true
+                end
+                keep = false
+            else
+                -- Tentar obter posição real da entidade também para colisão
+                local real_pos = Loci.get_entity_position(fb.id)
+                local check_x, check_y = px, py
+
+                if real_pos then
+                    -- Usar posição real se disponível, caso contrário posição calculada
+                    check_x = real_pos:x_float()
+                    check_y = real_pos:y_float()
+                end
+
+                -- Verificar colisão com entidades
+                local near = Loci.get_entities_in_radius({x = check_x, y = check_y}, HIT_RADIUS)
+                for _, id in ipairs(near) do
+                    if keep and id ~= fb.id and not destroyed[id] then
+                        local entity_kind = Loci.get_entity_property(id, "kind")
+                        if is_player(id) then
+                            -- Colidiu com inimigo - aplicar dano
+                            apply_damage(id, FIREBALL_DAMAGE)
+                        elseif entity_kind == "fireball" then
+                            -- Colidiu com outra fireball - destruir ambas
+                            if fb.id < id and not destroyed[fb.id] then
+                                Loci.Commands.destroy_entity(fb.id)
+                                destroyed[fb.id] = true
+                                keep = false
+                            end
                         end
                     end
                 end
             end
         end
-        
+
         if keep then
             alive[#alive + 1] = fb
         end

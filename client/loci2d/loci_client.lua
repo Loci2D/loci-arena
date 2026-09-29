@@ -441,10 +441,11 @@ function loci._handle_world_state(state)
     if state.entities then
         for _, raw_ent in ipairs(state.entities) do
             local entity_id = raw_ent.id
-            
+
             -- Detect my_entity
             if loci.my_entity_id == nil and raw_ent.name == loci._player_name then
                 loci.my_entity_id = raw_ent.id
+                print("[Client] Found my_entity: ID " .. tostring(entity_id) .. " name: " .. tostring(raw_ent.name))
             end
             
             local ent = loci.entities[entity_id]
