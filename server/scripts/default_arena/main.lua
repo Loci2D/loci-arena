@@ -4,7 +4,7 @@
 
 -- Movement speed in units per tick.
 -- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
-local SPEED = 5.0
+local SPEED = 3.0
 
 function on_player_join(entity_id)
     Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
