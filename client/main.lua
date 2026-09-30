@@ -12,6 +12,9 @@ if not ok then
     end
 end
 
+local push = require("src.push")
+local GAME_WIDTH, GAME_HEIGHT = 1280, 720
+
 -- Connection config
 local SERVER_IP = os.getenv("LOCI_SERVER_IP") or "127.0.0.1"
 local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
@@ -26,6 +29,8 @@ local show_debug_overlay = false
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
+local VISUAL_SCALE = 8 -- Pixels per Meter (escala para desenho)
+
 -- Server authoritative arena boundaries: [-500, +500] (1000x1000 pixels)
 local ARENA_MIN = -500
 local ARENA_MAX = 500
@@ -35,6 +40,12 @@ function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
     
+    push:setupScreen(GAME_WIDTH, GAME_HEIGHT, 1280, 720, {
+        fullscreen = false,
+        resizable = true,
+        pixelperfect = false
+    })
+
     local random_suffix = tostring(love.math and love.math.random(1000, 9999) or math.random(1000, 9999))
     local player_name = "Player_" .. random_suffix
 
@@ -108,8 +119,8 @@ function love.update(dt)
     if my_entity then
         update_movement()
         -- Direct camera binding eliminates lag jitter between camera and player
-        cam_x = my_entity.x
-        cam_y = my_entity.y
+        cam_x = my_entity.x * VISUAL_SCALE
+        cam_y = my_entity.y * VISUAL_SCALE
     end
 
     -- Update rejection message timer
@@ -126,19 +137,25 @@ function love.update(dt)
     end
 end
 
+function love.resize(w, h)
+    push:resize(w, h)
+end
+
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
     elseif key == "space" then
         -- Primary action intent directed toward mouse cursor
-        local mx, my = love.mouse.getPosition()
-        local sw, sh = love.graphics.getDimensions()
+        local mx, my = push:toGame(love.mouse.getPosition())
+        if not mx then return end
+
+        local sw, sh = GAME_WIDTH, GAME_HEIGHT
         local world_target_x = (mx - sw / 2) + cam_x
         local world_target_y = (my - sh / 2) + cam_y
         
         local me = loci.get_my_entity()
-        local origin_x = me and me.x or cam_x
-        local origin_y = me and me.y or cam_y
+        local origin_x = me and (me.x * VISUAL_SCALE) or cam_x
+        local origin_y = me and (me.y * VISUAL_SCALE) or cam_y
         local dir_x = world_target_x - origin_x
         local dir_y = world_target_y - origin_y
         local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
@@ -153,7 +170,9 @@ function love.keypressed(key)
 end
 
 function love.draw()
-    local sw, sh = love.graphics.getDimensions()
+    push:start()
+
+    local sw, sh = GAME_WIDTH, GAME_HEIGHT
     local center_x = sw / 2
     local center_y = sh / 2
 
@@ -169,10 +188,10 @@ function love.draw()
     for _, fx in ipairs(visual_fx) do
         local progress = fx.lifetime / fx.max_lifetime
         love.graphics.setColor(1, 0.85, 0.2, progress)
-        local fx_start_x = fx.x
-        local fx_start_y = fx.y
-        local fx_end_x = fx_start_x + fx.dir_x * 50
-        local fx_end_y = fx_start_y + fx.dir_y * 50
+        local fx_start_x = fx.x * VISUAL_SCALE
+        local fx_start_y = fx.y * VISUAL_SCALE
+        local fx_end_x = fx_start_x + fx.dir_x * 50 * VISUAL_SCALE
+        local fx_end_y = fx_start_y + fx.dir_y * 50 * VISUAL_SCALE
         love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
         love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
     end
@@ -193,36 +212,42 @@ function love.draw()
     if show_debug_overlay then
         draw_debug(sw, sh)
     end
+
+    push:finish()
 end
 
 function draw_arena_grid()
+    local v_min = ARENA_MIN * VISUAL_SCALE
+    local v_max = ARENA_MAX * VISUAL_SCALE
+    local v_size = ARENA_SIZE * VISUAL_SCALE
+
     -- Outer void background beyond map bounds
     love.graphics.setColor(0.06, 0.07, 0.10, 1.0)
-    love.graphics.rectangle("fill", -1000, -1000, 2000, 2000)
+    love.graphics.rectangle("fill", -1000 * VISUAL_SCALE, -1000 * VISUAL_SCALE, 2000 * VISUAL_SCALE, 2000 * VISUAL_SCALE)
 
     -- Playable arena floor (matching server MapBounds: [-500, +500])
     love.graphics.setColor(0.10, 0.12, 0.17, 1.0)
-    love.graphics.rectangle("fill", ARENA_MIN, ARENA_MIN, ARENA_SIZE, ARENA_SIZE)
+    love.graphics.rectangle("fill", v_min, v_min, v_size, v_size)
 
     -- Interior grid lines every 50 pixels
     love.graphics.setColor(0.18, 0.22, 0.32, 0.35)
     love.graphics.setLineWidth(1)
-    for x = ARENA_MIN, ARENA_MAX, 50 do
-        love.graphics.line(x, ARENA_MIN, x, ARENA_MAX)
+    for x = v_min, v_max, 50 * VISUAL_SCALE do
+        love.graphics.line(x, v_min, x, v_max)
     end
-    for y = ARENA_MIN, ARENA_MAX, 50 do
-        love.graphics.line(ARENA_MIN, y, ARENA_MAX, y)
+    for y = v_min, v_max, 50 * VISUAL_SCALE do
+        love.graphics.line(v_min, y, v_max, y)
     end
 
     -- Outer collision barrier glow
     love.graphics.setColor(0.25, 0.55, 0.95, 0.25)
     love.graphics.setLineWidth(5)
-    love.graphics.rectangle("line", ARENA_MIN - 2, ARENA_MIN - 2, ARENA_SIZE + 4, ARENA_SIZE + 4)
+    love.graphics.rectangle("line", v_min - 2, v_min - 2, v_size + 4, v_size + 4)
 
     -- Authoritative boundary wall line
     love.graphics.setColor(0.35, 0.65, 1.0, 0.9)
     love.graphics.setLineWidth(2)
-    love.graphics.rectangle("line", ARENA_MIN, ARENA_MIN, ARENA_SIZE, ARENA_SIZE)
+    love.graphics.rectangle("line", v_min, v_min, v_size, v_size)
 
     -- Origin crosshair at (0, 0)
     love.graphics.setColor(0.4, 0.6, 0.85, 0.7)
@@ -234,9 +259,9 @@ function draw_arena_grid()
 end
 
 function draw_entity(ent, is_me)
-    local radius = 18
-    local px = ent.x
-    local py = ent.y
+    local radius = 2 * VISUAL_SCALE
+    local px = ent.x * VISUAL_SCALE
+    local py = ent.y * VISUAL_SCALE
 
     if is_me then
         love.graphics.setColor(0.2, 0.6, 1.0, 1)
