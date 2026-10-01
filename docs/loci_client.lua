@@ -2,8 +2,8 @@ local socket = require("socket")
 local pb = nil
 local protoc = nil
 
-package.cpath = package.cpath .. ";./?.so;./lib/?.so;sdks/love2d/lib/?.so;../../sdks/love2d/lib/?.so"
-package.path = package.path .. ";./?.lua;./lib/?.lua;sdks/love2d/lib/?.lua;../../sdks/love2d/lib/?.lua"
+package.cpath = package.cpath .. ";./?.so;./lib/?.so;docs/lib/?.so;../../docs/lib/?.so"
+package.path = package.path .. ";./?.lua;./lib/?.lua;docs/lib/?.lua;../../docs/lib/?.lua"
 
 -- Attempt to load lua-protobuf library and protoc parser
 local ok_pb, res_pb = pcall(require, "pb")
@@ -151,8 +151,8 @@ function loci.connect(host, port, player_name, base_path, tick_rate)
         local candidate_proto_paths = {
             loci._base_path and (loci._base_path .. "game_packets.proto"),
             loci._base_path and (loci._base_path .. "/game_packets.proto"),
-            "sdks/love2d/lib/game_packets.proto",
-            "../../sdks/love2d/lib/game_packets.proto",
+            "docs/lib/game_packets.proto",
+            "../../docs/lib/game_packets.proto",
             "proto/game_packets.proto",
             "../../proto/game_packets.proto",
             "lib/game_packets.proto",
@@ -177,7 +177,7 @@ function loci.connect(host, port, player_name, base_path, tick_rate)
         -- 1. Try dynamic text parsing with protoc.lua
         if protoc then
             local p = protoc.new()
-            p.include_dirs = { loci._base_path, "sdks/love2d/lib", "proto", "../../proto", "." }
+            p.include_dirs = { loci._base_path, "docs/lib", "proto", "../../proto", "." }
 
             for _, path in ipairs(candidate_proto_paths) do
                 local content = read_proto_file(path)
@@ -195,8 +195,8 @@ function loci.connect(host, port, player_name, base_path, tick_rate)
         if not schema_loaded then
             local candidate_pb_paths = {
                 loci._base_path and (loci._base_path .. "game_packets.pb"),
-                "sdks/love2d/lib/game_packets.pb",
-                "../../sdks/love2d/lib/game_packets.pb",
+                "docs/lib/game_packets.pb",
+                "../../docs/lib/game_packets.pb",
                 "lib/game_packets.pb",
                 "game_packets.pb",
             }

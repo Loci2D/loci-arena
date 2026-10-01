@@ -156,7 +156,7 @@
             <h2>Instalação & Estrutura de Arquivos</h2>
             <p>Para usar o SDK no seu projeto, você precisa copiar os arquivos do SDK para dentro da pasta do seu jogo Love2D.</p>
             <ol>
-                <li>Crie uma pasta chamada <code>sdks/love2d</code> (ou mantenha a estrutura padrão) dentro do seu projeto.</li>
+                <li>Crie uma pasta chamada <code>docs</code> (ou mantenha a estrutura padrão) dentro do seu projeto.</li>
                 <li>Copie o arquivo <code>loci_client.lua</code> e a pasta <code>lib/</code> para dentro dela.</li>
                 <li>A pasta <code>lib/</code> contém os arquivos essenciais de protocolo e deserialização:
                     <ul>
@@ -167,7 +167,7 @@
                 </li>
             </ol>
             <p><strong>Dica de Validação:</strong> Para ter certeza de que o ambiente Lua e o SDK estão funcionando perfeitamente na sua máquina, execute no terminal:</p>
-            <pre><code>lua sdks/love2d/test_sdk.lua</code></pre>
+            <pre><code>lua docs/test_sdk.lua</code></pre>
         </div>
 
         <div class="card">
@@ -175,12 +175,12 @@
             <h2>Importação e Conexão</h2>
             <p>No seu arquivo <code>main.lua</code>, importe o SDK, ajuste o <code>package.path</code> se necessário, e conecte-se ao servidor dentro da função <code>love.load</code>.</p>
             <pre><code><span class="comment">-- Ajuste o caminho se você colocou o SDK em subpastas</span>
-<span class="keyword">package</span>.<span class="keyword">path</span> = <span class="keyword">package</span>.<span class="keyword">path</span> .. <span class="string">";sdks/love2d/?.lua"</span>
+<span class="keyword">package</span>.<span class="keyword">path</span> = <span class="keyword">package</span>.<span class="keyword">path</span> .. <span class="string">";docs/?.lua"</span>
 <span class="keyword">local</span> loci = <span class="keyword">require</span>(<span class="string">"loci_client"</span>)
 
 <span class="keyword">function</span> <span class="func">love.load</span>()
     <span class="comment">-- (IP do Servidor, Porta, Nome do Jogador, Caminho relativo para a pasta lib/)</span>
-    loci.<span class="func">connect</span>(<span class="string">"127.0.0.1"</span>, 8080, <span class="string">"MeuJogador"</span>, <span class="string">"sdks/love2d/lib/"</span>)
+    loci.<span class="func">connect</span>(<span class="string">"127.0.0.1"</span>, 8080, <span class="string">"MeuJogador"</span>, <span class="string">"docs/lib/"</span>)
 <span class="keyword">end</span></code></pre>
             <p><strong>Nota importante:</strong> O quarto parâmetro de <code>loci.connect</code> é fundamental! Ele diz ao SDK onde encontrar os arquivos internos do Protobuf (o <code>game_packets.proto</code>). Passe o caminho relativo da pasta onde você roda o seu jogo até chegar na pasta <code>lib/</code> do SDK, terminando com uma barra <code>/</code>.</p>
         </div>
