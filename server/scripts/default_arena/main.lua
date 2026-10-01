@@ -6,14 +6,18 @@
 -- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
 local SPEED = 3.0
 
+-- Importa o sistema de combate que centraliza a lógica do jogo
+local CombatSystem = require("core.combat_system")
+
 function on_player_join(entity_id)
     Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
     
     -- Initialize entity game properties
     Loci.Commands.set_property(entity_id, "team", "1")
-    Loci.Commands.set_property(entity_id, "hp", "100")
-    Loci.Commands.set_property(entity_id, "max_hp", "100")
     Loci.Commands.set_property(entity_id, "score", "0")
+
+    -- Inicializa os atributos definidos no Game Rules (ex: HP 4000, Def Fis 100, Def Mag 50)
+    CombatSystem.init_entity(entity_id, 4000, 100, 50)
 end
 
 function on_move_intent(entity_id, dir_x, dir_y)
@@ -38,6 +42,9 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
     -- Feature placeholder: Handle skills, spells, dash, attack
     if ability_id == 1 then
         -- Example: Primary attack
+        -- Aqui o motor de colisão da Loci2D deve identificar quem foi acertado.
+        -- Supondo que você detectou um "target_id", a chamada seria:
+        -- CombatSystem.process_hit(entity_id, target_id, 250, CombatSystem.DamageType.PHYSICAL, false)
         return true
     end
 
