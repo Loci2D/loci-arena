@@ -13,6 +13,7 @@ if not ok then
 end
 
 local push = require("src.push")
+local kda_ui = require("kda_ui")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Connection config
@@ -25,6 +26,9 @@ local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
 local show_debug_overlay = false
+
+-- Sistema de projéteis do cliente
+local projectiles = {}
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
@@ -78,15 +82,7 @@ function love.load(arg)
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
-        table.insert(visual_fx, {
-            x = entity and entity.x or 0,
-            y = entity and entity.y or 0,
-            dir_x = dir_x,
-            dir_y = dir_y,
-            ability_id = ability_id,
-            lifetime = 0.35,
-            max_lifetime = 0.35
-        })
+        -- Efeito visual removido (não mostramos mais o raio amarelo)
     end
 
     loci.on_intent_rejected = function(reason)
@@ -111,10 +107,78 @@ local function update_movement()
     end
 end
 
+-- Sistema de projéteis
+local PROJECTILE_SPEED = 400.0      -- Velocidade em pixels/segundo
+local PROJECTILE_RADIUS = 8.0 * VISUAL_SCALE  -- Raio de colisão (aumentado de 2 para 8)
+local PROJECTILE_RANGE = 200.0 * VISUAL_SCALE  -- Alcance máximo
+
+local function spawn_projectile(x, y, dir_x, dir_y, owner_id)
+    table.insert(projectiles, {
+        x = x,
+        y = y,
+        dir_x = dir_x,
+        dir_y = dir_y,
+        owner_id = owner_id,
+        lifetime = 0,
+        max_lifetime = PROJECTILE_RANGE / PROJECTILE_SPEED,
+        active = true
+    })
+end
+
+local function update_projectiles(dt)
+    local entities = loci.get_entities()
+
+    for i = #projectiles, 1, -1 do
+        local proj = projectiles[i]
+        if not proj.active then
+            table.remove(projectiles, i)
+            goto continue
+        end
+
+        -- Mover projétil
+        proj.x = proj.x + proj.dir_x * PROJECTILE_SPEED * dt
+        proj.y = proj.y + proj.dir_y * PROJECTILE_SPEED * dt
+        proj.lifetime = proj.lifetime + dt
+
+        -- Verificar se expirou
+        if proj.lifetime >= proj.max_lifetime then
+            table.remove(projectiles, i)
+            goto continue
+        end
+
+        -- Verificar colisão com entidades
+        for _, ent in ipairs(entities) do
+            if ent.id ~= proj.owner_id then
+                local ent_x = ent.x * VISUAL_SCALE
+                local ent_y = ent.y * VISUAL_SCALE
+
+                -- Calcular distância
+                local dist = math.sqrt((proj.x - ent_x)^2 + (proj.y - ent_y)^2)
+
+                -- Verificar colisão (raio do projétil + raio do jogador aproximado)
+                local collision_threshold = PROJECTILE_RADIUS + 2.0 * VISUAL_SCALE
+
+                if dist < collision_threshold then
+                    -- Colisão detectada! Enviar para servidor
+                    -- Codificar target_id no ability_id (send_action normaliza aim_x/aim_y)
+                    loci.send_action(10000 + ent.id, proj.dir_x, proj.dir_y)
+                    print("[Client] Projectile hit entity " .. ent.id .. " at distance " .. dist)
+
+                    -- Remover projétil
+                    table.remove(projectiles, i)
+                    goto continue
+                end
+            end
+        end
+
+        ::continue::
+    end
+end
+
 function love.update(dt)
     -- Process incoming network packets and smooth entity interpolation
     loci.update(dt)
-    
+
     local my_entity = loci.get_my_entity()
     if my_entity then
         update_movement()
@@ -135,6 +199,9 @@ function love.update(dt)
             table.remove(visual_fx, i)
         end
     end
+
+    -- Update projectiles
+    update_projectiles(dt)
 end
 
 function love.resize(w, h)
@@ -144,7 +211,17 @@ end
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
+    elseif key == "tab" then
+        kda_ui.show()
     elseif key == "space" then
+        -- Verificar se o jogador está morto
+        local me = loci.get_my_entity()
+        local is_dead = me and (me.is_dead or (me.properties and me.properties["is_dead"] == "true"))
+        if is_dead then
+            print("[Client] Cannot shoot - you are dead!")
+            return
+        end
+
         -- Primary action intent directed toward mouse cursor
         local mx, my = push:toGame(love.mouse.getPosition())
         if not mx then return end
@@ -152,8 +229,7 @@ function love.keypressed(key)
         local sw, sh = GAME_WIDTH, GAME_HEIGHT
         local world_target_x = (mx - sw / 2) + cam_x
         local world_target_y = (my - sh / 2) + cam_y
-        
-        local me = loci.get_my_entity()
+
         local origin_x = me and (me.x * VISUAL_SCALE) or cam_x
         local origin_y = me and (me.y * VISUAL_SCALE) or cam_y
         local dir_x = world_target_x - origin_x
@@ -165,7 +241,15 @@ function love.keypressed(key)
             dir_x, dir_y = 1, 0
         end
 
-        loci.send_action(1, dir_x, dir_y)
+        -- Spawnar projétil (ele se move e verifica colisão frame a frame)
+        spawn_projectile(origin_x, origin_y, dir_x, dir_y, me and me.id)
+        print("[Client] Projectile spawned at (" .. origin_x .. ", " .. origin_y .. ") direction (" .. dir_x .. ", " .. dir_y .. ")")
+    end
+end
+
+function love.keyreleased(key)
+    if key == "tab" then
+        kda_ui.hide()
     end
 end
 
@@ -196,6 +280,12 @@ function love.draw()
         love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
     end
 
+    -- Draw projectiles
+    love.graphics.setColor(1, 0.5, 0.2, 1)
+    for _, proj in ipairs(projectiles) do
+        love.graphics.circle("fill", proj.x, proj.y, 3)
+    end
+
     -- Draw all network entities
     local my_entity = loci.get_my_entity()
     local entities = loci.get_entities()
@@ -208,7 +298,10 @@ function love.draw()
     -- 2. HUD & UI Layer
     draw_hud(sw, sh, my_entity)
 
-    -- 3. Debug Overlay
+    -- 3. KDA UI
+    kda_ui.draw(entities, my_entity)
+
+    -- 4. Debug Overlay
     if show_debug_overlay then
         draw_debug(sw, sh)
     end
@@ -263,10 +356,22 @@ function draw_entity(ent, is_me)
     local px = ent.x * VISUAL_SCALE
     local py = ent.y * VISUAL_SCALE
 
+    -- Verificar se está morto
+    local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
+    local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
+
     if is_me then
-        love.graphics.setColor(0.2, 0.6, 1.0, 1)
+        if is_dead then
+            love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro quando morto
+        else
+            love.graphics.setColor(0.2, 0.6, 1.0, 1)
+        end
     else
-        love.graphics.setColor(0.9, 0.3, 0.3, 1)
+        if is_dead then
+            love.graphics.setColor(0.4, 0.2, 0.2, 1)  -- Vermelho escuro quando morto
+        else
+            love.graphics.setColor(0.9, 0.3, 0.3, 1)
+        end
     end
 
     love.graphics.circle("fill", px, py, radius)
@@ -274,8 +379,15 @@ function draw_entity(ent, is_me)
     love.graphics.setLineWidth(2)
     love.graphics.circle("line", px, py, radius)
 
+    -- Se morto, desenhar X sobre o jogador
+    if is_dead then
+        love.graphics.setColor(1, 0, 0, 0.8)
+        love.graphics.setLineWidth(3)
+        love.graphics.line(px - radius/2, py - radius/2, px + radius/2, py + radius/2)
+        love.graphics.line(px + radius/2, py - radius/2, px - radius/2, py + radius/2)
+    end
+
     -- HP Bar
-    local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
     local max_hp = tonumber(ent.max_hp or (ent.properties and ent.properties["max_hp"]) or 100) or 100
     local bar_w = 44
     local bar_h = 5
@@ -290,6 +402,9 @@ function draw_entity(ent, is_me)
     -- Player label
     love.graphics.setColor(1, 1, 1, 0.95)
     local label = is_me and "YOU" or ("P" .. tostring(ent.id))
+    if is_dead then
+        label = label .. " (DEAD)"
+    end
     local font = love.graphics.getFont()
     local tw = font:getWidth(label)
     love.graphics.print(label, px - tw / 2, py - 7)
