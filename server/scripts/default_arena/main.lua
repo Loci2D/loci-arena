@@ -6,6 +6,46 @@
 -- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
 local SPEED = 3.0
 
+-- =============================================================================
+-- Module Loader Polyfill (require)
+-- Suporte a múltiplos arquivos e importações modulares no ambiente sandbox do Lua.
+-- =============================================================================
+local _LOADED = {}
+local SEARCH_PATTERNS = {
+    "scripts/%s.lua",
+    "scripts/%s/init.lua",
+    "scripts/default_arena/%s.lua",
+    "%s.lua"
+}
+
+function require(modname)
+    if _LOADED[modname] then
+        return _LOADED[modname]
+    end
+
+    local clean_name = modname:gsub("%.", "/")
+    local chunk, err = nil, nil
+    local tried = {}
+
+    for _, pattern in ipairs(SEARCH_PATTERNS) do
+        local path = string.format(pattern, clean_name)
+        chunk, err = loadfile(path)
+        if chunk then
+            break
+        end
+        table.insert(tried, path)
+    end
+
+    if not chunk then
+        error(string.format("module '%s' not found:\n\tno file '%s'\n\tlast error: %s",
+            modname, table.concat(tried, "'\n\tno file '"), tostring(err)))
+    end
+
+    local result = chunk()
+    _LOADED[modname] = (result ~= nil) and result or true
+    return _LOADED[modname]
+end
+
 -- Importa o sistema de combate que centraliza a lógica do jogo
 local CombatSystem = require("core.combat_system")
 
