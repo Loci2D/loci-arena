@@ -39,7 +39,7 @@ end
 function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type, force_crit)
     
     -- 1. Obter HP atual
-    local target_hp = tonumber(Loci.Commands.get_property(target_id, "hp"))
+    local target_hp = tonumber(Loci.get_entity_property(target_id, "hp"))
     if not target_hp or target_hp <= 0 then 
         return { success = false, reason = "target_dead" } 
     end
@@ -47,9 +47,9 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
     -- 2. Identificar qual Defesa usar
     local def = 0
     if dmg_type == CombatSystem.DamageType.PHYSICAL then
-        def = tonumber(Loci.Commands.get_property(target_id, "phys_def")) or 0
+        def = tonumber(Loci.get_entity_property(target_id, "phys_def")) or 0
     elseif dmg_type == CombatSystem.DamageType.MAGICAL then
-        def = tonumber(Loci.Commands.get_property(target_id, "mag_def")) or 0
+        def = tonumber(Loci.get_entity_property(target_id, "mag_def")) or 0
     end
     -- Dano Verdadeiro (TRUE) fica com def = 0
 
@@ -66,7 +66,7 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
     end
 
     -- 5. Processar Modificadores e Debuffs (ex: Fragilidade)
-    local is_fragile = Loci.Commands.get_property(target_id, "fragile") == "1"
+    local is_fragile = Loci.get_entity_property(target_id, "fragile") == "1"
     if is_fragile then
         final_damage = final_damage * CombatSystem.CONST.FRAGILITY_MULT
     end
