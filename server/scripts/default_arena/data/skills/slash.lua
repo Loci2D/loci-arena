@@ -1,95 +1,53 @@
 -- Slash Skill Data
--- Habilidade de exemplo: ataque corpo-a-corpo em área frontal
--- Crie novas habilidades alterando apenas os valores nesta tabela
+-- Habilidade corpo-a-corpo em área frontal com dano físico
+local CombatSystem = require("core.combat_system")
 
--- Safe wrapper for Loci API
-local function Log_info(msg)
-    local Loci = _G.Loci
-    if Loci and Loci.Log and Loci.Log.info then
-        Loci.Log.info(msg)
+local function get_coords(pos)
+    if not pos then return 0, 0 end
+    if type(pos.x_float) == "function" then
+        return pos:x_float(), pos:y_float()
+    elseif pos.x and pos.y then
+        return pos.x, pos.y
     end
-end
-
-local function Log_warn(msg)
-    local Loci = _G.Loci
-    if Loci and Loci.Log and Loci.Log.warn then
-        Loci.Log.warn(msg)
-    end
-end
-
-local function Commands_get_property(id, key)
-    local Loci = _G.Loci
-    -- Tenta obter via Commands primeiro
-    if Loci and Loci.Commands and Loci.Commands.get_property then
-        local value = Loci.Commands.get_property(id, key)
-        if value ~= nil then
-            return value
-        end
-    end
-    -- Fallback para armazenamento local do GAS Engine
-    local GasEngine = _G.GasEngine
-    if GasEngine and GasEngine._get_attribute_local then
-        return GasEngine._get_attribute_local(id, key)
-    end
-    return nil
+    return 0, 0
 end
 
 return {
-    -- Identificador único da skill
     id = "slash",
-
-    -- Nome para exibição
     name = "Slash",
-
-    -- Descrição
-    description = "Ataque corporal em área frontal",
-
-    -- Custo de mana
+    description = "Ataque corporal com dano físico em área frontal",
     mana_cost = 10,
+    cooldown = 15, -- 0.5s a 30Hz
+    range = 80,
+    damage = 350,
+    damage_type = CombatSystem.DamageType.PHYSICAL,
+    aoe_radius = 45,
 
-    -- Cooldown em ticks (30 ticks = 1 segundo a 30Hz)
-    cooldown = 30,
+    on_execute = function(entity_id, aim_x, aim_y, skill_data)
+        local pos = Loci.get_entity_position(entity_id)
+        local caster_x, caster_y = get_coords(pos)
 
-    -- Alcance em unidades
-    range = 60,
+        -- Ponto de impacto na direção da mira
+        local target_x = caster_x + aim_x * (skill_data.range * 0.5)
+        local target_y = caster_y + aim_y * (skill_data.range * 0.5)
 
-    -- Dano base
-    damage = 25,
+        local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
+        local hit_ids = Loci.get_entities_in_radius({ x = target_x, y = target_y }, skill_data.aoe_radius)
 
-    -- Tipo de dano
-    damage_type = "physical",
-
-    -- Raio de área de efeito frontal
-    aoe_radius = 40,
-
-    -- Ângulo do cone frontal (em graus)
-    cone_angle = 90,
-
-    -- Função de execução da skill
-    -- Parâmetros: entity_id, target_x, target_y, skill_data, gas_engine
-    on_execute = function(entity_id, target_x, target_y, skill_data, gas)
-        Log_info("[Slash] Entity " .. tostring(entity_id) .. " performing slash at (" .. target_x .. ", " .. target_y .. ")")
-
-        -- Obter posição da entidade
-        local pos_x = Commands_get_property(entity_id, "x") or 0
-        local pos_y = Commands_get_property(entity_id, "y") or 0
-        
-        -- Calcular distância até o alvo
-        local dx = target_x - pos_x
-        local dy = target_y - pos_y
-        local distance = math.sqrt(dx * dx + dy * dy)
-        
-        -- Verificar alcance
-        if distance > skill_data.range then
-            Log_warn("[Slash] Target out of range: " .. distance .. " > " .. skill_data.range)
-            return false, "Target out of range"
+        local hit_count = 0
+        if hit_ids then
+            for _, target_id in ipairs(hit_ids) do
+                if target_id ~= entity_id then
+                    local target_team = Loci.get_entity_property(target_id, "team") or "2"
+                    if target_team ~= caster_team then
+                        CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type)
+                        hit_count = hit_count + 1
+                    end
+                end
+            end
         end
 
-        -- TODO: Implementar detecção de entidades no cone frontal
-        -- Em produção, usaríamos Loci.Commands.get_entities_in_cone(pos_x, pos_y, aim_angle, skill_data.cone_angle, skill_data.range)
-
-        Log_info("[Slash] Skill executed successfully (damage: " .. skill_data.damage .. ", range: " .. skill_data.range .. ")")
-
+        Loci.Log.info(string.format("[Slash] Executado por %s (acertou %d alvos)", tostring(entity_id), hit_count))
         return true
     end
 }

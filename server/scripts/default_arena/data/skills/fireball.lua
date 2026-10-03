@@ -1,95 +1,53 @@
 -- Fireball Skill Data
--- Habilidade de exemplo: bola de fogo que causa dano em área
--- Crie novas habilidades alterando apenas os valores nesta tabela
+-- Projétil explosivo de dano mágico em área
+local CombatSystem = require("core.combat_system")
 
--- Safe wrapper for Loci API
-local function Log_info(msg)
-    local Loci = _G.Loci
-    if Loci and Loci.Log and Loci.Log.info then
-        Loci.Log.info(msg)
+local function get_coords(pos)
+    if not pos then return 0, 0 end
+    if type(pos.x_float) == "function" then
+        return pos:x_float(), pos:y_float()
+    elseif pos.x and pos.y then
+        return pos.x, pos.y
     end
-end
-
-local function Log_warn(msg)
-    local Loci = _G.Loci
-    if Loci and Loci.Log and Loci.Log.warn then
-        Loci.Log.warn(msg)
-    end
-end
-
-local function Commands_get_property(id, key)
-    local Loci = _G.Loci
-    -- Tenta obter via Commands primeiro
-    if Loci and Loci.Commands and Loci.Commands.get_property then
-        local value = Loci.Commands.get_property(id, key)
-        if value ~= nil then
-            return value
-        end
-    end
-    -- Fallback para armazenamento local do GAS Engine
-    local GasEngine = _G.GasEngine
-    if GasEngine and GasEngine._get_attribute_local then
-        return GasEngine._get_attribute_local(id, key)
-    end
-    return nil
+    return 0, 0
 end
 
 return {
-    -- Identificador único da skill
     id = "fireball",
-
-    -- Nome para exibição
     name = "Fireball",
-
-    -- Descrição
-    description = "Lança uma bola de fogo que causa dano em área",
-
-    -- Custo de mana
-    mana_cost = 30,
-
-    -- Cooldown em ticks (30 ticks = 1 segundo a 30Hz)
-    cooldown = 60,
-
-    -- Alcance em unidades
+    description = "Bola de fogo explosiva com dano mágico em área",
+    mana_cost = 35,
+    cooldown = 45, -- 1.5s a 30Hz
     range = 300,
+    damage = 500,
+    damage_type = CombatSystem.DamageType.MAGICAL,
+    aoe_radius = 60,
 
-    -- Dano base
-    damage = 40,
+    on_execute = function(entity_id, aim_x, aim_y, skill_data)
+        local pos = Loci.get_entity_position(entity_id)
+        local caster_x, caster_y = get_coords(pos)
 
-    -- Tipo de dano
-    damage_type = "fire",
+        -- Ponto de impacto na direção da mira
+        local target_x = caster_x + aim_x * (skill_data.range * 0.7)
+        local target_y = caster_y + aim_y * (skill_data.range * 0.7)
 
-    -- Raio de área de efeito
-    aoe_radius = 50,
+        local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
+        local hit_ids = Loci.get_entities_in_radius({ x = target_x, y = target_y }, skill_data.aoe_radius)
 
-    -- Função de execução da skill
-    -- Parâmetros: entity_id, target_x, target_y, skill_data, gas_engine
-    on_execute = function(entity_id, target_x, target_y, skill_data, gas)
-        Log_info("[Fireball] Entity " .. tostring(entity_id) .. " casting fireball at (" .. target_x .. ", " .. target_y .. ")")
-
-        -- Obter posição da entidade
-        local pos_x = Commands_get_property(entity_id, "x") or 0
-        local pos_y = Commands_get_property(entity_id, "y") or 0
-        -- Calcular distância até o alvo
-        local dx = target_x - pos_x
-        local dy = target_y - pos_y
-        local distance = math.sqrt(dx * dx + dy * dy)
-        
-        -- Verificar alcance
-        if distance > skill_data.range then
-            Log_warn("[Fireball] Target out of range: " .. distance .. " > " .. skill_data.range)
-            return false, "Target out of range"
+        local hit_count = 0
+        if hit_ids then
+            for _, target_id in ipairs(hit_ids) do
+                if target_id ~= entity_id then
+                    local target_team = Loci.get_entity_property(target_id, "team") or "2"
+                    if target_team ~= caster_team then
+                        CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type)
+                        hit_count = hit_count + 1
+                    end
+                end
+            end
         end
 
-        -- TODO: Implementar spawn de projétil ou dano instantâneo em área
-        -- Por enquanto, vamos simular dano instantâneo no alvo
-        -- Em produção, isso deveria criar um projétil via Loci.Commands.spawn_projectile()
-
-        -- Simulação: aplicar dano a entidades na área (exemplo simplificado)
-        -- Em produção, usaríamos Loci.Commands.get_entities_in_radius(target_x, target_y, skill_data.aoe_radius)
-
-        Log_info("[Fireball] Skill executed successfully (damage: " .. skill_data.damage .. ", aoe_radius: " .. skill_data.aoe_radius .. ")")
-
+        Loci.Log.info(string.format("[Fireball] Executado por %s (acertou %d alvos na explosão)", tostring(entity_id), hit_count))
         return true
     end
 }
