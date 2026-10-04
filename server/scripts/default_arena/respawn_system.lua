@@ -5,38 +5,35 @@ local respawn_system = {}
 
 -- Configurações
 local RESPAWN_INTERVAL_TICKS = 300  -- 10 segundos a 30 Hz
-local RESPAWN_HP = 100
-local RESPAWN_POSITION_X = 0
-local RESPAWN_POSITION_Y = 0
 
 -- Estado interno
-local current_tick = 0
-local dead_players = {}  -- Lista de jogadores mortos
+local current_tick_internal = 0
+local dead_players = {}  -- Lista de jogadores mortos, armazena o tick em que morreram
 
 -- Adicionar jogador à lista de mortos
 function respawn_system.mark_dead(entity_id)
-    dead_players[entity_id] = true
+    dead_players[entity_id] = current_tick_internal
+    Loci.Commands.set_property(entity_id, "is_dead", "true")
 end
 
 -- Remover jogador da lista de mortos (quando reviver)
 function respawn_system.mark_alive(entity_id)
     dead_players[entity_id] = nil
+    Loci.Commands.set_property(entity_id, "is_dead", "false")
 end
 
 -- Verificar se um jogador está morto
 function respawn_system.is_dead(entity_id)
-    return dead_players[entity_id] or false
+    return dead_players[entity_id] ~= nil
 end
 
 -- Reviver um jogador específico
-function respawn_system.revive_player(entity_id, player_hp_ref, player_is_dead_ref)
+function respawn_system.revive_player(entity_id)
     if dead_players[entity_id] then
+        local max_hp = tonumber(Loci.get_entity_property(entity_id, "max_hp") or 100) or 100
+        
         -- Restaurar HP
-        player_hp_ref[entity_id] = RESPAWN_HP
-        player_is_dead_ref[entity_id] = false
-
-        -- Sincronizar com cliente
-        Loci.Commands.set_property(entity_id, "hp", tostring(RESPAWN_HP))
+        Loci.Commands.set_property(entity_id, "hp", tostring(max_hp))
         Loci.Commands.set_property(entity_id, "is_dead", "false")
 
         -- Remover da lista de mortos
@@ -49,23 +46,19 @@ function respawn_system.revive_player(entity_id, player_hp_ref, player_is_dead_r
 end
 
 -- Verificar e processar respawn (chamado a cada tick)
-function respawn_system.process_tick(player_hp_ref, player_is_dead_ref)
-    current_tick = current_tick + 1
-
-    -- A cada 10 segundos, reviver todos os jogadores mortos
-    if current_tick >= RESPAWN_INTERVAL_TICKS then
-        current_tick = 0
-
-        -- Reviver todos os jogadores mortos
-        local revived_count = 0
-        for entity_id, _ in pairs(dead_players) do
-            respawn_system.revive_player(entity_id, player_hp_ref, player_is_dead_ref)
+function respawn_system.process_tick(current_tick)
+    current_tick_internal = current_tick
+    local revived_count = 0
+    for entity_id, death_tick in pairs(dead_players) do
+        -- A cada 10 segundos (300 ticks), reviver o jogador
+        if current_tick - death_tick >= RESPAWN_INTERVAL_TICKS then
+            respawn_system.revive_player(entity_id)
             revived_count = revived_count + 1
         end
+    end
 
-        if revived_count > 0 then
-            Loci.Log.info("[Respawn] Revived " .. revived_count .. " players")
-        end
+    if revived_count > 0 then
+        Loci.Log.info("[Respawn] Revived " .. revived_count .. " players")
     end
 end
 
