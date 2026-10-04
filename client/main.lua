@@ -25,6 +25,7 @@ local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
 local show_debug_overlay = false
+local show_character_sheet = false
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
@@ -144,6 +145,8 @@ end
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
+    elseif key == "c" then
+        show_character_sheet = not show_character_sheet
     elseif key == "space" then
         -- Primary action intent directed toward mouse cursor
         local mx, my = push:toGame(love.mouse.getPosition())
@@ -211,6 +214,11 @@ function love.draw()
     -- 3. Debug Overlay
     if show_debug_overlay then
         draw_debug(sw, sh)
+    end
+
+    -- 4. Character Sheet Overlay (C)
+    if show_character_sheet then
+        draw_character_sheet(sw, sh, my_entity)
     end
 
     push:finish()
@@ -305,7 +313,7 @@ function draw_hud(sw, sh, my_entity)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Move  |  Space: Action  |  F3: Debug", 20, sh - 28)
+    love.graphics.print("WASD: Move  |  Space: Action  |  C: Atributos  |  F3: Debug", 20, sh - 28)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
@@ -328,6 +336,122 @@ function draw_debug(sw, sh)
     love.graphics.print(string.format("Tick Rate: %d Hz", tick_rate), sw - 225, 80)
     if me then
         love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 100)
+    end
+end
+
+function draw_character_sheet(sw, sh, my_entity)
+    if not my_entity then return end
+
+    local x = 10
+    local y = 75
+    local w = 330
+    local h = 335
+
+    -- Background panel
+    love.graphics.setColor(0.07, 0.09, 0.14, 0.92)
+    love.graphics.rectangle("fill", x, y, w, h, 8, 8)
+
+    -- Border
+    love.graphics.setColor(0.28, 0.45, 0.72, 0.8)
+    love.graphics.setLineWidth(1.5)
+    love.graphics.rectangle("line", x, y, w, h, 8, 8)
+
+    -- Header bar
+    love.graphics.setColor(0.14, 0.19, 0.28, 0.95)
+    love.graphics.rectangle("fill", x + 1, y + 1, w - 2, 32, 7, 7)
+
+    love.graphics.setColor(1.0, 0.85, 0.35, 1.0)
+    local name = tostring(my_entity:get("character_name", my_entity.name or "Herói"))
+    local role = string.upper(tostring(my_entity:get("role", "FIGHTER")))
+    love.graphics.print(string.format("%s [%s]", name, role), x + 14, y + 9)
+
+    love.graphics.setColor(0.65, 0.75, 0.9, 0.8)
+    love.graphics.print("[C] Fechar", x + w - 75, y + 9)
+
+    -- Atributos da entidade
+    local hp = tonumber(my_entity:get("hp", 100)) or 100
+    local max_hp = tonumber(my_entity:get("max_hp", 100)) or 100
+    local mana = tonumber(my_entity:get("mana", 100)) or 100
+    local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
+    local phys_def = tonumber(my_entity:get("phys_def", 0)) or 0
+    local mag_def = tonumber(my_entity:get("mag_def", 0)) or 0
+    local move_speed = tonumber(my_entity:get("move_speed", 3.0)) or 3.0
+    local hp_regen = tonumber(my_entity:get("hp_regen", 0)) or 0
+    local mana_regen = tonumber(my_entity:get("mana_regen", 0)) or 0
+    local fragile = tostring(my_entity:get("fragile", "0")) == "1"
+    local skills_list = tostring(my_entity:get("skills_list", "-"))
+
+    local cur_y = y + 44
+
+    -- Barra de Vida (HP)
+    love.graphics.setColor(0.85, 0.9, 0.95, 1)
+    love.graphics.print(string.format("Vida: %d / %d", hp, max_hp), x + 14, cur_y)
+    cur_y = cur_y + 16
+    local hp_pct = math.max(0, math.min(1, max_hp > 0 and (hp / max_hp) or 0))
+    love.graphics.setColor(0.12, 0.14, 0.18, 1)
+    love.graphics.rectangle("fill", x + 14, cur_y, w - 28, 10, 3, 3)
+    love.graphics.setColor(0.2, 0.85, 0.35, 1)
+    love.graphics.rectangle("fill", x + 14, cur_y, (w - 28) * hp_pct, 10, 3, 3)
+    cur_y = cur_y + 18
+
+    -- Barra de Mana
+    love.graphics.setColor(0.85, 0.9, 0.95, 1)
+    love.graphics.print(string.format("Mana: %d / %d", mana, max_mana), x + 14, cur_y)
+    cur_y = cur_y + 16
+    local mana_pct = math.max(0, math.min(1, max_mana > 0 and (mana / max_mana) or 0))
+    love.graphics.setColor(0.12, 0.14, 0.18, 1)
+    love.graphics.rectangle("fill", x + 14, cur_y, w - 28, 10, 3, 3)
+    love.graphics.setColor(0.25, 0.60, 0.95, 1)
+    love.graphics.rectangle("fill", x + 14, cur_y, (w - 28) * mana_pct, 10, 3, 3)
+    cur_y = cur_y + 20
+
+    -- Linha separadora
+    love.graphics.setColor(0.25, 0.32, 0.45, 0.6)
+    love.graphics.line(x + 14, cur_y, x + w - 14, cur_y)
+    cur_y = cur_y + 10
+
+    -- Mitigações e Defesas
+    local phys_mit = (phys_def / (phys_def + 100)) * 100
+    local mag_mit = (mag_def / (mag_def + 100)) * 100
+
+    love.graphics.setColor(0.9, 0.7, 0.4, 1)
+    love.graphics.print("Defesa Física:", x + 14, cur_y)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print(string.format("%d (%.1f%% mitig.)", phys_def, phys_mit), x + 135, cur_y)
+    cur_y = cur_y + 20
+
+    love.graphics.setColor(0.6, 0.8, 1.0, 1)
+    love.graphics.print("Defesa Mágica:", x + 14, cur_y)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print(string.format("%d (%.1f%% mitig.)", mag_def, mag_mit), x + 135, cur_y)
+    cur_y = cur_y + 20
+
+    love.graphics.setColor(0.7, 0.9, 0.7, 1)
+    love.graphics.print("Velocidade:", x + 14, cur_y)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print(string.format("%.1f px/tick", move_speed), x + 135, cur_y)
+    cur_y = cur_y + 20
+
+    love.graphics.setColor(0.8, 0.85, 0.95, 1)
+    love.graphics.print("Regeneração:", x + 14, cur_y)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print(string.format("+%d HP/s | +%d MP/s", hp_regen, mana_regen), x + 135, cur_y)
+    cur_y = cur_y + 20
+
+    -- Habilidades equipadas
+    love.graphics.setColor(1.0, 0.85, 0.35, 1)
+    love.graphics.print("Habilidade [Espaço]:", x + 14, cur_y)
+    love.graphics.setColor(0.9, 0.9, 0.9, 1)
+    love.graphics.print(skills_list, x + 160, cur_y)
+    cur_y = cur_y + 22
+
+    -- Status de combate
+    if fragile then
+        love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
+        love.graphics.print("STATUS: FRÁGIL (+30% dano)", x + 14, cur_y)
+    else
+        love.graphics.setColor(0.4, 0.85, 0.5, 0.9)
+        love.graphics.print("STATUS: NORMAL", x + 14, cur_y)
     end
 end
 
