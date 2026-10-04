@@ -80,8 +80,19 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
 
     -- 7. Checar Morte
     if target_hp == 0 then
-        -- Loci.Commands.trigger_event("entity_death", target_id)
-        Loci.Log.info("[Combat] " .. tostring(target_id) .. " foi eliminado!")
+        local RespawnSystem = require("default_arena.respawn_system")
+        RespawnSystem.mark_dead(target_id)
+        
+        -- Atualizar KDA
+        local current_deaths = tonumber(Loci.get_entity_property(target_id, "deaths")) or 0
+        Loci.Commands.set_property(target_id, "deaths", tostring(current_deaths + 1))
+        
+        if attacker_id and attacker_id ~= target_id then
+            local current_kills = tonumber(Loci.get_entity_property(attacker_id, "kills")) or 0
+            Loci.Commands.set_property(attacker_id, "kills", tostring(current_kills + 1))
+        end
+
+        Loci.Log.info("[Combat] " .. tostring(target_id) .. " foi eliminado por " .. tostring(attacker_id))
     end
 
     return {

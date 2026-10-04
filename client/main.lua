@@ -13,6 +13,7 @@ if not ok then
 end
 
 local push = require("src.push")
+local kda_ui = require("kda_ui")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Connection config
@@ -147,7 +148,17 @@ function love.keypressed(key)
         show_debug_overlay = not show_debug_overlay
     elseif key == "c" then
         show_character_sheet = not show_character_sheet
+    elseif key == "tab" then
+        kda_ui.show()
     elseif key == "space" then
+        -- Verificar se o jogador está morto
+        local me = loci.get_my_entity()
+        local is_dead = me and (me.is_dead or (me.properties and me.properties["is_dead"] == "true"))
+        if is_dead then
+            print("[Client] Cannot shoot - you are dead!")
+            return
+        end
+
         -- Primary action intent directed toward mouse cursor
         local mx, my = push:toGame(love.mouse.getPosition())
         if not mx then return end
@@ -169,6 +180,12 @@ function love.keypressed(key)
         end
 
         loci.send_action(1, dir_x, dir_y)
+    end
+end
+
+function love.keyreleased(key)
+    if key == "tab" then
+        kda_ui.hide()
     end
 end
 
@@ -211,7 +228,10 @@ function love.draw()
     -- 2. HUD & UI Layer
     draw_hud(sw, sh, my_entity)
 
-    -- 3. Debug Overlay
+    -- 3. KDA UI
+    kda_ui.draw(entities, my_entity)
+
+    -- 4. Debug Overlay
     if show_debug_overlay then
         draw_debug(sw, sh)
     end
@@ -271,16 +291,35 @@ function draw_entity(ent, is_me)
     local px = ent.x * VISUAL_SCALE
     local py = ent.y * VISUAL_SCALE
 
+    -- Verificar se está morto
+    local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
+
     if is_me then
-        love.graphics.setColor(0.2, 0.6, 1.0, 1)
+        if is_dead then
+            love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro
+        else
+            love.graphics.setColor(0.2, 0.6, 1.0, 1)
+        end
     else
-        love.graphics.setColor(0.9, 0.3, 0.3, 1)
+        if is_dead then
+            love.graphics.setColor(0.4, 0.2, 0.2, 1)  -- Vermelho escuro
+        else
+            love.graphics.setColor(0.9, 0.3, 0.3, 1)
+        end
     end
 
     love.graphics.circle("fill", px, py, radius)
     love.graphics.setColor(1, 1, 1, 0.85)
     love.graphics.setLineWidth(2)
     love.graphics.circle("line", px, py, radius)
+
+    -- Se morto, desenhar X sobre o jogador
+    if is_dead then
+        love.graphics.setColor(1, 0, 0, 0.8)
+        love.graphics.setLineWidth(3)
+        love.graphics.line(px - radius/2, py - radius/2, px + radius/2, py + radius/2)
+        love.graphics.line(px + radius/2, py - radius/2, px - radius/2, py + radius/2)
+    end
 
     -- HP Bar
     local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
@@ -298,6 +337,9 @@ function draw_entity(ent, is_me)
     -- Player label
     love.graphics.setColor(1, 1, 1, 0.95)
     local label = is_me and "YOU" or ("P" .. tostring(ent.id))
+    if is_dead then
+        label = label .. " (DEAD)"
+    end
     local font = love.graphics.getFont()
     local tw = font:getWidth(label)
     love.graphics.print(label, px - tw / 2, py - 7)

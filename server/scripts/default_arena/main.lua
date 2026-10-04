@@ -49,23 +49,33 @@ end
 -- Importa os sistemas modulares da arena
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("default_arena.systems.character_factory")
+local RespawnSystem = require("default_arena.respawn_system")
 
 function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
+    RespawnSystem.process_tick(current_tick)
 end
 
 function on_player_join(entity_id)
     Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
     
     -- Inicializa propriedades básicas de match
-    Loci.Commands.set_property(entity_id, "team", "1")
+    -- Atribui cada jogador a um time único (Free For All) para que habilidades causem dano
+    Loci.Commands.set_property(entity_id, "team", tostring(entity_id))
     Loci.Commands.set_property(entity_id, "score", "0")
+    Loci.Commands.set_property(entity_id, "kills", "0")
+    Loci.Commands.set_property(entity_id, "deaths", "0")
+    Loci.Commands.set_property(entity_id, "is_dead", "false")
 
     -- Instancia o personagem (por padrão warrior, pode ser alternado ou selecionado pelo cliente)
     CharacterFactory.create_character(entity_id, "warrior")
 end
 
 function on_move_intent(entity_id, dir_x, dir_y)
+    if RespawnSystem.is_dead(entity_id) then
+        return false, "Você está morto"
+    end
+
     -- Normalize movement vector so diagonal movement doesn't provide a speed boost
     local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
     if len > 0 then
@@ -86,6 +96,10 @@ end
 function on_action(entity_id, ability_id, aim_x, aim_y)
     Loci.Log.info("[Arena] Action from entity " .. tostring(entity_id) .. " -> Ability: " .. tostring(ability_id))
     
+    if RespawnSystem.is_dead(entity_id) then
+        return false, "Você está morto"
+    end
+
     -- Busca a habilidade equipada no slot correspondente ao ability_id
     local skill_name = CharacterFactory.get_skill_by_slot(entity_id, ability_id)
     if not skill_name then
@@ -104,5 +118,6 @@ end
 function on_player_leave(entity_id)
     Loci.Log.info("[Arena] Player left: " .. tostring(entity_id))
     CharacterFactory.on_entity_remove(entity_id)
+    RespawnSystem.cleanup(entity_id)
     Loci.Commands.destroy_entity(entity_id)
 end

@@ -11,10 +11,42 @@ local skill_cache = {}
 -- Rastreamento de cooldowns por entidade: { [entity_id] = { [skill_name] = tick_when_ready } }
 local entity_cooldowns = {}
 local current_tick = 0
+local active_entities = {} -- Array com os IDs das entidades ativas para processar regeneração
 
 -- Atualizado a cada tick do servidor
 function CharacterFactory.update_tick(tick)
     current_tick = tick or (current_tick + 1)
+
+    -- Aplicar regeneração a cada 30 ticks (1 segundo)
+    if current_tick % 30 == 0 then
+        -- Usar ipairs/array e iterar de trás para frente para evitar problemas (sandbox restringe pairs)
+        for i = #active_entities, 1, -1 do
+            local entity_id = active_entities[i]
+            
+            local is_dead = Loci.get_entity_property(entity_id, "is_dead") == "true"
+            if not is_dead then
+                -- HP Regen
+                local hp = tonumber(Loci.get_entity_property(entity_id, "hp")) or 0
+                local max_hp = tonumber(Loci.get_entity_property(entity_id, "max_hp")) or 100
+                local hp_regen = tonumber(Loci.get_entity_property(entity_id, "hp_regen")) or 0
+                
+                if hp > 0 and hp < max_hp and hp_regen > 0 then
+                    hp = math.min(max_hp, hp + hp_regen)
+                    Loci.Commands.set_property(entity_id, "hp", tostring(hp))
+                end
+                
+                -- Mana Regen
+                local mana = tonumber(Loci.get_entity_property(entity_id, "mana")) or 0
+                local max_mana = tonumber(Loci.get_entity_property(entity_id, "max_mana")) or 100
+                local mana_regen = tonumber(Loci.get_entity_property(entity_id, "mana_regen")) or 0
+                
+                if mana < max_mana and mana_regen > 0 then
+                    mana = math.min(max_mana, mana + mana_regen)
+                    Loci.Commands.set_property(entity_id, "mana", tostring(mana))
+                end
+            end
+        end
+    end
 end
 
 function CharacterFactory.get_current_tick()
@@ -116,12 +148,26 @@ function CharacterFactory.create_character(entity_id, character_name)
             tostring(entity_id), char_data.name or character_name, max_hp, mana))
     end
 
+    -- Registrar como entidade ativa para regeneração
+    local found = false
+    for _, id in ipairs(active_entities) do
+        if id == entity_id then found = true; break end
+    end
+    if not found then table.insert(active_entities, entity_id) end
+
     return true
 end
 
 -- Limpa estado da entidade ao sair
 function CharacterFactory.on_entity_remove(entity_id)
     entity_cooldowns[entity_id] = nil
+    
+    for i = #active_entities, 1, -1 do
+        if active_entities[i] == entity_id then
+            table.remove(active_entities, i)
+            break
+        end
+    end
 end
 
 -- Valida se a entidade possui a habilidade
