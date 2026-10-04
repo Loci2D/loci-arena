@@ -60,7 +60,8 @@ function on_player_join(entity_id)
     Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
     
     -- Inicializa propriedades básicas de match
-    Loci.Commands.set_property(entity_id, "team", "1")
+    -- Atribui cada jogador a um time único (Free For All) para que habilidades causem dano
+    Loci.Commands.set_property(entity_id, "team", tostring(entity_id))
     Loci.Commands.set_property(entity_id, "score", "0")
     Loci.Commands.set_property(entity_id, "kills", "0")
     Loci.Commands.set_property(entity_id, "deaths", "0")
