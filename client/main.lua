@@ -14,7 +14,11 @@ end
 
 local push = require("src.push")
 local kda_ui = require("kda_ui")
+local virtual_joystick = require("virtual_joystick")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
+
+-- Configurar push no sistema de joystick para conversão de coordenadas
+virtual_joystick.set_push(push)
 
 -- Connection config
 local SERVER_IP = os.getenv("LOCI_SERVER_IP") or "127.0.0.1"
@@ -101,10 +105,16 @@ local last_sent_dx, last_sent_dy = 0, 0
 
 local function update_movement()
     local dx, dy = 0, 0
-    if love.keyboard.isDown("w") or love.keyboard.isDown("up") then dy = dy - 1 end
-    if love.keyboard.isDown("s") or love.keyboard.isDown("down") then dy = dy + 1 end
-    if love.keyboard.isDown("a") or love.keyboard.isDown("left") then dx = dx - 1 end
-    if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
+    
+    -- Prioridade: joystick virtual > teclado
+    if virtual_joystick.is_move_active() then
+        dx, dy = virtual_joystick.get_move_vector()
+    else
+        if love.keyboard.isDown("w") or love.keyboard.isDown("up") then dy = dy - 1 end
+        if love.keyboard.isDown("s") or love.keyboard.isDown("down") then dy = dy + 1 end
+        if love.keyboard.isDown("a") or love.keyboard.isDown("left") then dx = dx - 1 end
+        if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
+    end
 
     if dx ~= last_sent_dx or dy ~= last_sent_dy then
         last_sent_dx = dx
@@ -117,9 +127,32 @@ function love.update(dt)
     -- Process incoming network packets and smooth entity interpolation
     loci.update(dt)
     
+    -- Atualizar joysticks virtuais com dimensões do jogo
+    virtual_joystick.update_with_game_dimensions(GAME_WIDTH, GAME_HEIGHT)
+    
     local my_entity = loci.get_my_entity()
     if my_entity then
         update_movement()
+        
+        -- Processar ação do botão virtual
+        if virtual_joystick.is_action_active() then
+            -- Verificar se o jogador está morto
+            local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
+            
+            if not is_dead and virtual_joystick.can_trigger_action(love.timer.getTime()) then
+                virtual_joystick.trigger_action(love.timer.getTime())
+                
+                -- Usar a direção do joystick de movimento, ou direção padrão se não estiver movendo
+                local action_dx, action_dy = virtual_joystick.get_move_vector()
+                if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
+                    -- Se não estiver movendo, usar direção para frente (para cima)
+                    action_dx, action_dy = 0, -1
+                end
+                
+                loci.send_action(1, action_dx, action_dy)
+            end
+        end
+        
         -- Direct camera binding eliminates lag jitter between camera and player
         cam_x = my_entity.x * VISUAL_SCALE
         cam_y = my_entity.y * VISUAL_SCALE
@@ -189,6 +222,42 @@ function love.keyreleased(key)
     end
 end
 
+-- Touch handlers para joysticks virtuais
+function love.touchpressed(id, x, y, dx, dy, pressure)
+    local screen_w, screen_h = love.graphics.getDimensions()
+    return virtual_joystick.handle_touchpress(id, x, y, screen_w, screen_h)
+end
+
+function love.touchmoved(id, x, y, dx, dy, pressure)
+    return virtual_joystick.handle_touchmove(id, x, y)
+end
+
+function love.touchreleased(id, x, y, dx, dy, pressure)
+    return virtual_joystick.handle_touchrelease(id)
+end
+
+-- Temporário, uso para testar o touch com o mouse
+function love.mousepressed(x, y, button, istouch, presses)
+    local screen_w, screen_h = love.graphics.getDimensions()
+    if virtual_joystick.handle_mousepressed(x, y, button, screen_w, screen_h) then
+        return true
+    end
+end
+
+-- Temporário, uso para testar o touch com o mouse
+function love.mousemoved(x, y, dx, dy, istouch)
+    if virtual_joystick.handle_mousemoved(x, y) then
+        return true
+    end
+end
+
+-- Temporário, uso para testar o touch com o mouse
+function love.mousereleased(x, y, button, istouch, presses)
+    if virtual_joystick.handle_mousereleased(x, y, button) then
+        return true
+    end
+end
+
 function love.draw()
     push:start()
 
@@ -240,6 +309,9 @@ function love.draw()
     if show_character_sheet then
         draw_character_sheet(sw, sh, my_entity)
     end
+
+    -- 5. Virtual Joysticks (sempre visíveis quando ativos)
+    virtual_joystick.draw()
 
     push:finish()
 end
