@@ -34,8 +34,7 @@ function kda_ui.draw(entities, my_entity)
         return
     end
 
-    -- Usa a resolução virtual do jogo (1280x720) garantida pelo push:start()
-    local sw, sh = 1280, 720
+    local sw, sh = love.graphics.getDimensions()
     local x = (sw - UI_WIDTH) / 2
     local y = (sh - UI_HEIGHT) / 2
 

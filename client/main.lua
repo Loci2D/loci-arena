@@ -26,10 +26,16 @@ local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
 local show_debug_overlay = false
-local show_character_sheet = false
+
+-- Sistema de projéteis do cliente
+local projectiles = {}
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
+
+-- Sistema de Respawn (cliente-side usando dt confiável do Love2D)
+local RESPAWN_TIME = 10  -- Tempo em segundos para respawn
+local death_time = 0  -- Timestamp quando o jogador morreu
 
 local VISUAL_SCALE = 8 -- Pixels per Meter (escala para desenho)
 
@@ -80,15 +86,7 @@ function love.load(arg)
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
-        table.insert(visual_fx, {
-            x = entity and entity.x or 0,
-            y = entity and entity.y or 0,
-            dir_x = dir_x,
-            dir_y = dir_y,
-            ability_id = ability_id,
-            lifetime = 0.35,
-            max_lifetime = 0.35
-        })
+        -- Efeito visual removido (não mostramos mais o raio amarelo)
     end
 
     loci.on_intent_rejected = function(reason)
@@ -100,6 +98,14 @@ end
 local last_sent_dx, last_sent_dy = 0, 0
 
 local function update_movement()
+    local my_entity = loci.get_my_entity()
+    local is_dead = my_entity and (my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true"))
+
+    -- Se estiver morto, não enviar movimentos para o servidor
+    if is_dead then
+        return
+    end
+
     local dx, dy = 0, 0
     if love.keyboard.isDown("w") or love.keyboard.isDown("up") then dy = dy - 1 end
     if love.keyboard.isDown("s") or love.keyboard.isDown("down") then dy = dy + 1 end
@@ -113,16 +119,105 @@ local function update_movement()
     end
 end
 
+-- Sistema de projéteis
+local PROJECTILE_SPEED = 400.0      -- Velocidade em pixels/segundo
+local PROJECTILE_RADIUS = 8.0 * VISUAL_SCALE  -- Raio de colisão (aumentado de 2 para 8)
+local PROJECTILE_RANGE = 200.0 * VISUAL_SCALE  -- Alcance máximo
+
+local function spawn_projectile(x, y, dir_x, dir_y, owner_id)
+    table.insert(projectiles, {
+        x = x,
+        y = y,
+        dir_x = dir_x,
+        dir_y = dir_y,
+        owner_id = owner_id,
+        lifetime = 0,
+        max_lifetime = PROJECTILE_RANGE / PROJECTILE_SPEED,
+        active = true
+    })
+end
+
+local function update_projectiles(dt)
+    local entities = loci.get_entities()
+
+    for i = #projectiles, 1, -1 do
+        local proj = projectiles[i]
+        if not proj.active then
+            table.remove(projectiles, i)
+            goto continue
+        end
+
+        -- Mover projétil
+        proj.x = proj.x + proj.dir_x * PROJECTILE_SPEED * dt
+        proj.y = proj.y + proj.dir_y * PROJECTILE_SPEED * dt
+        proj.lifetime = proj.lifetime + dt
+
+        -- Verificar se expirou
+        if proj.lifetime >= proj.max_lifetime then
+            table.remove(projectiles, i)
+            goto continue
+        end
+
+        -- Verificar colisão com entidades
+        for _, ent in ipairs(entities) do
+            if ent.id ~= proj.owner_id then
+                local ent_x = ent.x * VISUAL_SCALE
+                local ent_y = ent.y * VISUAL_SCALE
+
+                -- Calcular distância
+                local dist = math.sqrt((proj.x - ent_x)^2 + (proj.y - ent_y)^2)
+
+                -- Verificar colisão (raio do projétil + raio do jogador aproximado)
+                local collision_threshold = PROJECTILE_RADIUS + 2.0 * VISUAL_SCALE
+
+                if dist < collision_threshold then
+                    -- Colisão detectada! Enviar para servidor
+                    -- Codificar target_id no ability_id (send_action normaliza aim_x/aim_y)
+                    loci.send_action(10000 + ent.id, proj.dir_x, proj.dir_y)
+                    print("[Client] Projectile hit entity " .. ent.id .. " at distance " .. dist)
+
+                    -- Remover projétil
+                    table.remove(projectiles, i)
+                    goto continue
+                end
+            end
+        end
+
+        ::continue::
+    end
+end
+
 function love.update(dt)
     -- Process incoming network packets and smooth entity interpolation
     loci.update(dt)
-    
+
     local my_entity = loci.get_my_entity()
+    local is_dead = my_entity and (my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true"))
+
     if my_entity then
-        update_movement()
-        -- Direct camera binding eliminates lag jitter between camera and player
-        cam_x = my_entity.x * VISUAL_SCALE
-        cam_y = my_entity.y * VISUAL_SCALE
+        -- Se acabou de morrer, registrar o tempo
+        if is_dead and death_time == 0 then
+            death_time = love.timer.getTime()
+        end
+
+        -- Se estiver morto, verificar respawn
+        if is_dead then
+            -- Verificar se passou o tempo de respawn
+            local time_since_death = love.timer.getTime() - death_time
+            if time_since_death >= RESPAWN_TIME then
+                -- Solicitar respawn ao servidor
+                loci.send_action(1, 0, 0)  -- Enviar ação de respawn (ability_id 1)
+                print("[Client] Requesting respawn after " .. time_since_death .. " seconds")
+            end
+        else
+            -- Resetar death_time se reviveu
+            death_time = 0
+            -- Se estiver vivo, enviar movimentos e trancar câmera no jogador
+            update_movement()
+            -- Direct camera binding eliminates lag jitter between camera and player
+            cam_x = my_entity.x * VISUAL_SCALE
+            cam_y = my_entity.y * VISUAL_SCALE
+        end
     end
 
     -- Update rejection message timer
@@ -137,6 +232,9 @@ function love.update(dt)
             table.remove(visual_fx, i)
         end
     end
+
+    -- Update projectiles
+    update_projectiles(dt)
 end
 
 function love.resize(w, h)
@@ -146,8 +244,6 @@ end
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
-    elseif key == "c" then
-        show_character_sheet = not show_character_sheet
     elseif key == "tab" then
         kda_ui.show()
     elseif key == "space" then
@@ -166,8 +262,7 @@ function love.keypressed(key)
         local sw, sh = GAME_WIDTH, GAME_HEIGHT
         local world_target_x = (mx - sw / 2) + cam_x
         local world_target_y = (my - sh / 2) + cam_y
-        
-        local me = loci.get_my_entity()
+
         local origin_x = me and (me.x * VISUAL_SCALE) or cam_x
         local origin_y = me and (me.y * VISUAL_SCALE) or cam_y
         local dir_x = world_target_x - origin_x
@@ -179,7 +274,9 @@ function love.keypressed(key)
             dir_x, dir_y = 1, 0
         end
 
-        loci.send_action(1, dir_x, dir_y)
+        -- Spawnar projétil (ele se move e verifica colisão frame a frame)
+        spawn_projectile(origin_x, origin_y, dir_x, dir_y, me and me.id)
+        print("[Client] Projectile spawned at (" .. origin_x .. ", " .. origin_y .. ") direction (" .. dir_x .. ", " .. dir_y .. ")")
     end
 end
 
@@ -216,6 +313,12 @@ function love.draw()
         love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
     end
 
+    -- Draw projectiles
+    love.graphics.setColor(1, 0.5, 0.2, 1)
+    for _, proj in ipairs(projectiles) do
+        love.graphics.circle("fill", proj.x, proj.y, 3)
+    end
+
     -- Draw all network entities
     local my_entity = loci.get_my_entity()
     local entities = loci.get_entities()
@@ -234,11 +337,6 @@ function love.draw()
     -- 4. Debug Overlay
     if show_debug_overlay then
         draw_debug(sw, sh)
-    end
-
-    -- 4. Character Sheet Overlay (C)
-    if show_character_sheet then
-        draw_character_sheet(sw, sh, my_entity)
     end
 
     push:finish()
@@ -293,16 +391,17 @@ function draw_entity(ent, is_me)
 
     -- Verificar se está morto
     local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
+    local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
 
     if is_me then
         if is_dead then
-            love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro
+            love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro quando morto
         else
             love.graphics.setColor(0.2, 0.6, 1.0, 1)
         end
     else
         if is_dead then
-            love.graphics.setColor(0.4, 0.2, 0.2, 1)  -- Vermelho escuro
+            love.graphics.setColor(0.4, 0.2, 0.2, 1)  -- Vermelho escuro quando morto
         else
             love.graphics.setColor(0.9, 0.3, 0.3, 1)
         end
@@ -322,7 +421,6 @@ function draw_entity(ent, is_me)
     end
 
     -- HP Bar
-    local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
     local max_hp = tonumber(ent.max_hp or (ent.properties and ent.properties["max_hp"]) or 100) or 100
     local bar_w = 44
     local bar_h = 5
@@ -355,7 +453,7 @@ function draw_hud(sw, sh, my_entity)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Move  |  Space: Action  |  C: Atributos  |  F3: Debug", 20, sh - 28)
+    love.graphics.print("WASD: Move  |  Space: Action  |  F3: Debug", 20, sh - 28)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
@@ -378,122 +476,6 @@ function draw_debug(sw, sh)
     love.graphics.print(string.format("Tick Rate: %d Hz", tick_rate), sw - 225, 80)
     if me then
         love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 100)
-    end
-end
-
-function draw_character_sheet(sw, sh, my_entity)
-    if not my_entity then return end
-
-    local x = 10
-    local y = 75
-    local w = 330
-    local h = 335
-
-    -- Background panel
-    love.graphics.setColor(0.07, 0.09, 0.14, 0.92)
-    love.graphics.rectangle("fill", x, y, w, h, 8, 8)
-
-    -- Border
-    love.graphics.setColor(0.28, 0.45, 0.72, 0.8)
-    love.graphics.setLineWidth(1.5)
-    love.graphics.rectangle("line", x, y, w, h, 8, 8)
-
-    -- Header bar
-    love.graphics.setColor(0.14, 0.19, 0.28, 0.95)
-    love.graphics.rectangle("fill", x + 1, y + 1, w - 2, 32, 7, 7)
-
-    love.graphics.setColor(1.0, 0.85, 0.35, 1.0)
-    local name = tostring(my_entity:get("character_name", my_entity.name or "Herói"))
-    local role = string.upper(tostring(my_entity:get("role", "FIGHTER")))
-    love.graphics.print(string.format("%s [%s]", name, role), x + 14, y + 9)
-
-    love.graphics.setColor(0.65, 0.75, 0.9, 0.8)
-    love.graphics.print("[C] Fechar", x + w - 75, y + 9)
-
-    -- Atributos da entidade
-    local hp = tonumber(my_entity:get("hp", 100)) or 100
-    local max_hp = tonumber(my_entity:get("max_hp", 100)) or 100
-    local mana = tonumber(my_entity:get("mana", 100)) or 100
-    local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
-    local phys_def = tonumber(my_entity:get("phys_def", 0)) or 0
-    local mag_def = tonumber(my_entity:get("mag_def", 0)) or 0
-    local move_speed = tonumber(my_entity:get("move_speed", 3.0)) or 3.0
-    local hp_regen = tonumber(my_entity:get("hp_regen", 0)) or 0
-    local mana_regen = tonumber(my_entity:get("mana_regen", 0)) or 0
-    local fragile = tostring(my_entity:get("fragile", "0")) == "1"
-    local skills_list = tostring(my_entity:get("skills_list", "-"))
-
-    local cur_y = y + 44
-
-    -- Barra de Vida (HP)
-    love.graphics.setColor(0.85, 0.9, 0.95, 1)
-    love.graphics.print(string.format("Vida: %d / %d", hp, max_hp), x + 14, cur_y)
-    cur_y = cur_y + 16
-    local hp_pct = math.max(0, math.min(1, max_hp > 0 and (hp / max_hp) or 0))
-    love.graphics.setColor(0.12, 0.14, 0.18, 1)
-    love.graphics.rectangle("fill", x + 14, cur_y, w - 28, 10, 3, 3)
-    love.graphics.setColor(0.2, 0.85, 0.35, 1)
-    love.graphics.rectangle("fill", x + 14, cur_y, (w - 28) * hp_pct, 10, 3, 3)
-    cur_y = cur_y + 18
-
-    -- Barra de Mana
-    love.graphics.setColor(0.85, 0.9, 0.95, 1)
-    love.graphics.print(string.format("Mana: %d / %d", mana, max_mana), x + 14, cur_y)
-    cur_y = cur_y + 16
-    local mana_pct = math.max(0, math.min(1, max_mana > 0 and (mana / max_mana) or 0))
-    love.graphics.setColor(0.12, 0.14, 0.18, 1)
-    love.graphics.rectangle("fill", x + 14, cur_y, w - 28, 10, 3, 3)
-    love.graphics.setColor(0.25, 0.60, 0.95, 1)
-    love.graphics.rectangle("fill", x + 14, cur_y, (w - 28) * mana_pct, 10, 3, 3)
-    cur_y = cur_y + 20
-
-    -- Linha separadora
-    love.graphics.setColor(0.25, 0.32, 0.45, 0.6)
-    love.graphics.line(x + 14, cur_y, x + w - 14, cur_y)
-    cur_y = cur_y + 10
-
-    -- Mitigações e Defesas
-    local phys_mit = (phys_def / (phys_def + 100)) * 100
-    local mag_mit = (mag_def / (mag_def + 100)) * 100
-
-    love.graphics.setColor(0.9, 0.7, 0.4, 1)
-    love.graphics.print("Defesa Física:", x + 14, cur_y)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("%d (%.1f%% mitig.)", phys_def, phys_mit), x + 135, cur_y)
-    cur_y = cur_y + 20
-
-    love.graphics.setColor(0.6, 0.8, 1.0, 1)
-    love.graphics.print("Defesa Mágica:", x + 14, cur_y)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("%d (%.1f%% mitig.)", mag_def, mag_mit), x + 135, cur_y)
-    cur_y = cur_y + 20
-
-    love.graphics.setColor(0.7, 0.9, 0.7, 1)
-    love.graphics.print("Velocidade:", x + 14, cur_y)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("%.1f px/tick", move_speed), x + 135, cur_y)
-    cur_y = cur_y + 20
-
-    love.graphics.setColor(0.8, 0.85, 0.95, 1)
-    love.graphics.print("Regeneração:", x + 14, cur_y)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("+%d HP/s | +%d MP/s", hp_regen, mana_regen), x + 135, cur_y)
-    cur_y = cur_y + 20
-
-    -- Habilidades equipadas
-    love.graphics.setColor(1.0, 0.85, 0.35, 1)
-    love.graphics.print("Habilidade [Espaço]:", x + 14, cur_y)
-    love.graphics.setColor(0.9, 0.9, 0.9, 1)
-    love.graphics.print(skills_list, x + 160, cur_y)
-    cur_y = cur_y + 22
-
-    -- Status de combate
-    if fragile then
-        love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
-        love.graphics.print("STATUS: FRÁGIL (+30% dano)", x + 14, cur_y)
-    else
-        love.graphics.setColor(0.4, 0.85, 0.5, 0.9)
-        love.graphics.print("STATUS: NORMAL", x + 14, cur_y)
     end
 end
 
