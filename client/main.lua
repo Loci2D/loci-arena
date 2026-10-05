@@ -32,6 +32,8 @@ local projectiles = {}
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
+local SPECTATOR_SPEED = 400  -- Velocidade da câmera em espectador (pixels/segundo)
+local spectator_mode = false  -- Modo espectador (câmera livre quando morto)
 
 -- Sistema de Respawn (cliente-side usando dt confiável do Love2D)
 local RESPAWN_TIME = 10  -- Tempo em segundos para respawn
@@ -195,8 +197,12 @@ function love.update(dt)
     local is_dead = my_entity and (my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true"))
 
     if my_entity then
+        -- Verificar transição de estado (vivo -> morto ou morto -> vivo)
+        local was_spectator = spectator_mode
+        spectator_mode = is_dead
+
         -- Se acabou de morrer, registrar o tempo
-        if is_dead and death_time == 0 then
+        if is_dead and not was_spectator then
             death_time = love.timer.getTime()
         end
 
@@ -209,10 +215,29 @@ function love.update(dt)
                 loci.send_action(1, 0, 0)  -- Enviar ação de respawn (ability_id 1)
                 print("[Client] Requesting respawn after " .. time_since_death .. " seconds")
             end
+
+            -- Movimento livre da câmera com WASD
+            local dx, dy = 0, 0
+            if love.keyboard.isDown("w") or love.keyboard.isDown("up") then dy = dy - 1 end
+            if love.keyboard.isDown("s") or love.keyboard.isDown("down") then dy = dy + 1 end
+            if love.keyboard.isDown("a") or love.keyboard.isDown("left") then dx = dx - 1 end
+            if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
+
+            -- Normalizar diagonal
+            if dx ~= 0 or dy ~= 0 then
+                local len = math.sqrt(dx * dx + dy * dy)
+                if len > 0 then
+                    dx, dy = dx / len, dy / len
+                end
+            end
+
+            -- Mover câmera livremente com velocidade suave
+            cam_x = cam_x + dx * SPECTATOR_SPEED * dt
+            cam_y = cam_y + dy * SPECTATOR_SPEED * dt
         else
             -- Resetar death_time se reviveu
             death_time = 0
-            -- Se estiver vivo, enviar movimentos e trancar câmera no jogador
+            -- Se estiver vivo, trancar câmera no jogador e enviar movimentos
             update_movement()
             -- Direct camera binding eliminates lag jitter between camera and player
             cam_x = my_entity.x * VISUAL_SCALE
@@ -331,7 +356,14 @@ function love.draw()
     -- 2. HUD & UI Layer
     draw_hud(sw, sh, my_entity)
 
-    -- 3. KDA UI
+    -- 3. Spectator mode indicator
+    if spectator_mode then
+        love.graphics.setColor(1, 0.5, 0.2, 0.9)
+        love.graphics.setFont(love.graphics.newFont(20))
+        love.graphics.print("SPECTATOR MODE", sw / 2 - 80, 30)
+    end
+
+    -- 5. KDA UI
     kda_ui.draw(entities, my_entity)
 
     -- 4. Debug Overlay

@@ -14,6 +14,9 @@ local player_kills = {}         -- Kills de cada jogador
 local player_deaths = {}        -- Deaths de cada jogador
 local PROJECTILE_DAMAGE = 10   -- Dano por acerto
 
+-- Sistema de Respawn - Movido para o cliente (servidor não fornece dt confiável)
+local dead_players = {}  -- Lista de jogadores mortos
+
 -- Sistema de Dano com detecção de colisão pelo cliente
 -- O cliente calcula a colisão e envia o target_id via propriedade temporária
 local PROJECTILE_RANGE = 200.0      -- Alcance máximo do tiro
@@ -52,6 +55,9 @@ local function damage_target(attacker_id, target_id)
         player_is_dead[target_id] = true
         Loci.Commands.set_property(target_id, "is_dead", "true")
 
+        -- Adicionar à lista de mortos para respawn
+        dead_players[target_id] = true
+
         -- Incrementar deaths do alvo
         player_deaths[target_id] = (player_deaths[target_id] or 0) + 1
         Loci.Commands.set_property(target_id, "deaths", tostring(player_deaths[target_id]))
@@ -86,9 +92,6 @@ function on_player_join(entity_id)
     player_deaths[entity_id] = 0
 end
 
--- Sistema de Respawn: O cliente solicita respawn após 10 segundos de morte
--- O servidor apenas processa o pedido de respawn (ability_id = 1)
-
 function on_move_intent(entity_id, dir_x, dir_y)
     -- Verificar se o jogador está morto
     if player_is_dead[entity_id] then
@@ -120,6 +123,7 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
             -- Reviver o jogador
             player_hp[entity_id] = 100
             player_is_dead[entity_id] = false
+            dead_players[entity_id] = nil
 
             Loci.Commands.set_property(entity_id, "hp", "100")
             Loci.Commands.set_property(entity_id, "is_dead", "false")
@@ -169,4 +173,9 @@ function on_player_leave(entity_id)
     player_is_dead[entity_id] = nil
     player_kills[entity_id] = nil
     player_deaths[entity_id] = nil
+    dead_players[entity_id] = nil
 end
+
+-- Sistema de Respawn - Processa a cada tick (se o servidor suportar on_tick)
+-- REMOVIDO: O servidor não fornece delta time confiável. Respawn movido para o cliente.
+-- function on_tick(dt) ... end
