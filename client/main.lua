@@ -31,6 +31,8 @@ local rejection_timer = 0
 local visual_fx = {}
 local show_debug_overlay = false
 local show_character_sheet = false
+local skill_message = ""
+local skill_message_timer = 0
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
@@ -133,23 +135,58 @@ function love.update(dt)
     local my_entity = loci.get_my_entity()
     if my_entity then
         update_movement()
-        
-        -- Processar ação do botão virtual
-        if virtual_joystick.is_action_active() then
+
+        -- Processar ação do botão virtual (habilidade 1)
+        if virtual_joystick.is_skill_1_active() then
             -- Verificar se o jogador está morto
             local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
-            
-            if not is_dead and virtual_joystick.can_trigger_action(love.timer.getTime()) then
-                virtual_joystick.trigger_action(love.timer.getTime())
-                
+
+            if not is_dead and virtual_joystick.can_trigger_skill_1(love.timer.getTime()) then
+                virtual_joystick.trigger_skill_1(love.timer.getTime())
+
                 -- Usar a direção do joystick de movimento, ou direção padrão se não estiver movendo
                 local action_dx, action_dy = virtual_joystick.get_move_vector()
                 if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
                     -- Se não estiver movendo, usar direção para frente (para cima)
                     action_dx, action_dy = 0, -1
                 end
-                
+
                 loci.send_action(1, action_dx, action_dy)
+                skill_message = "habilidade 1"
+                skill_message_timer = 1.0
+            end
+        end
+
+        -- Processar habilidade 2
+        if virtual_joystick.is_skill_2_active() then
+            local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
+
+            if not is_dead and virtual_joystick.can_trigger_skill_2(love.timer.getTime()) then
+                virtual_joystick.trigger_skill_2(love.timer.getTime())
+                skill_message = "habilidade 2"
+                skill_message_timer = 1.0
+            end
+        end
+
+        -- Processar habilidade 3
+        if virtual_joystick.is_skill_3_active() then
+            local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
+
+            if not is_dead and virtual_joystick.can_trigger_skill_3(love.timer.getTime()) then
+                virtual_joystick.trigger_skill_3(love.timer.getTime())
+                skill_message = "habilidade 3"
+                skill_message_timer = 1.0
+            end
+        end
+
+        -- Processar habilidade 4
+        if virtual_joystick.is_skill_4_active() then
+            local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
+
+            if not is_dead and virtual_joystick.can_trigger_skill_4(love.timer.getTime()) then
+                virtual_joystick.trigger_skill_4(love.timer.getTime())
+                skill_message = "habilidade 4"
+                skill_message_timer = 1.0
             end
         end
         
@@ -161,6 +198,11 @@ function love.update(dt)
     -- Update rejection message timer
     if rejection_timer > 0 then
         rejection_timer = rejection_timer - dt
+    end
+
+    -- Update skill message timer
+    if skill_message_timer > 0 then
+        skill_message_timer = skill_message_timer - dt
     end
 
     -- Update visual effects
@@ -432,6 +474,11 @@ function draw_hud(sw, sh, my_entity)
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
         love.graphics.printf(rejection_msg, 0, 80, sw, "center")
+    end
+
+    if skill_message_timer > 0 then
+        love.graphics.setColor(0.3, 0.9, 0.5, 0.95)
+        love.graphics.printf(skill_message, 0, 120, sw, "center")
     end
 end
 

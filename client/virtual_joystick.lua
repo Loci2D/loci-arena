@@ -6,19 +6,49 @@ function VirtualJoystick.set_push(push_module)
     push = push_module
 end
 
--- Configurações do botão de habilidade (AQUI VOCÊ MUDA A POSIÇÃO)
-local ACTION_BUTTON_CONFIG = {
-    x_ratio = 0.85,        -- Centro em 85% da largura 
-    y_ratio = 0.75,        -- Centro em 75% da altura
-    radius = 60,           -- Raio do botão
+-- Configurações do botão de habilidade 1 (ataque básico - centro do canto inferior direito)
+local SKILL_1_BUTTON_CONFIG = {
+    x_ratio = 0.90,        -- Centro em 90% da largura
+    y_ratio = 0.85,        -- Centro em 85% da altura
+    radius = 75,           -- Raio do botão (maior)
     color_bg = {0.4, 0.2, 0.2, 0.6},
     color_pressed = {0.8, 0.3, 0.3, 0.9},
-    
+    skill_id = 1
+}
+
+-- Configurações do botão de habilidade 2 (topo do semi-círculo, acima do botão 1)
+local SKILL_2_BUTTON_CONFIG = {
+    x_ratio = 0.90,        -- Centro em 90% da largura (mesma coluna do botão 1)
+    y_ratio = 0.60,        -- Centro em 60% da altura (acima do botão 1)
+    radius = 50,           -- Raio do botão
+    color_bg = {0.2, 0.4, 0.6, 0.6},
+    color_pressed = {0.3, 0.7, 0.9, 0.9},
+    skill_id = 2
+}
+
+-- Configurações do botão de habilidade 3 (meio do semi-círculo, diagonal acima-esquerda)
+local SKILL_3_BUTTON_CONFIG = {
+    x_ratio = 0.80,        -- Centro em 80% da largura (à esquerda do botão 1)
+    y_ratio = 0.68,        -- Centro em 65% da altura (meio do arco)
+    radius = 50,           -- Raio do botão
+    color_bg = {0.6, 0.2, 0.6, 0.6},
+    color_pressed = {0.9, 0.3, 0.9, 0.9},
+    skill_id = 3
+}
+
+-- Configurações do botão de habilidade 4 (base do semi-círculo, à esquerda do botão 1)
+local SKILL_4_BUTTON_CONFIG = {
+    x_ratio = 0.75,        -- Centro em 72% da largura (mais à esquerda)
+    y_ratio = 0.85,        -- Centro em 85% da altura (mesma linha do botão 1)
+    radius = 50,           -- Raio do botão
+    color_bg = {0.6, 0.6, 0.2, 0.6},
+    color_pressed = {0.9, 0.9, 0.3, 0.9},
+    skill_id = 4
 }
 
 -- Configurações do joystick de movimento
 local MOVE_JOYSTICK_CONFIG = {
-    radius = 80,
+    radius = 75,
     color_bg = {1.0, 1.0, 1.0, 0.5},
     color_handle = {1.0, 1.0, 1.0, 0.8},
     dynamic = true
@@ -190,11 +220,21 @@ function ActionButton:draw()
     love.graphics.circle("fill", self.center_x, self.center_y, self.config.radius)
     love.graphics.setColor(1, 1, 1, 0.5)
     love.graphics.circle("line", self.center_x, self.center_y, self.config.radius)
+
+    -- Desenhar o número da habilidade
+    love.graphics.setColor(1, 1, 1, 0.9)
+    local font = love.graphics.getFont()
+    local label = tostring(self.config.skill_id or 1)
+    local tw = font:getWidth(label)
+    love.graphics.print(label, self.center_x - tw / 2, self.center_y - font:getHeight() / 2)
 end
 
 -- Sistema principal
 local move_joystick = Joystick.new(MOVE_JOYSTICK_CONFIG)
-local action_button = ActionButton.new(ACTION_BUTTON_CONFIG)
+local skill_1_button = ActionButton.new(SKILL_1_BUTTON_CONFIG)
+local skill_2_button = ActionButton.new(SKILL_2_BUTTON_CONFIG)
+local skill_3_button = ActionButton.new(SKILL_3_BUTTON_CONFIG)
+local skill_4_button = ActionButton.new(SKILL_4_BUTTON_CONFIG)
 local MOUSE_ID = -1
 
 -- Conversão de coordenadas
@@ -208,7 +248,10 @@ end
 -- API pública
 function VirtualJoystick.update(w, h)
     move_joystick:update_pos(w, h)
-    action_button:update_pos(w, h)
+    skill_1_button:update_pos(w, h)
+    skill_2_button:update_pos(w, h)
+    skill_3_button:update_pos(w, h)
+    skill_4_button:update_pos(w, h)
 end
 
 function VirtualJoystick.update_with_game_dimensions(w, h)
@@ -216,15 +259,27 @@ function VirtualJoystick.update_with_game_dimensions(w, h)
 end
 
 function VirtualJoystick.handle_touchpress(id, x, y, w, h)
-    return move_joystick:handle_press(x, y, id, w, h) or action_button:handle_press(x, y, id)
+    return move_joystick:handle_press(x, y, id, w, h) or
+           skill_1_button:handle_press(x, y, id) or
+           skill_2_button:handle_press(x, y, id) or
+           skill_3_button:handle_press(x, y, id) or
+           skill_4_button:handle_press(x, y, id)
 end
 
 function VirtualJoystick.handle_touchmove(id, x, y)
-    return move_joystick:handle_move(x, y, id) or action_button:handle_move(x, y, id)
+    return move_joystick:handle_move(x, y, id) or
+           skill_1_button:handle_move(x, y, id) or
+           skill_2_button:handle_move(x, y, id) or
+           skill_3_button:handle_move(x, y, id) or
+           skill_4_button:handle_move(x, y, id)
 end
 
 function VirtualJoystick.handle_touchrelease(id)
-    return move_joystick:handle_release(id) or action_button:handle_release(id)
+    return move_joystick:handle_release(id) or
+           skill_1_button:handle_release(id) or
+           skill_2_button:handle_release(id) or
+           skill_3_button:handle_release(id) or
+           skill_4_button:handle_release(id)
 end
 
 -- Temporário, uso para testar o touch com o mouse
@@ -258,21 +313,60 @@ function VirtualJoystick.is_move_active()
     return move_joystick.active
 end
 
-function VirtualJoystick.is_action_active()
-    return action_button.active
+function VirtualJoystick.is_skill_1_active()
+    return skill_1_button.active
 end
 
-function VirtualJoystick.can_trigger_action(t)
-    return action_button:can_trigger_action(t)
+function VirtualJoystick.can_trigger_skill_1(t)
+    return skill_1_button:can_trigger_action(t)
 end
 
-function VirtualJoystick.trigger_action(t)
-    action_button:trigger_action(t)
+function VirtualJoystick.trigger_skill_1(t)
+    skill_1_button:trigger_action(t)
+end
+
+function VirtualJoystick.is_skill_2_active()
+    return skill_2_button.active
+end
+
+function VirtualJoystick.can_trigger_skill_2(t)
+    return skill_2_button:can_trigger_action(t)
+end
+
+function VirtualJoystick.trigger_skill_2(t)
+    skill_2_button:trigger_action(t)
+end
+
+function VirtualJoystick.is_skill_3_active()
+    return skill_3_button.active
+end
+
+function VirtualJoystick.can_trigger_skill_3(t)
+    return skill_3_button:can_trigger_action(t)
+end
+
+function VirtualJoystick.trigger_skill_3(t)
+    skill_3_button:trigger_action(t)
+end
+
+function VirtualJoystick.is_skill_4_active()
+    return skill_4_button.active
+end
+
+function VirtualJoystick.can_trigger_skill_4(t)
+    return skill_4_button:can_trigger_action(t)
+end
+
+function VirtualJoystick.trigger_skill_4(t)
+    skill_4_button:trigger_action(t)
 end
 
 function VirtualJoystick.draw()
     move_joystick:draw()
-    action_button:draw()
+    skill_1_button:draw()
+    skill_2_button:draw()
+    skill_3_button:draw()
+    skill_4_button:draw()
 end
 
 return VirtualJoystick
