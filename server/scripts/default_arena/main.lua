@@ -6,6 +6,95 @@
 -- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
 local SPEED = 3.0
 
+-- ========================================
+-- SISTEMA DE ESCUDO (INTEGRADO)
+-- ========================================
+
+-- Configurações do Escudo
+local SHIELD_CAPACITY_PERCENT = 0.1  -- Capacidade do escudo como porcentagem do HP (0.1 = 10%)
+local SHIELD_ABILITY_ID = 2             -- ID da habilidade de escudo
+
+-- Estado local do sistema de escudo
+local player_shield_active = {}       -- Se o escudo está ativo
+local player_shield_capacity = {}     -- Capacidade restante do escudo
+
+-- Desativar o escudo (definido antes para poder ser chamado por outras funções)
+local function shield_deactivate(entity_id)
+    player_shield_active[entity_id] = false
+    player_shield_capacity[entity_id] = nil
+
+    -- Sincronizar com o cliente
+    Loci.Commands.set_property(entity_id, "is_shielded", "false")
+    Loci.Commands.set_property(entity_id, "shield_capacity", "0")
+end
+
+-- Ativar o escudo para um jogador
+local function shield_activate(entity_id)
+    -- Se já está ativo, ignorar (cliente gerencia duração)
+    if player_shield_active[entity_id] then
+        return false, "Escudo já está ativo"
+    end
+
+    -- Calcular capacidade do escudo baseada no HP máximo
+    local max_hp = player_max_hp[entity_id] or 100
+    local shield_capacity = math.floor(max_hp * SHIELD_CAPACITY_PERCENT)
+
+    -- Ativar escudo com capacidade calculada
+    player_shield_active[entity_id] = true
+    player_shield_capacity[entity_id] = shield_capacity
+
+    -- Sincronizar com o cliente
+    Loci.Commands.set_property(entity_id, "is_shielded", "true")
+    Loci.Commands.set_property(entity_id, "shield_capacity", tostring(shield_capacity))
+    Loci.Commands.set_property(entity_id, "shield_max_capacity", tostring(shield_capacity))
+
+    Loci.Log.info("[Shield] Entity " .. entity_id .. " activated shield with capacity " .. shield_capacity .. " (" .. (SHIELD_CAPACITY_PERCENT * 100) .. "% of max HP)")
+    return true, "Escudo ativado"
+end
+
+-- Verificar se um jogador está defendendo e absorver dano
+local function shield_apply_damage_reduction(entity_id, original_damage)
+    if not player_shield_active[entity_id] then
+        return original_damage, false  -- Sem escudo
+    end
+
+    -- Obter capacidade restante
+    local remaining_capacity = player_shield_capacity[entity_id] or 0
+
+    -- Se não tem mais capacidade, desativar
+    if remaining_capacity <= 0 then
+        shield_deactivate(entity_id)
+        return original_damage, false
+    end
+
+    -- Calcular quanto dano o escudo absorve
+    local absorbed = math.min(remaining_capacity, original_damage)
+    local damage_to_player = original_damage - absorbed
+
+    -- Atualizar capacidade restante
+    player_shield_capacity[entity_id] = remaining_capacity - absorbed
+
+    -- Sincronizar nova capacidade com o cliente
+    Loci.Commands.set_property(entity_id, "shield_capacity", tostring(player_shield_capacity[entity_id]))
+
+    -- Se a capacidade chegou a 0, desativar escudo
+    if player_shield_capacity[entity_id] <= 0 then
+        shield_deactivate(entity_id)
+    end
+
+    return damage_to_player, true
+end
+
+-- Limpar estado de um jogador (quando sai do jogo)
+local function shield_cleanup(entity_id)
+    player_shield_active[entity_id] = nil
+    player_shield_capacity[entity_id] = nil
+end
+
+-- ========================================
+-- FIM DO SISTEMA DE ESCUDO
+-- ========================================
+
 -- Estado local do jogo (servidor não expõe get_property)
 local player_hp = {}           -- HP local de cada jogador
 local player_max_hp = {}        -- HP máximo de cada jogador
@@ -40,15 +129,20 @@ local function damage_target(attacker_id, target_id)
         return false
     end
 
+    -- Aplicar redução de dano se o alvo estiver com escudo
+    local damage = PROJECTILE_DAMAGE
+    local damage_reduced = false
+    damage, damage_reduced = shield_apply_damage_reduction(target_id, damage)
+
     -- Aplicar dano
     local current_hp = player_hp[target_id]
-    local new_hp = math.max(0, current_hp - PROJECTILE_DAMAGE)
+    local new_hp = math.max(0, current_hp - damage)
 
     player_hp[target_id] = new_hp
 
     -- Sincronizar com o cliente via set_property
     Loci.Commands.set_property(target_id, "hp", tostring(new_hp))
-    Loci.Log.info("[Damage] Entity " .. attacker_id .. " hit entity " .. target_id .. " for " .. PROJECTILE_DAMAGE .. " damage (HP: " .. new_hp .. ")")
+    Loci.Log.info("[Damage] Entity " .. attacker_id .. " hit entity " .. target_id .. " for " .. damage .. " damage (HP: " .. new_hp .. ")")
 
     -- Verificar se o jogador morreu
     if new_hp <= 0 and not player_is_dead[target_id] then
@@ -127,6 +221,10 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
 
             Loci.Commands.set_property(entity_id, "hp", "100")
             Loci.Commands.set_property(entity_id, "is_dead", "false")
+
+            -- Limpar estado do escudo ao respawnar
+            shield_deactivate(entity_id)
+
             Loci.Log.info("[Respawn] Entity " .. entity_id .. " requested respawn and was revived!")
             return true
         else
@@ -134,6 +232,29 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
             Loci.Log.info("[Arena] Shot missed (no target)")
             return true
         end
+    end
+
+    -- ability_id = 2 é ativação do escudo
+    if ability_id == SHIELD_ABILITY_ID then
+        if player_is_dead[entity_id] then
+            return false, "Você está morto"
+        end
+
+        local success, msg = shield_activate(entity_id)
+        if success then
+            return true
+        else
+            return false, msg
+        end
+    end
+
+    -- ability_id = 1002 é desativação do escudo (expirou por tempo no cliente)
+    if ability_id == SHIELD_ABILITY_ID + 1000 then
+        if player_shield_active[entity_id] then
+            shield_deactivate(entity_id)
+            return true
+        end
+        return true  -- Já estava desativado, ok
     end
 
     -- Verificar se o jogador está morto (para ações normais)
@@ -174,6 +295,9 @@ function on_player_leave(entity_id)
     player_kills[entity_id] = nil
     player_deaths[entity_id] = nil
     dead_players[entity_id] = nil
+
+    -- Clean up shield state
+    shield_cleanup(entity_id)
 end
 
 -- Sistema de Respawn - Processa a cada tick (se o servidor suportar on_tick)
