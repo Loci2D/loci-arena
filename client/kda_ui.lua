@@ -13,6 +13,20 @@ local ROW_HEIGHT = 35
 -- Estado
 local show_kda = false
 
+-- Fontes (criadas uma vez)
+local font_title = nil
+local font_header = nil
+local font_rank = nil
+local font_footer = nil
+
+-- Inicializar fontes (chamar do main.lua)
+function kda_ui.init()
+    font_title = love.graphics.newFont(24)
+    font_header = love.graphics.newFont(13)
+    font_rank = love.graphics.newFont(16)
+    font_footer = love.graphics.newFont(12)
+end
+
 -- Mostrar UI
 function kda_ui.show()
     show_kda = true
@@ -34,10 +48,12 @@ function kda_ui.draw(entities, my_entity)
         return
     end
 
-    -- Usa a resolução virtual do jogo (1280x720) garantida pelo push:start()
-    local sw, sh = 1280, 720
+    local sw, sh = love.graphics.getDimensions()
     local x = (sw - UI_WIDTH) / 2
     local y = (sh - UI_HEIGHT) / 2
+
+    -- Salvar fonte atual
+    local old_font = love.graphics.getFont()
 
     -- Fundo escuro translúcido (estilo Valorant)
     love.graphics.setColor(0.02, 0.02, 0.05, 0.98)
@@ -55,7 +71,7 @@ function kda_ui.draw(entities, my_entity)
 
     -- Título "SCOREBOARD"
     love.graphics.setColor(0.95, 0.95, 1, 1)
-    love.graphics.setFont(love.graphics.newFont(24))
+    love.graphics.setFont(font_title)
     love.graphics.print("SCOREBOARD", x + PADDING, y + PADDING + 8)
 
     -- Linha separadora
@@ -64,7 +80,7 @@ function kda_ui.draw(entities, my_entity)
     love.graphics.line(x + PADDING, y + PADDING + 55, x + UI_WIDTH - PADDING, y + PADDING + 55)
 
     -- Cabeçalho da tabela
-    love.graphics.setFont(love.graphics.newFont(13))
+    love.graphics.setFont(font_header)
     love.graphics.setColor(0.5, 0.5, 0.6, 1)
     love.graphics.print("RANK", x + PADDING, y + PADDING + 70)
     love.graphics.print("PLAYER", x + PADDING + 80, y + PADDING + 70)
@@ -113,7 +129,7 @@ function kda_ui.draw(entities, my_entity)
 
         -- Rank
         love.graphics.setColor(0.7, 0.7, 0.8, 1)
-        love.graphics.setFont(love.graphics.newFont(16))
+        love.graphics.setFont(font_rank)
         love.graphics.print(tostring(rank) .. ".", x + PADDING, row_y)
 
         -- Nome do jogador
@@ -138,8 +154,11 @@ function kda_ui.draw(entities, my_entity)
 
     -- Footer com instruções
     love.graphics.setColor(0.4, 0.4, 0.5, 1)
-    love.graphics.setFont(love.graphics.newFont(12))
+    love.graphics.setFont(font_footer)
     love.graphics.print("Hold TAB for scoreboard", x + PADDING, y + UI_HEIGHT - 25)
+
+    -- Restaurar fonte original
+    love.graphics.setFont(old_font)
 end
 
 return kda_ui

@@ -26,10 +26,39 @@ local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
 local show_debug_overlay = false
-local show_character_sheet = false
+
+-- Fontes (criadas uma vez para evitar recriação a cada frame)
+local font_default = nil      -- Fonte padrão para texto geral
+local font_hud = nil          -- Fonte para HUD
+local font_spectator = nil    -- Fonte para modo espectador
+local font_entity = nil       -- Fonte para labels de entidades
+
+-- Sistema de projéteis do cliente
+local projectiles = {}
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
+local SPECTATOR_SPEED = 4000  -- Velocidade da câmera em espectador (pixels/segundo)
+local spectator_mode = false  -- Modo espectador (câmera livre quando morto)
+
+-- Sistema de Respawn (cliente-side usando dt confiável do Love2D)
+local RESPAWN_TIME = 10 -- Tempo em segundos para respawn
+local death_time = 0  -- Timestamp quando o jogador morreu
+
+-- Sistema de Escudo (cliente-side)
+local SHIELD_ABILITY_ID = 2  -- ID da habilidade de escudo
+local SHIELD_CAPACITY = 100   -- Capacidade padrão (será sobrescrita pelo servidor)
+local SHIELD_MAX_CAPACITY = 100  -- Capacidade máxima (recebida do servidor)
+local SHIELD_DURATION = 15.0   -- Duração do escudo em segundos
+local SHIELD_COOLDOWN = 10.0   -- Cooldown do escudo em segundos
+local shield_key_cooldown = 0  -- Cooldown local para evitar spam de tecla
+
+-- Estado local do escudo (gerenciado pelo cliente)
+local shield_active = false
+local shield_start_time = 0
+local shield_capacity_remaining = 0
+local shield_cooldown_end = 0
+local shield_broken_by_damage = false  -- Flag para diferenciar quebra por dano vs tempo
 
 local VISUAL_SCALE = 8 -- Pixels per Meter (escala para desenho)
 
@@ -41,7 +70,19 @@ local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
-    
+
+    -- Criar fontes uma vez para evitar recriação a cada frame
+    font_default = love.graphics.newFont(12)
+    font_hud = love.graphics.newFont(12)
+    font_spectator = love.graphics.newFont(20)
+    font_entity = love.graphics.newFont(12)
+
+    -- Definir fonte padrão global
+    love.graphics.setFont(font_default)
+
+    -- Inicializar fontes do KDA UI
+    kda_ui.init()
+
     push:setupScreen(GAME_WIDTH, GAME_HEIGHT, 1280, 720, {
         fullscreen = false,
         resizable = true,
@@ -77,18 +118,46 @@ function love.load(arg)
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
         -- Hook for HUD/UI state updates (HP, score, buffs)
+        -- Sincronizar estado do escudo do servidor
+        if entity.id == loci.get_my_entity().id then
+            -- Ignorar atualizações de escudo se o jogador estiver morto
+            local is_dead = entity.is_dead or (entity.properties and entity.properties["is_dead"] == "true")
+
+            if key == "is_shielded" and not is_dead then
+                if new_val == "true" and not shield_active then
+                    -- Só ativar se não estiver ativo localmente
+                    shield_active = true
+                    shield_start_time = love.timer.getTime()
+                    shield_capacity_remaining = tonumber(entity.properties.shield_capacity) or SHIELD_CAPACITY
+                    SHIELD_MAX_CAPACITY = tonumber(entity.properties.shield_max_capacity) or SHIELD_CAPACITY
+                    shield_broken_by_damage = false
+                elseif new_val == "false" then
+                    -- Servidor desativou (provavelmente por dano - quebrou o escudo)
+                    shield_active = false
+                    shield_broken_by_damage = true
+                    shield_capacity_remaining = 0
+                    -- Iniciar cooldown imediatamente
+                    shield_cooldown_end = love.timer.getTime() + SHIELD_COOLDOWN
+                    print("[Client] Shield broken by damage, starting cooldown")
+                end
+                -- Se new_val == "true" e shield_active já for true, ignorar (não resetar timer)
+            elseif key == "shield_capacity" and not is_dead then
+                shield_capacity_remaining = tonumber(new_val) or 0
+                -- Se a capacidade chegou a 0, desativar escudo e iniciar cooldown
+                if shield_capacity_remaining <= 0 and shield_active then
+                    shield_active = false
+                    shield_broken_by_damage = true
+                    shield_cooldown_end = love.timer.getTime() + SHIELD_COOLDOWN
+                    print("[Client] Shield capacity reached 0, starting cooldown")
+                end
+            elseif key == "shield_max_capacity" and not is_dead then
+                SHIELD_MAX_CAPACITY = tonumber(new_val) or SHIELD_CAPACITY
+            end
+        end
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
-        table.insert(visual_fx, {
-            x = entity and entity.x or 0,
-            y = entity and entity.y or 0,
-            dir_x = dir_x,
-            dir_y = dir_y,
-            ability_id = ability_id,
-            lifetime = 0.35,
-            max_lifetime = 0.35
-        })
+        -- Efeito visual removido (não mostramos mais o raio amarelo)
     end
 
     loci.on_intent_rejected = function(reason)
@@ -100,6 +169,14 @@ end
 local last_sent_dx, last_sent_dy = 0, 0
 
 local function update_movement()
+    local my_entity = loci.get_my_entity()
+    local is_dead = my_entity and (my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true"))
+
+    -- Se estiver morto, não enviar movimentos para o servidor
+    if is_dead then
+        return
+    end
+
     local dx, dy = 0, 0
     if love.keyboard.isDown("w") or love.keyboard.isDown("up") then dy = dy - 1 end
     if love.keyboard.isDown("s") or love.keyboard.isDown("down") then dy = dy + 1 end
@@ -113,16 +190,169 @@ local function update_movement()
     end
 end
 
+-- Sistema de projéteis
+local PROJECTILE_SPEED = 400.0      -- Velocidade em pixels/segundo
+local PROJECTILE_RADIUS = 8.0 * VISUAL_SCALE  -- Raio de colisão (aumentado de 2 para 8)
+local PROJECTILE_RANGE = 200.0 * VISUAL_SCALE  -- Alcance máximo
+
+local function spawn_projectile(x, y, dir_x, dir_y, owner_id)
+    table.insert(projectiles, {
+        x = x,
+        y = y,
+        dir_x = dir_x,
+        dir_y = dir_y,
+        owner_id = owner_id,
+        lifetime = 0,
+        max_lifetime = PROJECTILE_RANGE / PROJECTILE_SPEED,
+        active = true
+    })
+end
+
+local function update_projectiles(dt)
+    local entities = loci.get_entities()
+
+    for i = #projectiles, 1, -1 do
+        local proj = projectiles[i]
+        if not proj.active then
+            table.remove(projectiles, i)
+            goto continue
+        end
+
+        -- Mover projétil
+        proj.x = proj.x + proj.dir_x * PROJECTILE_SPEED * dt
+        proj.y = proj.y + proj.dir_y * PROJECTILE_SPEED * dt
+        proj.lifetime = proj.lifetime + dt
+
+        -- Verificar se expirou
+        if proj.lifetime >= proj.max_lifetime then
+            table.remove(projectiles, i)
+            goto continue
+        end
+
+        -- Verificar colisão com entidades
+        for _, ent in ipairs(entities) do
+            if ent.id ~= proj.owner_id then
+                local ent_x = ent.x * VISUAL_SCALE
+                local ent_y = ent.y * VISUAL_SCALE
+
+                -- Calcular distância
+                local dist = math.sqrt((proj.x - ent_x)^2 + (proj.y - ent_y)^2)
+
+                -- Verificar colisão (raio do projétil + raio do jogador aproximado)
+                local collision_threshold = PROJECTILE_RADIUS + 2.0 * VISUAL_SCALE
+
+                if dist < collision_threshold then
+                    -- Colisão detectada! Enviar para servidor
+                    -- Codificar target_id no ability_id (send_action normaliza aim_x/aim_y)
+                    loci.send_action(10000 + ent.id, proj.dir_x, proj.dir_y)
+                    print("[Client] Projectile hit entity " .. ent.id .. " at distance " .. dist)
+
+                    -- Remover projétil
+                    table.remove(projectiles, i)
+                    goto continue
+                end
+            end
+        end
+
+        ::continue::
+    end
+end
+
 function love.update(dt)
     -- Process incoming network packets and smooth entity interpolation
     loci.update(dt)
-    
+
     local my_entity = loci.get_my_entity()
+    local is_dead = my_entity and (my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true"))
+
     if my_entity then
-        update_movement()
-        -- Direct camera binding eliminates lag jitter between camera and player
-        cam_x = my_entity.x * VISUAL_SCALE
-        cam_y = my_entity.y * VISUAL_SCALE
+        -- Verificar transição de estado (vivo -> morto ou morto -> vivo)
+        local was_spectator = spectator_mode
+        spectator_mode = is_dead
+
+        -- Se acabou de morrer, registrar o tempo
+        if is_dead and not was_spectator then
+            death_time = love.timer.getTime()
+            -- Desativar escudo se morreu e resetar estado
+            shield_active = false
+            shield_start_time = 0
+            shield_capacity_remaining = 0
+            shield_cooldown_end = 0
+            shield_broken_by_damage = false
+        end
+
+        -- Se estiver morto, verificar respawn
+        if is_dead then
+            -- Verificar se passou o tempo de respawn
+            local time_since_death = love.timer.getTime() - death_time
+            if time_since_death >= RESPAWN_TIME then
+                -- Solicitar respawn ao servidor
+                loci.send_action(1, 0, 0)  -- Enviar ação de respawn (ability_id 1)
+                print("[Client] Requesting respawn after " .. time_since_death .. " seconds")
+            end
+
+            -- Movimento livre da câmera com WASD
+            local dx, dy = 0, 0
+            if love.keyboard.isDown("w") or love.keyboard.isDown("up") then dy = dy - 1 end
+            if love.keyboard.isDown("s") or love.keyboard.isDown("down") then dy = dy + 1 end
+            if love.keyboard.isDown("a") or love.keyboard.isDown("left") then dx = dx - 1 end
+            if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
+
+            -- Normalizar diagonal
+            if dx ~= 0 or dy ~= 0 then
+                local len = math.sqrt(dx * dx + dy * dy)
+                if len > 0 then
+                    dx, dy = dx / len, dy / len
+                end
+            end
+
+            -- Mover câmera livremente com velocidade suave
+            cam_x = cam_x + dx * SPECTATOR_SPEED * dt
+            cam_y = cam_y + dy * SPECTATOR_SPEED * dt
+        else
+            -- Resetar death_time se reviveu
+            local was_dead = death_time > 0
+            death_time = 0
+
+            -- Se acabou de reviver, resetar estado do escudo
+            if was_dead then
+                shield_active = false
+                shield_start_time = 0
+                shield_capacity_remaining = 0
+                shield_cooldown_end = 0
+                shield_broken_by_damage = false
+            end
+
+            -- Se estiver vivo, trancar câmera no jogador e enviar movimentos
+            update_movement()
+            -- Direct camera binding eliminates lag jitter between camera and player
+            cam_x = my_entity.x * VISUAL_SCALE
+            cam_y = my_entity.y * VISUAL_SCALE
+
+            -- Gerenciar escudo no cliente (duração e capacidade)
+            if shield_active then
+                local shield_elapsed = love.timer.getTime() - shield_start_time
+
+                -- Verificar se expirou por tempo
+                if shield_elapsed >= SHIELD_DURATION then
+                    shield_active = false
+                    shield_broken_by_damage = false
+                    shield_capacity_remaining = 0
+                    shield_cooldown_end = love.timer.getTime() + SHIELD_COOLDOWN
+                    print("[Client] Shield expired (duration)")
+                    -- Notificar servidor para desativar escudo (usar ability_id diferente)
+                    loci.send_action(SHIELD_ABILITY_ID + 1000, 0, 0)
+                end
+
+                -- Verificar se quebrou por dano (capacidade 0)
+                if shield_capacity_remaining <= 0 then
+                    shield_active = false
+                    shield_broken_by_damage = true
+                    shield_cooldown_end = love.timer.getTime() + SHIELD_COOLDOWN
+                    print("[Client] Shield broke by damage (capacity 0), starting cooldown")
+                end
+            end
+        end
     end
 
     -- Update rejection message timer
@@ -137,6 +367,9 @@ function love.update(dt)
             table.remove(visual_fx, i)
         end
     end
+
+    -- Update projectiles
+    update_projectiles(dt)
 end
 
 function love.resize(w, h)
@@ -146,10 +379,43 @@ end
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
-    elseif key == "c" then
-        show_character_sheet = not show_character_sheet
     elseif key == "tab" then
         kda_ui.show()
+    elseif key == "e" then
+        -- Ativar escudo
+        local me = loci.get_my_entity()
+        local is_dead = me and (me.is_dead or (me.properties and me.properties["is_dead"] == "true"))
+        if is_dead then
+            print("[Client] Cannot activate shield - you are dead!")
+            return
+        end
+
+        -- Verificar cooldown local
+        if love.timer.getTime() < shield_cooldown_end then
+            local remaining = shield_cooldown_end - love.timer.getTime()
+            print("[Client] Shield on cooldown: " .. string.format("%.1f", remaining) .. "s")
+            return
+        end
+
+        -- Verificar cooldown local para evitar spam
+        if love.timer.getTime() - shield_key_cooldown < 0.5 then
+            return
+        end
+        shield_key_cooldown = love.timer.getTime()
+
+        -- Se já está ativo, não fazer nada (não resetar timer)
+        if shield_active then
+            print("[Client] Shield already active")
+            return
+        end
+
+        -- Ativar escudo localmente e enviar ao servidor
+        shield_active = true
+        shield_start_time = love.timer.getTime()
+        shield_capacity_remaining = SHIELD_CAPACITY
+
+        loci.send_action(SHIELD_ABILITY_ID, 0, 0)
+        print("[Client] Shield activated")
     elseif key == "space" then
         -- Verificar se o jogador está morto
         local me = loci.get_my_entity()
@@ -166,8 +432,7 @@ function love.keypressed(key)
         local sw, sh = GAME_WIDTH, GAME_HEIGHT
         local world_target_x = (mx - sw / 2) + cam_x
         local world_target_y = (my - sh / 2) + cam_y
-        
-        local me = loci.get_my_entity()
+
         local origin_x = me and (me.x * VISUAL_SCALE) or cam_x
         local origin_y = me and (me.y * VISUAL_SCALE) or cam_y
         local dir_x = world_target_x - origin_x
@@ -179,7 +444,9 @@ function love.keypressed(key)
             dir_x, dir_y = 1, 0
         end
 
-        loci.send_action(1, dir_x, dir_y)
+        -- Spawnar projétil (ele se move e verifica colisão frame a frame)
+        spawn_projectile(origin_x, origin_y, dir_x, dir_y, me and me.id)
+        print("[Client] Projectile spawned at (" .. origin_x .. ", " .. origin_y .. ") direction (" .. dir_x .. ", " .. dir_y .. ")")
     end
 end
 
@@ -216,6 +483,12 @@ function love.draw()
         love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
     end
 
+    -- Draw projectiles
+    love.graphics.setColor(1, 0.5, 0.2, 1)
+    for _, proj in ipairs(projectiles) do
+        love.graphics.circle("fill", proj.x, proj.y, 3)
+    end
+
     -- Draw all network entities
     local my_entity = loci.get_my_entity()
     local entities = loci.get_entities()
@@ -228,17 +501,19 @@ function love.draw()
     -- 2. HUD & UI Layer
     draw_hud(sw, sh, my_entity)
 
-    -- 3. KDA UI
+    -- 3. Spectator mode indicator
+    if spectator_mode then
+        love.graphics.setColor(1, 0.5, 0.2, 0.9)
+        love.graphics.setFont(font_spectator)
+        love.graphics.print("SPECTATOR MODE", sw / 2 - 80, 30)
+    end
+
+    -- 5. KDA UI
     kda_ui.draw(entities, my_entity)
 
     -- 4. Debug Overlay
     if show_debug_overlay then
         draw_debug(sw, sh)
-    end
-
-    -- 4. Character Sheet Overlay (C)
-    if show_character_sheet then
-        draw_character_sheet(sw, sh, my_entity)
     end
 
     push:finish()
@@ -293,16 +568,24 @@ function draw_entity(ent, is_me)
 
     -- Verificar se está morto
     local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
+    local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
+
+    -- Verificar se está com escudo ativo
+    local is_shielded = ent.properties and ent.properties["is_shielded"] == "true"
 
     if is_me then
         if is_dead then
-            love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro
+            love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro quando morto
+        elseif is_shielded then
+            love.graphics.setColor(0.4, 0.8, 1.0, 1)  -- Azul claro quando com escudo
         else
             love.graphics.setColor(0.2, 0.6, 1.0, 1)
         end
     else
         if is_dead then
-            love.graphics.setColor(0.4, 0.2, 0.2, 1)  -- Vermelho escuro
+            love.graphics.setColor(0.4, 0.2, 0.2, 1)  -- Vermelho escuro quando morto
+        elseif is_shielded then
+            love.graphics.setColor(1.0, 0.6, 0.4, 1)  -- Laranja quando inimigo com escudo
         else
             love.graphics.setColor(0.9, 0.3, 0.3, 1)
         end
@@ -321,8 +604,14 @@ function draw_entity(ent, is_me)
         love.graphics.line(px + radius/2, py - radius/2, px - radius/2, py + radius/2)
     end
 
+    -- Se com escudo, desenhar aura de escudo
+    if is_shielded and not is_dead then
+        love.graphics.setColor(0.4, 0.8, 1.0, 0.4)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", px, py, radius + 6)
+    end
+
     -- HP Bar
-    local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
     local max_hp = tonumber(ent.max_hp or (ent.properties and ent.properties["max_hp"]) or 100) or 100
     local bar_w = 44
     local bar_h = 5
@@ -335,17 +624,25 @@ function draw_entity(ent, is_me)
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w * (math.max(0, math.min(1, hp / max_hp))), bar_h)
 
     -- Player label
+    love.graphics.setFont(font_entity)
     love.graphics.setColor(1, 1, 1, 0.95)
     local label = is_me and "YOU" or ("P" .. tostring(ent.id))
     if is_dead then
         label = label .. " (DEAD)"
+    elseif is_shielded then
+        label = label .. " [SHIELD]"
     end
     local font = love.graphics.getFont()
     local tw = font:getWidth(label)
     love.graphics.print(label, px - tw / 2, py - 7)
+
+    -- Restaurar fonte padrão
+    love.graphics.setFont(font_default)
 end
 
 function draw_hud(sw, sh, my_entity)
+    love.graphics.setFont(font_hud)
+
     love.graphics.setColor(0, 0, 0, 0.55)
     love.graphics.rectangle("fill", 10, 10, 360, 55, 6, 6)
 
@@ -355,15 +652,73 @@ function draw_hud(sw, sh, my_entity)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Move  |  Space: Action  |  C: Atributos  |  F3: Debug", 20, sh - 28)
+    love.graphics.print("WASD: Move  |  Space: Shoot  |  E: Shield  |  F3: Debug", 20, sh - 28)
+
+    -- Verificar se o jogador está vivo antes de desenhar UI do escudo
+    local is_dead = my_entity and (my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true"))
+
+    -- UI do Escudo (só desenhar se estiver vivo)
+    if not is_dead then
+        local shield_y = sh - 80
+        if shield_active then
+            -- Escudo ativo - mostrar capacidade restante e tempo restante
+            local shield_elapsed = love.timer.getTime() - shield_start_time
+            local shield_remaining = math.max(0, SHIELD_DURATION - shield_elapsed)
+            local shield_capacity = shield_capacity_remaining
+
+            love.graphics.setColor(0, 0, 0, 0.7)
+            love.graphics.rectangle("fill", 20, shield_y, 200, 50, 6, 6)
+
+            love.graphics.setColor(0.4, 0.8, 1.0, 1)
+            love.graphics.print("SHIELD ACTIVE", 30, shield_y + 8)
+            love.graphics.print("Cap: " .. shield_capacity .. "/" .. SHIELD_MAX_CAPACITY, 30, shield_y + 28)
+            love.graphics.print("Time: " .. string.format("%.1f", shield_remaining) .. "s", 120, shield_y + 28)
+
+            -- Barra de capacidade
+            love.graphics.setColor(0, 0, 0, 0.5)
+            love.graphics.rectangle("fill", 20, shield_y + 48, 200, 8)
+            love.graphics.setColor(0.4, 0.8, 1.0, 0.8)
+            love.graphics.rectangle("fill", 20, shield_y + 48, 200 * (shield_capacity / SHIELD_MAX_CAPACITY), 8)
+        elseif shield_cooldown_end > 0 and love.timer.getTime() < shield_cooldown_end then
+            -- Escudo em cooldown
+            local cooldown_remaining = shield_cooldown_end - love.timer.getTime()
+            local cooldown_progress = 1 - (cooldown_remaining / SHIELD_COOLDOWN)
+
+            love.graphics.setColor(0, 0, 0, 0.7)
+            love.graphics.rectangle("fill", 20, shield_y, 200, 40, 6, 6)
+
+            love.graphics.setColor(0.8, 0.4, 0.4, 1)
+            love.graphics.print("SHIELD COOLDOWN", 30, shield_y + 8)
+            love.graphics.print(string.format("%.1f", cooldown_remaining) .. "s", 160, shield_y + 8)
+
+            -- Barra de cooldown (preenchendo da esquerda para direita)
+            love.graphics.setColor(0, 0, 0, 0.5)
+            love.graphics.rectangle("fill", 20, shield_y + 28, 200, 8)
+            love.graphics.setColor(0.8, 0.4, 0.4, 0.8)
+            love.graphics.rectangle("fill", 20, shield_y + 28, 200 * cooldown_progress, 8)
+        else
+            -- Escudo pronto
+            love.graphics.setColor(0, 0, 0, 0.7)
+            love.graphics.rectangle("fill", 20, shield_y, 200, 30, 6, 6)
+
+            love.graphics.setColor(0.4, 1.0, 0.4, 1)
+            love.graphics.print("SHIELD READY", 30, shield_y + 8)
+            love.graphics.print("[E]", 140, shield_y + 8)
+        end
+    end
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
         love.graphics.printf(rejection_msg, 0, 80, sw, "center")
     end
+
+    -- Restaurar fonte padrão
+    love.graphics.setFont(font_default)
 end
 
 function draw_debug(sw, sh)
+    love.graphics.setFont(font_hud)
+
     love.graphics.setColor(0, 0, 0, 0.75)
     love.graphics.rectangle("fill", sw - 240, 10, 230, 120, 6, 6)
 
@@ -379,122 +734,9 @@ function draw_debug(sw, sh)
     if me then
         love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 100)
     end
-end
 
-function draw_character_sheet(sw, sh, my_entity)
-    if not my_entity then return end
-
-    local x = 10
-    local y = 75
-    local w = 330
-    local h = 335
-
-    -- Background panel
-    love.graphics.setColor(0.07, 0.09, 0.14, 0.92)
-    love.graphics.rectangle("fill", x, y, w, h, 8, 8)
-
-    -- Border
-    love.graphics.setColor(0.28, 0.45, 0.72, 0.8)
-    love.graphics.setLineWidth(1.5)
-    love.graphics.rectangle("line", x, y, w, h, 8, 8)
-
-    -- Header bar
-    love.graphics.setColor(0.14, 0.19, 0.28, 0.95)
-    love.graphics.rectangle("fill", x + 1, y + 1, w - 2, 32, 7, 7)
-
-    love.graphics.setColor(1.0, 0.85, 0.35, 1.0)
-    local name = tostring(my_entity:get("character_name", my_entity.name or "Herói"))
-    local role = string.upper(tostring(my_entity:get("role", "FIGHTER")))
-    love.graphics.print(string.format("%s [%s]", name, role), x + 14, y + 9)
-
-    love.graphics.setColor(0.65, 0.75, 0.9, 0.8)
-    love.graphics.print("[C] Fechar", x + w - 75, y + 9)
-
-    -- Atributos da entidade
-    local hp = tonumber(my_entity:get("hp", 100)) or 100
-    local max_hp = tonumber(my_entity:get("max_hp", 100)) or 100
-    local mana = tonumber(my_entity:get("mana", 100)) or 100
-    local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
-    local phys_def = tonumber(my_entity:get("phys_def", 0)) or 0
-    local mag_def = tonumber(my_entity:get("mag_def", 0)) or 0
-    local move_speed = tonumber(my_entity:get("move_speed", 3.0)) or 3.0
-    local hp_regen = tonumber(my_entity:get("hp_regen", 0)) or 0
-    local mana_regen = tonumber(my_entity:get("mana_regen", 0)) or 0
-    local fragile = tostring(my_entity:get("fragile", "0")) == "1"
-    local skills_list = tostring(my_entity:get("skills_list", "-"))
-
-    local cur_y = y + 44
-
-    -- Barra de Vida (HP)
-    love.graphics.setColor(0.85, 0.9, 0.95, 1)
-    love.graphics.print(string.format("Vida: %d / %d", hp, max_hp), x + 14, cur_y)
-    cur_y = cur_y + 16
-    local hp_pct = math.max(0, math.min(1, max_hp > 0 and (hp / max_hp) or 0))
-    love.graphics.setColor(0.12, 0.14, 0.18, 1)
-    love.graphics.rectangle("fill", x + 14, cur_y, w - 28, 10, 3, 3)
-    love.graphics.setColor(0.2, 0.85, 0.35, 1)
-    love.graphics.rectangle("fill", x + 14, cur_y, (w - 28) * hp_pct, 10, 3, 3)
-    cur_y = cur_y + 18
-
-    -- Barra de Mana
-    love.graphics.setColor(0.85, 0.9, 0.95, 1)
-    love.graphics.print(string.format("Mana: %d / %d", mana, max_mana), x + 14, cur_y)
-    cur_y = cur_y + 16
-    local mana_pct = math.max(0, math.min(1, max_mana > 0 and (mana / max_mana) or 0))
-    love.graphics.setColor(0.12, 0.14, 0.18, 1)
-    love.graphics.rectangle("fill", x + 14, cur_y, w - 28, 10, 3, 3)
-    love.graphics.setColor(0.25, 0.60, 0.95, 1)
-    love.graphics.rectangle("fill", x + 14, cur_y, (w - 28) * mana_pct, 10, 3, 3)
-    cur_y = cur_y + 20
-
-    -- Linha separadora
-    love.graphics.setColor(0.25, 0.32, 0.45, 0.6)
-    love.graphics.line(x + 14, cur_y, x + w - 14, cur_y)
-    cur_y = cur_y + 10
-
-    -- Mitigações e Defesas
-    local phys_mit = (phys_def / (phys_def + 100)) * 100
-    local mag_mit = (mag_def / (mag_def + 100)) * 100
-
-    love.graphics.setColor(0.9, 0.7, 0.4, 1)
-    love.graphics.print("Defesa Física:", x + 14, cur_y)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("%d (%.1f%% mitig.)", phys_def, phys_mit), x + 135, cur_y)
-    cur_y = cur_y + 20
-
-    love.graphics.setColor(0.6, 0.8, 1.0, 1)
-    love.graphics.print("Defesa Mágica:", x + 14, cur_y)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("%d (%.1f%% mitig.)", mag_def, mag_mit), x + 135, cur_y)
-    cur_y = cur_y + 20
-
-    love.graphics.setColor(0.7, 0.9, 0.7, 1)
-    love.graphics.print("Velocidade:", x + 14, cur_y)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("%.1f px/tick", move_speed), x + 135, cur_y)
-    cur_y = cur_y + 20
-
-    love.graphics.setColor(0.8, 0.85, 0.95, 1)
-    love.graphics.print("Regeneração:", x + 14, cur_y)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("+%d HP/s | +%d MP/s", hp_regen, mana_regen), x + 135, cur_y)
-    cur_y = cur_y + 20
-
-    -- Habilidades equipadas
-    love.graphics.setColor(1.0, 0.85, 0.35, 1)
-    love.graphics.print("Habilidade [Espaço]:", x + 14, cur_y)
-    love.graphics.setColor(0.9, 0.9, 0.9, 1)
-    love.graphics.print(skills_list, x + 160, cur_y)
-    cur_y = cur_y + 22
-
-    -- Status de combate
-    if fragile then
-        love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
-        love.graphics.print("STATUS: FRÁGIL (+30% dano)", x + 14, cur_y)
-    else
-        love.graphics.setColor(0.4, 0.85, 0.5, 0.9)
-        love.graphics.print("STATUS: NORMAL", x + 14, cur_y)
-    end
+    -- Restaurar fonte padrão
+    love.graphics.setFont(font_default)
 end
 
 function love.quit()
