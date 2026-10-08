@@ -5,6 +5,7 @@
 -- Movement speed in units per tick.
 -- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
 local SPEED = 3.0
+local _player_join_count = 0
 
 -- =============================================================================
 -- Module Loader Polyfill (require)
@@ -60,8 +61,10 @@ function on_player_join(entity_id)
     Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
     
     -- Inicializa propriedades básicas de match
-    -- Atribui cada jogador a um time único (Free For All) para que habilidades causem dano
-    Loci.Commands.set_property(entity_id, "team", tostring(entity_id))
+    -- Aloca jogadores em times de forma intercalada (Time 1 e Time 2)
+    _player_join_count = _player_join_count + 1
+    local team_id = tostring((_player_join_count % 2 == 1) and 1 or 2)
+    Loci.Commands.set_property(entity_id, "team", team_id)
     Loci.Commands.set_property(entity_id, "score", "0")
     Loci.Commands.set_property(entity_id, "kills", "0")
     Loci.Commands.set_property(entity_id, "deaths", "0")
@@ -81,6 +84,12 @@ function on_move_intent(entity_id, dir_x, dir_y)
         -- Cancel velocity during paralysis
         Loci.Commands.set_velocity(entity_id, {x = 0, y = 0})
         return false, "Personagem paralisado por choque térmico/emocional."
+    end
+
+    local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
+    if CharacterFactory.get_current_tick() < stunned_until then
+        Loci.Commands.set_velocity(entity_id, {x = 0, y = 0})
+        return false, "Personagem atordoado (Stun)."
     end
 
     -- Normalize movement vector so diagonal movement doesn't provide a speed boost
@@ -110,6 +119,16 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
     local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
     if CharacterFactory.get_current_tick() < paralyzed_until then
         return false, "Personagem paralisado por choque térmico/emocional."
+    end
+
+    local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
+    if CharacterFactory.get_current_tick() < stunned_until then
+        return false, "Personagem atordoado (Stun)."
+    end
+
+    local disarmed_until = tonumber(Loci.get_entity_property(entity_id, "disarmed_until")) or 0
+    if CharacterFactory.get_current_tick() < disarmed_until then
+        return false, "Personagem desarmado (sem espada)."
     end
 
     -- Busca a habilidade equipada no slot correspondente ao ability_id
