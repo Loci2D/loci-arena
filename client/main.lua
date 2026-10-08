@@ -136,57 +136,24 @@ function love.update(dt)
     if my_entity then
         update_movement()
 
-        -- Processar ação do botão virtual (habilidade 1)
-        if virtual_joystick.is_skill_1_active() then
-            -- Verificar se o jogador está morto
-            local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
+        -- Processar habilidades dos botões virtuais (slots 1 a 4)
+        local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
+        if not is_dead then
+            local now = love.timer.getTime()
+            for slot = 1, 4 do
+                if virtual_joystick.is_skill_active(slot) and virtual_joystick.can_trigger_skill(slot, now) then
+                    virtual_joystick.trigger_skill(slot, now)
 
-            if not is_dead and virtual_joystick.can_trigger_skill_1(love.timer.getTime()) then
-                virtual_joystick.trigger_skill_1(love.timer.getTime())
+                    -- Usar a direção do joystick de movimento, ou direção padrão se parado
+                    local action_dx, action_dy = virtual_joystick.get_move_vector()
+                    if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
+                        action_dx, action_dy = 0, -1
+                    end
 
-                -- Usar a direção do joystick de movimento, ou direção padrão se não estiver movendo
-                local action_dx, action_dy = virtual_joystick.get_move_vector()
-                if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
-                    -- Se não estiver movendo, usar direção para frente (para cima)
-                    action_dx, action_dy = 0, -1
+                    loci.send_action(slot, action_dx, action_dy)
+                    skill_message = "habilidade " .. slot
+                    skill_message_timer = 1.0
                 end
-
-                loci.send_action(1, action_dx, action_dy)
-                skill_message = "habilidade 1"
-                skill_message_timer = 1.0
-            end
-        end
-
-        -- Processar habilidade 2
-        if virtual_joystick.is_skill_2_active() then
-            local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
-
-            if not is_dead and virtual_joystick.can_trigger_skill_2(love.timer.getTime()) then
-                virtual_joystick.trigger_skill_2(love.timer.getTime())
-                skill_message = "habilidade 2"
-                skill_message_timer = 1.0
-            end
-        end
-
-        -- Processar habilidade 3
-        if virtual_joystick.is_skill_3_active() then
-            local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
-
-            if not is_dead and virtual_joystick.can_trigger_skill_3(love.timer.getTime()) then
-                virtual_joystick.trigger_skill_3(love.timer.getTime())
-                skill_message = "habilidade 3"
-                skill_message_timer = 1.0
-            end
-        end
-
-        -- Processar habilidade 4
-        if virtual_joystick.is_skill_4_active() then
-            local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
-
-            if not is_dead and virtual_joystick.can_trigger_skill_4(love.timer.getTime()) then
-                virtual_joystick.trigger_skill_4(love.timer.getTime())
-                skill_message = "habilidade 4"
-                skill_message_timer = 1.0
             end
         end
         
