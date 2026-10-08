@@ -50,14 +50,81 @@ end
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("default_arena.systems.character_factory")
 local RespawnSystem = require("default_arena.respawn_system")
+local ProjectileSystem = require("default_arena.projectile_system")
+
+-- =============================================================================
+-- Obstacle System
+-- Spawns static collision obstacles when the first player joins.
+-- =============================================================================
+local obstacles_spawned = false
+
+-- Obstacle layout: {x, y, radius}
+-- Arena is [-500, +500] in both axes.
+local OBSTACLE_DEFS = {
+    -- Four corner clusters
+    { x = -300, y = -300, radius = 30 },
+    { x = -260, y = -280, radius = 22 },
+    { x =  300, y = -300, radius = 30 },
+    { x =  265, y = -270, radius = 22 },
+    { x = -300, y =  300, radius = 30 },
+    { x = -270, y =  265, radius = 22 },
+    { x =  300, y =  300, radius = 30 },
+    { x =  270, y =  270, radius = 22 },
+
+    -- Central pillar cross
+    { x =    0, y =    0, radius = 28 },
+    { x =  -80, y =    0, radius = 20 },
+    { x =   80, y =    0, radius = 20 },
+    { x =    0, y =  -80, radius = 20 },
+    { x =    0, y =   80, radius = 20 },
+
+    -- Mid-lane rocks (horizontal)
+    { x = -180, y =  -30, radius = 24 },
+    { x =  180, y =   30, radius = 24 },
+    { x = -180, y =  150, radius = 20 },
+    { x =  180, y = -150, radius = 20 },
+
+    -- Scattered singles
+    { x =  -50, y = -200, radius = 18 },
+    { x =   60, y =  210, radius = 18 },
+    { x = -230, y =   50, radius = 22 },
+    { x =  230, y =  -55, radius = 22 },
+    { x =  120, y = -340, radius = 26 },
+    { x = -130, y =  340, radius = 26 },
+}
+
+local function spawn_obstacles()
+    if obstacles_spawned then return end
+    obstacles_spawned = true
+
+    for i, def in ipairs(OBSTACLE_DEFS) do
+        Loci.Commands.spawn_entity({
+            blueprint    = "Obstacle",
+            position     = { x = def.x, y = def.y },
+            entity_type  = "Static",
+            move_speed   = 0,
+            radius       = def.radius,
+            properties   = {
+                obstacle_id = tostring(i),
+                radius      = tostring(def.radius),
+            }
+        })
+    end
+
+    Loci.Log.info(string.format("[Arena] Spawned %d obstacles", #OBSTACLE_DEFS))
+end
 
 function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
+    ProjectileSystem.update_tick(current_tick)
 end
 
 function on_player_join(entity_id)
     Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
+
+    -- Spawn map obstacles once on first join
+    spawn_obstacles()
     
     -- Inicializa propriedades básicas de match
     -- Atribui cada jogador a um time único (Free For All) para que habilidades causem dano
@@ -67,20 +134,13 @@ function on_player_join(entity_id)
     Loci.Commands.set_property(entity_id, "deaths", "0")
     Loci.Commands.set_property(entity_id, "is_dead", "false")
 
-    -- Instancia o personagem (agora definido como Arya para teste)
-    CharacterFactory.create_character(entity_id, "arya")
+    -- Instancia o personagem (por padrão warrior, pode ser alternado ou selecionado pelo cliente)
+    CharacterFactory.create_character(entity_id, "warrior")
 end
 
 function on_move_intent(entity_id, dir_x, dir_y)
     if RespawnSystem.is_dead(entity_id) then
         return false, "Você está morto"
-    end
-
-    local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
-    if CharacterFactory.get_current_tick() < paralyzed_until then
-        -- Cancel velocity during paralysis
-        Loci.Commands.set_velocity(entity_id, {x = 0, y = 0})
-        return false, "Personagem paralisado por choque térmico/emocional."
     end
 
     -- Normalize movement vector so diagonal movement doesn't provide a speed boost
@@ -105,11 +165,6 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
     
     if RespawnSystem.is_dead(entity_id) then
         return false, "Você está morto"
-    end
-
-    local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
-    if CharacterFactory.get_current_tick() < paralyzed_until then
-        return false, "Personagem paralisado por choque térmico/emocional."
     end
 
     -- Busca a habilidade equipada no slot correspondente ao ability_id

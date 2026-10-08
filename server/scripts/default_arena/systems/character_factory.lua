@@ -47,9 +47,6 @@ function CharacterFactory.update_tick(tick)
             end
         end
     end
-    
-    -- Check for paralysis expiration (for visual/client purposes if needed)
-    -- Actually, it's easier to just check it lazily when moving/attacking.
 end
 
 function CharacterFactory.get_current_tick()
@@ -173,32 +170,6 @@ function CharacterFactory.on_entity_remove(entity_id)
     end
 end
 
--- Hook chamado quando uma entidade morre para processar passivas
-function CharacterFactory.on_entity_die(dead_entity_id)
-    local dead_team = Loci.get_entity_property(dead_entity_id, "team")
-    
-    for i = 1, #active_entities do
-        local entity_id = active_entities[i]
-        local is_dead = Loci.get_entity_property(entity_id, "is_dead") == "true"
-        
-        if not is_dead and entity_id ~= dead_entity_id then
-            local team = Loci.get_entity_property(entity_id, "team")
-            local char_name = Loci.get_entity_property(entity_id, "character_name")
-            
-            -- Passiva da Arya: Protetora Tática / Adrenalina
-            if char_name == "Arya" and team == dead_team then
-                -- 1 segundo de paralisia = 30 ticks
-                Loci.Commands.set_property(entity_id, "paralyzed_until", tostring(current_tick + 30))
-                -- Ativa a Fúria
-                Loci.Commands.set_property(entity_id, "fury_active", "true")
-                if Loci and Loci.Log then
-                    Loci.Log.info("[Arya] Aliado morreu! " .. tostring(entity_id) .. " em choque térmico/emocional por 1s. Fúria ativada.")
-                end
-            end
-        end
-    end
-end
-
 -- Valida se a entidade possui a habilidade
 function CharacterFactory.has_skill(entity_id, skill_name)
     local list_str = Loci.get_entity_property(entity_id, "skills_list")
@@ -233,9 +204,10 @@ function CharacterFactory.can_cast(entity_id, skill_data)
     end
 
     local mana = tonumber(Loci.get_entity_property(entity_id, "mana") or "0") or 0
-    if skill_data.mana_cost and mana < skill_data.mana_cost then
-        return false, "Insufficient mana"
-    end
+    -- Comentado para testes - mana infinita
+    -- if skill_data.mana_cost and mana < skill_data.mana_cost then
+    --     return false, "Insufficient mana"
+    -- end
 
     local cooldowns = entity_cooldowns[entity_id]
     if cooldowns and cooldowns[skill_data.id] then
