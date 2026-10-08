@@ -31,8 +31,6 @@ local rejection_timer = 0
 local visual_fx = {}
 local show_debug_overlay = false
 local show_character_sheet = false
-local skill_message = ""
-local skill_message_timer = 0
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
@@ -53,6 +51,9 @@ function love.load(arg)
         resizable = true,
         pixelperfect = false
     })
+
+    -- Inicializar posições dos controles virtuais para a resolução do jogo
+    virtual_joystick.update_with_game_dimensions(GAME_WIDTH, GAME_HEIGHT)
 
     local random_suffix = tostring(love.math and love.math.random(1000, 9999) or math.random(1000, 9999))
     local player_name = "Player_" .. random_suffix
@@ -129,9 +130,6 @@ function love.update(dt)
     -- Process incoming network packets and smooth entity interpolation
     loci.update(dt)
     
-    -- Atualizar joysticks virtuais com dimensões do jogo
-    virtual_joystick.update_with_game_dimensions(GAME_WIDTH, GAME_HEIGHT)
-    
     local my_entity = loci.get_my_entity()
     if my_entity then
         update_movement()
@@ -151,8 +149,6 @@ function love.update(dt)
                     end
 
                     loci.send_action(slot, action_dx, action_dy)
-                    skill_message = "habilidade " .. slot
-                    skill_message_timer = 1.0
                 end
             end
         end
@@ -165,11 +161,6 @@ function love.update(dt)
     -- Update rejection message timer
     if rejection_timer > 0 then
         rejection_timer = rejection_timer - dt
-    end
-
-    -- Update skill message timer
-    if skill_message_timer > 0 then
-        skill_message_timer = skill_message_timer - dt
     end
 
     -- Update visual effects
@@ -446,11 +437,6 @@ function draw_hud(sw, sh, my_entity)
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
         love.graphics.printf(rejection_msg, 0, 80, sw, "center")
-    end
-
-    if skill_message_timer > 0 then
-        love.graphics.setColor(0.3, 0.9, 0.5, 0.95)
-        love.graphics.printf(skill_message, 0, 120, sw, "center")
     end
 end
 
