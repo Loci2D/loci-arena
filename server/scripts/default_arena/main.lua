@@ -83,6 +83,12 @@ function on_move_intent(entity_id, dir_x, dir_y)
         return false, "Personagem paralisado por choque térmico/emocional."
     end
 
+    local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
+    if CharacterFactory.get_current_tick() < stunned_until then
+        Loci.Commands.set_velocity(entity_id, {x = 0, y = 0})
+        return false, "Personagem atordoado (Stun)."
+    end
+
     -- Normalize movement vector so diagonal movement doesn't provide a speed boost
     local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
     if len > 0 then
@@ -110,6 +116,16 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
     local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
     if CharacterFactory.get_current_tick() < paralyzed_until then
         return false, "Personagem paralisado por choque térmico/emocional."
+    end
+
+    local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
+    if CharacterFactory.get_current_tick() < stunned_until then
+        return false, "Personagem atordoado (Stun)."
+    end
+
+    local disarmed_until = tonumber(Loci.get_entity_property(entity_id, "disarmed_until")) or 0
+    if CharacterFactory.get_current_tick() < disarmed_until then
+        return false, "Personagem desarmado (sem espada)."
     end
 
     -- Busca a habilidade equipada no slot correspondente ao ability_id
