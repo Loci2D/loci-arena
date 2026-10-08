@@ -67,13 +67,20 @@ function on_player_join(entity_id)
     Loci.Commands.set_property(entity_id, "deaths", "0")
     Loci.Commands.set_property(entity_id, "is_dead", "false")
 
-    -- Instancia o personagem (por padrão warrior, pode ser alternado ou selecionado pelo cliente)
-    CharacterFactory.create_character(entity_id, "warrior")
+    -- Instancia o personagem (agora definido como Arya para teste)
+    CharacterFactory.create_character(entity_id, "arya")
 end
 
 function on_move_intent(entity_id, dir_x, dir_y)
     if RespawnSystem.is_dead(entity_id) then
         return false, "Você está morto"
+    end
+
+    local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
+    if CharacterFactory.get_current_tick() < paralyzed_until then
+        -- Cancel velocity during paralysis
+        Loci.Commands.set_velocity(entity_id, {x = 0, y = 0})
+        return false, "Personagem paralisado por choque térmico/emocional."
     end
 
     -- Normalize movement vector so diagonal movement doesn't provide a speed boost
@@ -98,6 +105,11 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
     
     if RespawnSystem.is_dead(entity_id) then
         return false, "Você está morto"
+    end
+
+    local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
+    if CharacterFactory.get_current_tick() < paralyzed_until then
+        return false, "Personagem paralisado por choque térmico/emocional."
     end
 
     -- Busca a habilidade equipada no slot correspondente ao ability_id
