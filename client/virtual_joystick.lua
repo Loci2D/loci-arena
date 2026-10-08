@@ -340,6 +340,17 @@ for slot = 1, 4 do
     VirtualJoystick["trigger_skill_" .. slot] = function(t) return VirtualJoystick.trigger_skill(slot, t) end
 end
 
+function VirtualJoystick.reset()
+    move_joystick.active = false
+    move_joystick.touch_id = nil
+    move_joystick.dx = 0
+    move_joystick.dy = 0
+    for _, btn in ipairs(skill_buttons) do
+        btn.active = false
+        btn.touch_id = nil
+    end
+end
+
 function VirtualJoystick.draw()
     move_joystick:draw()
     for _, btn in ipairs(skill_buttons) do
