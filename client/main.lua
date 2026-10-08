@@ -88,14 +88,21 @@ function love.load(arg)
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
+        local lifetime = 0.35
+        if ability_id == 3 then
+            lifetime = 0.45 -- Whirlwind Dash
+        elseif ability_id == 4 then
+            lifetime = 0.60 -- Blade Throw
+        end
+
         table.insert(visual_fx, {
             x = entity and entity.x or 0,
             y = entity and entity.y or 0,
             dir_x = dir_x,
             dir_y = dir_y,
             ability_id = ability_id,
-            lifetime = 0.35,
-            max_lifetime = 0.35
+            lifetime = lifetime,
+            max_lifetime = lifetime
         })
     end
 
@@ -177,6 +184,35 @@ function love.resize(w, h)
     push:resize(w, h)
 end
 
+local function cast_ability_at_mouse(ability_id)
+    local me = loci.get_my_entity()
+    local is_dead = me and (me.is_dead or (me.properties and me.properties["is_dead"] == "true"))
+    if is_dead then
+        print("[Client] Cannot cast - you are dead!")
+        return
+    end
+
+    local mx, my = push:toGame(love.mouse.getPosition())
+    if not mx then return end
+
+    local sw, sh = GAME_WIDTH, GAME_HEIGHT
+    local world_target_x = (mx - sw / 2) + cam_x
+    local world_target_y = (my - sh / 2) + cam_y
+    
+    local origin_x = me and (me.x * VISUAL_SCALE) or cam_x
+    local origin_y = me and (me.y * VISUAL_SCALE) or cam_y
+    local dir_x = world_target_x - origin_x
+    local dir_y = world_target_y - origin_y
+    local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
+    if len > 0 then
+        dir_x, dir_y = dir_x / len, dir_y / len
+    else
+        dir_x, dir_y = 1, 0
+    end
+
+    loci.send_action(ability_id, dir_x, dir_y)
+end
+
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
@@ -189,36 +225,14 @@ function love.keypressed(key)
         end
     elseif key == "tab" then
         kda_ui.show()
-    elseif key == "space" then
-        -- Verificar se o jogador está morto
-        local me = loci.get_my_entity()
-        local is_dead = me and (me.is_dead or (me.properties and me.properties["is_dead"] == "true"))
-        if is_dead then
-            print("[Client] Cannot shoot - you are dead!")
-            return
-        end
-
-        -- Primary action intent directed toward mouse cursor
-        local mx, my = push:toGame(love.mouse.getPosition())
-        if not mx then return end
-
-        local sw, sh = GAME_WIDTH, GAME_HEIGHT
-        local world_target_x = (mx - sw / 2) + cam_x
-        local world_target_y = (my - sh / 2) + cam_y
-        
-        local me = loci.get_my_entity()
-        local origin_x = me and (me.x * VISUAL_SCALE) or cam_x
-        local origin_y = me and (me.y * VISUAL_SCALE) or cam_y
-        local dir_x = world_target_x - origin_x
-        local dir_y = world_target_y - origin_y
-        local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
-        if len > 0 then
-            dir_x, dir_y = dir_x / len, dir_y / len
-        else
-            dir_x, dir_y = 1, 0
-        end
-
-        loci.send_action(1, dir_x, dir_y)
+    elseif key == "space" or key == "1" then
+        cast_ability_at_mouse(1)
+    elseif key == "2" or key == "q" then
+        cast_ability_at_mouse(2)
+    elseif key == "3" or key == "e" then
+        cast_ability_at_mouse(3)
+    elseif key == "4" or key == "r" then
+        cast_ability_at_mouse(4)
     end
 end
 
@@ -287,16 +301,85 @@ function love.draw()
     -- Draw background grid & physical collision boundaries
     draw_arena_grid()
 
-    -- Draw transient visual effects
+    -- Draw transient visual effects (Animações e Áreas de Contato)
     for _, fx in ipairs(visual_fx) do
         local progress = fx.lifetime / fx.max_lifetime
-        love.graphics.setColor(1, 0.85, 0.2, progress)
+        local inv_prog = 1.0 - progress
         local fx_start_x = fx.x * VISUAL_SCALE
         local fx_start_y = fx.y * VISUAL_SCALE
-        local fx_end_x = fx_start_x + fx.dir_x * 50 * VISUAL_SCALE
-        local fx_end_y = fx_start_y + fx.dir_y * 50 * VISUAL_SCALE
-        love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
-        love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
+
+        if fx.ability_id == 1 then
+            -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro
+            local angle = math.atan2(fx.dir_y, fx.dir_x)
+            local radius = 45 * (0.8 + 0.4 * inv_prog)
+            love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
+            love.graphics.setLineWidth(4)
+            love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius, angle - 0.8, angle + 0.8)
+            love.graphics.setColor(0.3, 0.7, 1.0, progress * 0.5)
+            love.graphics.setLineWidth(8)
+            love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
+
+        elseif fx.ability_id == 2 then
+            -- Skill 2 (Fury Reward): Impacto carmesim/fogo com onda de choque
+            local hit_x = fx_start_x + fx.dir_x * 40 * VISUAL_SCALE
+            local hit_y = fx_start_y + fx.dir_y * 40 * VISUAL_SCALE
+            local r = 50 * (0.5 + 0.8 * inv_prog)
+            love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
+            love.graphics.setLineWidth(3)
+            love.graphics.circle("line", hit_x, hit_y, r)
+            love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
+            love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
+
+        elseif fx.ability_id == 3 then
+            -- Skill 3 (Whirlwind Dash): Círculo 360º de corte giratório dourado com lâminas
+            local r = 65 * (0.7 + 0.5 * inv_prog)
+            local spin_angle = inv_prog * math.pi * 5
+            love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
+            love.graphics.setLineWidth(3)
+            love.graphics.circle("line", fx_start_x, fx_start_y, r)
+            love.graphics.setColor(1.0, 0.9, 0.5, progress * 0.6)
+            for i = 0, 3 do
+                local a = spin_angle + (i * math.pi / 2)
+                love.graphics.line(
+                    fx_start_x, fx_start_y,
+                    fx_start_x + math.cos(a) * r,
+                    fx_start_y + math.sin(a) * r
+                )
+            end
+
+        elseif fx.ability_id == 4 then
+            -- Skill 4 (Blade Throw): Espada viajando até o alvo + impacto expansivo de Stun
+            local max_dist = 260
+            local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
+            local blade_x = fx_start_x + fx.dir_x * travel_dist
+            local blade_y = fx_start_y + fx.dir_y * travel_dist
+            
+            -- Rastro de energia do arremesso
+            love.graphics.setColor(0.4, 0.8, 1.0, progress * 0.7)
+            love.graphics.setLineWidth(2)
+            love.graphics.line(fx_start_x, fx_start_y, blade_x, blade_y)
+
+            -- Lâmina em voo
+            love.graphics.setColor(1.0, 1.0, 1.0, progress)
+            love.graphics.circle("fill", blade_x, blade_y, 7)
+            love.graphics.setColor(0.2, 0.6, 1.0, progress)
+            love.graphics.circle("line", blade_x, blade_y, 7)
+
+            -- Onda de choque de Stun na área de impacto
+            if inv_prog > 0.45 then
+                local shock_r = 55 * ((inv_prog - 0.45) / 0.55)
+                love.graphics.setColor(1.0, 0.9, 0.2, progress * 0.9)
+                love.graphics.setLineWidth(3)
+                love.graphics.circle("line", blade_x, blade_y, shock_r)
+            end
+        else
+            -- Efeito padrão
+            local fx_end_x = fx_start_x + fx.dir_x * 50 * VISUAL_SCALE
+            local fx_end_y = fx_start_y + fx.dir_y * 50 * VISUAL_SCALE
+            love.graphics.setColor(1, 0.85, 0.2, progress)
+            love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
+            love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
+        end
     end
 
     -- Draw all network entities
@@ -452,6 +535,23 @@ function draw_entity(ent, is_me)
     local font = love.graphics.getFont()
     local tw = font:getWidth(label)
     love.graphics.print(label, px - tw / 2, py - 7)
+
+    -- Status effects (Stun / Desarme)
+    local stunned_until = tonumber(ent.stunned_until or (ent.properties and ent.properties["stunned_until"])) or 0
+    local disarmed_until = tonumber(ent.disarmed_until or (ent.properties and ent.properties["disarmed_until"])) or 0
+    if not is_dead then
+        if stunned_until > 0 then
+            love.graphics.setColor(1.0, 0.9, 0.2, 0.95)
+            local txt = "* STUNNED *"
+            local tw_s = font:getWidth(txt)
+            love.graphics.print(txt, px - tw_s / 2, bar_y - 12)
+        elseif disarmed_until > 0 then
+            love.graphics.setColor(1.0, 0.4, 0.4, 0.95)
+            local txt = "[DESARMADA]"
+            local tw_d = font:getWidth(txt)
+            love.graphics.print(txt, px - tw_d / 2, bar_y - 12)
+        end
+    end
 end
 
 function draw_hud(sw, sh, my_entity)
@@ -464,7 +564,7 @@ function draw_hud(sw, sh, my_entity)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Move  |  Space: Action  |  C: Atributos  |  T: Touch UI  |  F3: Debug", 20, sh - 28)
+    love.graphics.print("WASD: Mover | Espaço/1: Ataque | 2/Q: Fúria | 3/E: Dash | 4/R: Stun | T: Touch UI | C: Ficha", 20, sh - 28)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
