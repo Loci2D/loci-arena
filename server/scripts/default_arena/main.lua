@@ -5,6 +5,7 @@
 -- Movement speed in units per tick.
 -- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
 local SPEED = 3.0
+local _player_join_count = 0
 
 -- =============================================================================
 -- Module Loader Polyfill (require)
@@ -60,8 +61,10 @@ function on_player_join(entity_id)
     Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
     
     -- Inicializa propriedades básicas de match
-    -- Atribui cada jogador a um time único (Free For All) para que habilidades causem dano
-    Loci.Commands.set_property(entity_id, "team", tostring(entity_id))
+    -- Aloca jogadores em times de forma intercalada (Time 1 e Time 2)
+    _player_join_count = _player_join_count + 1
+    local team_id = tostring((_player_join_count % 2 == 1) and 1 or 2)
+    Loci.Commands.set_property(entity_id, "team", team_id)
     Loci.Commands.set_property(entity_id, "score", "0")
     Loci.Commands.set_property(entity_id, "kills", "0")
     Loci.Commands.set_property(entity_id, "deaths", "0")
