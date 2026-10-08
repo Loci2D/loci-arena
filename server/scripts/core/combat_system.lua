@@ -93,6 +93,9 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
         end
 
         Loci.Log.info("[Combat] " .. tostring(target_id) .. " foi eliminado por " .. tostring(attacker_id))
+        
+        local CharacterFactory = require("default_arena.systems.character_factory")
+        CharacterFactory.on_entity_die(target_id)
     end
 
     return {
