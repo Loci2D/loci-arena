@@ -204,10 +204,9 @@ function CharacterFactory.can_cast(entity_id, skill_data)
     end
 
     local mana = tonumber(Loci.get_entity_property(entity_id, "mana") or "0") or 0
-    -- Comentado para testes - mana infinita
-    -- if skill_data.mana_cost and mana < skill_data.mana_cost then
-    --     return false, "Insufficient mana"
-    -- end
+    if skill_data.mana_cost and mana < skill_data.mana_cost then
+        return false, "Insufficient mana"
+    end
 
     local cooldowns = entity_cooldowns[entity_id]
     if cooldowns and cooldowns[skill_data.id] then

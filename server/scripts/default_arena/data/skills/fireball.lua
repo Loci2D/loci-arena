@@ -18,7 +18,7 @@ return {
     name = "Fireball",
     description = "Bola de fogo explosiva com dano mágico em área",
     mana_cost = 35,
-    cooldown = 0, -- Sem cooldown para testes
+    cooldown = 45, -- 1.5s a 30Hz
     range = 300,
     damage = 500,
     damage_type = CombatSystem.DamageType.MAGICAL,
