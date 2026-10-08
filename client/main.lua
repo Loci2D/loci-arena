@@ -267,34 +267,39 @@ end
 -- Touch handlers para joysticks virtuais
 function love.touchpressed(id, x, y, dx, dy, pressure)
     local screen_w, screen_h = love.graphics.getDimensions()
-    return virtual_joystick.handle_touchpress(id, x, y, screen_w, screen_h)
+    local real_x = x * screen_w
+    local real_y = y * screen_h
+    return virtual_joystick.handle_touchpress(id, real_x, real_y)
 end
 
 function love.touchmoved(id, x, y, dx, dy, pressure)
-    return virtual_joystick.handle_touchmove(id, x, y)
+    local screen_w, screen_h = love.graphics.getDimensions()
+    local real_x = x * screen_w
+    local real_y = y * screen_h
+    return virtual_joystick.handle_touchmove(id, real_x, real_y)
 end
 
 function love.touchreleased(id, x, y, dx, dy, pressure)
     return virtual_joystick.handle_touchrelease(id)
 end
 
--- Temporário, uso para testar o touch com o mouse
+-- Suporte a mouse para testes no desktop (filtra istouch para evitar duplicação no mobile)
 function love.mousepressed(x, y, button, istouch, presses)
-    local screen_w, screen_h = love.graphics.getDimensions()
-    if virtual_joystick.handle_mousepressed(x, y, button, screen_w, screen_h) then
+    if istouch then return end
+    if virtual_joystick.handle_mousepressed(x, y, button) then
         return true
     end
 end
 
--- Temporário, uso para testar o touch com o mouse
 function love.mousemoved(x, y, dx, dy, istouch)
+    if istouch then return end
     if virtual_joystick.handle_mousemoved(x, y) then
         return true
     end
 end
 
--- Temporário, uso para testar o touch com o mouse
 function love.mousereleased(x, y, button, istouch, presses)
+    if istouch then return end
     if virtual_joystick.handle_mousereleased(x, y, button) then
         return true
     end

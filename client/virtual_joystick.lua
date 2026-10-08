@@ -237,41 +237,50 @@ local skill_3_button = ActionButton.new(SKILL_3_BUTTON_CONFIG)
 local skill_4_button = ActionButton.new(SKILL_4_BUTTON_CONFIG)
 local MOUSE_ID = -1
 
--- Conversão de coordenadas
-local function to_real(x, y)
+-- Dimensões virtuais do jogo
+local game_w, game_h = 1280, 720
+
+-- Conversão de coordenadas da janela real para coordenadas do jogo virtual
+local function to_game(x, y)
     if push then
-        return push:toReal(x, y)
+        return push:toGame(x, y)
     end
     return x, y
 end
 
 -- API pública
 function VirtualJoystick.update(w, h)
-    move_joystick:update_pos(w, h)
-    skill_1_button:update_pos(w, h)
-    skill_2_button:update_pos(w, h)
-    skill_3_button:update_pos(w, h)
-    skill_4_button:update_pos(w, h)
+    game_w = w or game_w
+    game_h = h or game_h
+    move_joystick:update_pos(game_w, game_h)
+    skill_1_button:update_pos(game_w, game_h)
+    skill_2_button:update_pos(game_w, game_h)
+    skill_3_button:update_pos(game_w, game_h)
+    skill_4_button:update_pos(game_w, game_h)
 end
 
 function VirtualJoystick.update_with_game_dimensions(w, h)
     VirtualJoystick.update(w, h)
 end
 
-function VirtualJoystick.handle_touchpress(id, x, y, w, h)
-    return move_joystick:handle_press(x, y, id, w, h) or
-           skill_1_button:handle_press(x, y, id) or
-           skill_2_button:handle_press(x, y, id) or
-           skill_3_button:handle_press(x, y, id) or
-           skill_4_button:handle_press(x, y, id)
+function VirtualJoystick.handle_touchpress(id, x, y)
+    local gx, gy = to_game(x, y)
+    if not gx or not gy then return false end
+    return move_joystick:handle_press(gx, gy, id, game_w, game_h) or
+           skill_1_button:handle_press(gx, gy, id) or
+           skill_2_button:handle_press(gx, gy, id) or
+           skill_3_button:handle_press(gx, gy, id) or
+           skill_4_button:handle_press(gx, gy, id)
 end
 
 function VirtualJoystick.handle_touchmove(id, x, y)
-    return move_joystick:handle_move(x, y, id) or
-           skill_1_button:handle_move(x, y, id) or
-           skill_2_button:handle_move(x, y, id) or
-           skill_3_button:handle_move(x, y, id) or
-           skill_4_button:handle_move(x, y, id)
+    local gx, gy = to_game(x, y)
+    if not gx or not gy then return false end
+    return move_joystick:handle_move(gx, gy, id) or
+           skill_1_button:handle_move(gx, gy, id) or
+           skill_2_button:handle_move(gx, gy, id) or
+           skill_3_button:handle_move(gx, gy, id) or
+           skill_4_button:handle_move(gx, gy, id)
 end
 
 function VirtualJoystick.handle_touchrelease(id)
@@ -282,26 +291,17 @@ function VirtualJoystick.handle_touchrelease(id)
            skill_4_button:handle_release(id)
 end
 
--- Temporário, uso para testar o touch com o mouse
-function VirtualJoystick.handle_mousepressed(x, y, button, w, h)
+function VirtualJoystick.handle_mousepressed(x, y, button)
     if button ~= 1 then return false end
-    x, y = to_real(x, y)
-    if not x then return false end
-    return VirtualJoystick.handle_touchpress(MOUSE_ID, x, y, w, h)
+    return VirtualJoystick.handle_touchpress(MOUSE_ID, x, y)
 end
 
--- Temporário, uso para testar o touch com o mouse
 function VirtualJoystick.handle_mousemoved(x, y)
-    x, y = to_real(x, y)
-    if not x then return false end
     return VirtualJoystick.handle_touchmove(MOUSE_ID, x, y)
 end
 
--- Temporário, uso para testar o touch com o mouse
 function VirtualJoystick.handle_mousereleased(x, y, button)
     if button ~= 1 then return false end
-    x, y = to_real(x, y)
-    if not x then return false end
     return VirtualJoystick.handle_touchrelease(MOUSE_ID)
 end
 
