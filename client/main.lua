@@ -382,31 +382,52 @@ function draw_entity(ent, is_me)
     -- Verificar se está morto
     local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
 
-    if is_me then
+    local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
+    if char_name == "Arya" then
+        -- Placeholder 16x16 pink art for Arya
         if is_dead then
-            love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro
+            love.graphics.setColor(0.5, 0.2, 0.3, 1) -- Cinza rosado escuro
         else
-            love.graphics.setColor(0.2, 0.6, 1.0, 1)
+            love.graphics.setColor(1.0, 0.4, 0.7, 1) -- Rosa choque (cabelo rosa)
+        end
+        love.graphics.rectangle("fill", px - radius, py - radius, radius * 2, radius * 2)
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.setLineWidth(2)
+        love.graphics.rectangle("line", px - radius, py - radius, radius * 2, radius * 2)
+        
+        if is_dead then
+            love.graphics.setColor(1, 0, 0, 0.8)
+            love.graphics.setLineWidth(3)
+            love.graphics.line(px - radius, py - radius, px + radius, py + radius)
+            love.graphics.line(px + radius, py - radius, px - radius, py + radius)
         end
     else
-        if is_dead then
-            love.graphics.setColor(0.4, 0.2, 0.2, 1)  -- Vermelho escuro
+        if is_me then
+            if is_dead then
+                love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro
+            else
+                love.graphics.setColor(0.2, 0.6, 1.0, 1)
+            end
         else
-            love.graphics.setColor(0.9, 0.3, 0.3, 1)
+            if is_dead then
+                love.graphics.setColor(0.4, 0.2, 0.2, 1)  -- Vermelho escuro
+            else
+                love.graphics.setColor(0.9, 0.3, 0.3, 1)
+            end
         end
-    end
 
-    love.graphics.circle("fill", px, py, radius)
-    love.graphics.setColor(1, 1, 1, 0.85)
-    love.graphics.setLineWidth(2)
-    love.graphics.circle("line", px, py, radius)
+        love.graphics.circle("fill", px, py, radius)
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.setLineWidth(2)
+        love.graphics.circle("line", px, py, radius)
 
-    -- Se morto, desenhar X sobre o jogador
-    if is_dead then
-        love.graphics.setColor(1, 0, 0, 0.8)
-        love.graphics.setLineWidth(3)
-        love.graphics.line(px - radius/2, py - radius/2, px + radius/2, py + radius/2)
-        love.graphics.line(px + radius/2, py - radius/2, px - radius/2, py + radius/2)
+        -- Se morto, desenhar X sobre o jogador
+        if is_dead then
+            love.graphics.setColor(1, 0, 0, 0.8)
+            love.graphics.setLineWidth(3)
+            love.graphics.line(px - radius/2, py - radius/2, px + radius/2, py + radius/2)
+            love.graphics.line(px + radius/2, py - radius/2, px - radius/2, py + radius/2)
+        end
     end
 
     -- HP Bar
