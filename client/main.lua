@@ -14,7 +14,11 @@ end
 
 local push = require("src.push")
 local kda_ui = require("kda_ui")
+local virtual_joystick = require("virtual_joystick")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
+
+-- Configurar push no sistema de joystick para conversão de coordenadas
+virtual_joystick.set_push(push)
 
 -- Connection config
 local SERVER_IP = os.getenv("LOCI_SERVER_IP") or "127.0.0.1"
@@ -27,6 +31,7 @@ local rejection_timer = 0
 local visual_fx = {}
 local show_debug_overlay = false
 local show_character_sheet = false
+local show_touch_controls = true
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
@@ -47,6 +52,9 @@ function love.load(arg)
         resizable = true,
         pixelperfect = false
     })
+
+    -- Inicializar posições dos controles virtuais para a resolução do jogo
+    virtual_joystick.update_with_game_dimensions(GAME_WIDTH, GAME_HEIGHT)
 
     local random_suffix = tostring(love.math and love.math.random(1000, 9999) or math.random(1000, 9999))
     local player_name = "Player_" .. random_suffix
@@ -101,10 +109,16 @@ local last_sent_dx, last_sent_dy = 0, 0
 
 local function update_movement()
     local dx, dy = 0, 0
-    if love.keyboard.isDown("w") or love.keyboard.isDown("up") then dy = dy - 1 end
-    if love.keyboard.isDown("s") or love.keyboard.isDown("down") then dy = dy + 1 end
-    if love.keyboard.isDown("a") or love.keyboard.isDown("left") then dx = dx - 1 end
-    if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
+    
+    -- Prioridade: joystick virtual (se ativo e visível) > teclado
+    if show_touch_controls and virtual_joystick.is_move_active() then
+        dx, dy = virtual_joystick.get_move_vector()
+    else
+        if love.keyboard.isDown("w") or love.keyboard.isDown("up") then dy = dy - 1 end
+        if love.keyboard.isDown("s") or love.keyboard.isDown("down") then dy = dy + 1 end
+        if love.keyboard.isDown("a") or love.keyboard.isDown("left") then dx = dx - 1 end
+        if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
+    end
 
     if dx ~= last_sent_dx or dy ~= last_sent_dy then
         last_sent_dx = dx
@@ -120,6 +134,26 @@ function love.update(dt)
     local my_entity = loci.get_my_entity()
     if my_entity then
         update_movement()
+
+        -- Processar habilidades dos botões virtuais (slots 1 a 4)
+        local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
+        if not is_dead and show_touch_controls then
+            local now = love.timer.getTime()
+            for slot = 1, 4 do
+                if virtual_joystick.is_skill_active(slot) and virtual_joystick.can_trigger_skill(slot, now) then
+                    virtual_joystick.trigger_skill(slot, now)
+
+                    -- Usar a direção do joystick de movimento, ou direção padrão se parado
+                    local action_dx, action_dy = virtual_joystick.get_move_vector()
+                    if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
+                        action_dx, action_dy = 0, -1
+                    end
+
+                    loci.send_action(slot, action_dx, action_dy)
+                end
+            end
+        end
+        
         -- Direct camera binding eliminates lag jitter between camera and player
         cam_x = my_entity.x * VISUAL_SCALE
         cam_y = my_entity.y * VISUAL_SCALE
@@ -148,6 +182,11 @@ function love.keypressed(key)
         show_debug_overlay = not show_debug_overlay
     elseif key == "c" then
         show_character_sheet = not show_character_sheet
+    elseif key == "t" or key == "f1" then
+        show_touch_controls = not show_touch_controls
+        if not show_touch_controls then
+            virtual_joystick.reset()
+        end
     elseif key == "tab" then
         kda_ui.show()
     elseif key == "space" then
@@ -186,6 +225,50 @@ end
 function love.keyreleased(key)
     if key == "tab" then
         kda_ui.hide()
+    end
+end
+
+-- Touch handlers para joysticks virtuais
+function love.touchpressed(id, x, y, dx, dy, pressure)
+    if not show_touch_controls then return end
+    local screen_w, screen_h = love.graphics.getDimensions()
+    local real_x = x * screen_w
+    local real_y = y * screen_h
+    return virtual_joystick.handle_touchpress(id, real_x, real_y)
+end
+
+function love.touchmoved(id, x, y, dx, dy, pressure)
+    if not show_touch_controls then return end
+    local screen_w, screen_h = love.graphics.getDimensions()
+    local real_x = x * screen_w
+    local real_y = y * screen_h
+    return virtual_joystick.handle_touchmove(id, real_x, real_y)
+end
+
+function love.touchreleased(id, x, y, dx, dy, pressure)
+    if not show_touch_controls then return end
+    return virtual_joystick.handle_touchrelease(id)
+end
+
+-- Suporte a mouse para testes no desktop (filtra istouch para evitar duplicação no mobile)
+function love.mousepressed(x, y, button, istouch, presses)
+    if istouch or not show_touch_controls then return end
+    if virtual_joystick.handle_mousepressed(x, y, button) then
+        return true
+    end
+end
+
+function love.mousemoved(x, y, dx, dy, istouch)
+    if istouch or not show_touch_controls then return end
+    if virtual_joystick.handle_mousemoved(x, y) then
+        return true
+    end
+end
+
+function love.mousereleased(x, y, button, istouch, presses)
+    if istouch or not show_touch_controls then return end
+    if virtual_joystick.handle_mousereleased(x, y, button) then
+        return true
     end
 end
 
@@ -239,6 +322,11 @@ function love.draw()
     -- 4. Character Sheet Overlay (C)
     if show_character_sheet then
         draw_character_sheet(sw, sh, my_entity)
+    end
+
+    -- 5. Virtual Joysticks (quando ativos e visíveis)
+    if show_touch_controls then
+        virtual_joystick.draw()
     end
 
     push:finish()
@@ -355,7 +443,7 @@ function draw_hud(sw, sh, my_entity)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Move  |  Space: Action  |  C: Atributos  |  F3: Debug", 20, sh - 28)
+    love.graphics.print("WASD: Move  |  Space: Action  |  C: Atributos  |  T: Touch UI  |  F3: Debug", 20, sh - 28)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
@@ -365,7 +453,7 @@ end
 
 function draw_debug(sw, sh)
     love.graphics.setColor(0, 0, 0, 0.75)
-    love.graphics.rectangle("fill", sw - 240, 10, 230, 120, 6, 6)
+    love.graphics.rectangle("fill", sw - 240, 10, 230, 140, 6, 6)
 
     local ent_count = #loci.get_entities()
     local me = loci.get_my_entity()
@@ -379,6 +467,7 @@ function draw_debug(sw, sh)
     if me then
         love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 100)
     end
+    love.graphics.print(string.format("Touch UI: %s [T]", show_touch_controls and "ON" or "OFF"), sw - 225, 120)
 end
 
 function draw_character_sheet(sw, sh, my_entity)
