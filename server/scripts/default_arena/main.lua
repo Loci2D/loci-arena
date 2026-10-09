@@ -125,7 +125,7 @@ function on_player_join(entity_id)
 
     -- Spawn map obstacles once on first join
     spawn_obstacles()
-    
+
     -- Inicializa propriedades básicas de match
     -- Atribui cada jogador a um time único (Free For All) para que habilidades causem dano
     Loci.Commands.set_property(entity_id, "team", tostring(entity_id))
@@ -133,6 +133,7 @@ function on_player_join(entity_id)
     Loci.Commands.set_property(entity_id, "kills", "0")
     Loci.Commands.set_property(entity_id, "deaths", "0")
     Loci.Commands.set_property(entity_id, "is_dead", "false")
+
 
     -- Instancia o personagem (por padrão warrior, pode ser alternado ou selecionado pelo cliente)
     CharacterFactory.create_character(entity_id, "warrior")

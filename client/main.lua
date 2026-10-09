@@ -28,6 +28,12 @@ local visual_fx = {}
 local show_debug_overlay = false
 local show_character_sheet = false
 
+-- Screen shake variables
+local shake_intensity = 0
+local shake_duration = 0
+local shake_offset_x = 0
+local shake_offset_y = 0
+
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
@@ -37,6 +43,12 @@ local VISUAL_SCALE = 2 -- Pixels per unit: arena 1000x1000 -> ~650x650 pixels on
 local ARENA_MIN = -500
 local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
+
+-- Função para acionar screen shake (definida antes de love.load)
+local function trigger_screen_shake(intensity, duration)
+    shake_intensity = intensity
+    shake_duration = duration
+end
 
 function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
@@ -77,6 +89,17 @@ function love.load(arg)
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
         -- Hook for HUD/UI state updates (HP, score, buffs)
+        -- Detect HP decrease for screen shake feedback
+        if key == "hp" then
+            local old_hp = tonumber(old_val) or 0
+            local new_hp = tonumber(new_val) or 0
+            local damage = old_hp - new_hp
+
+            -- Trigger screen shake on significant damage (> 10)
+            if damage > 10 then
+                trigger_screen_shake(math.min(damage / 100, 1.0) * 8, 0.2)
+            end
+        end
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
@@ -131,11 +154,59 @@ local DASH_DOUBLE_TAP_TIME = 0.3  -- segundos entre presses para detectar double
 local DASH_COOLDOWN = 0.5  -- segundos entre dashes
 local last_dash_time = 0
 
--- Função para obter direção de ataque (última direção de movimento não-zero)
+-- Função para obter direção de ataque com auto-targeting
 local function get_attack_direction()
-    -- Usa última direção de movimento não-zero, ou aponta para cima se nunca moveu
-    if not last_nonzero_dx or not last_nonzero_dy then
+    local my_entity = loci.get_my_entity()
+    if not my_entity then
         return 0, -1  -- Default: aiming up
+    end
+
+    -- Buscar inimigo mais próximo num raio
+    local my_team = my_entity.team or "unknown"
+    local all_entities = loci.get_entities()
+    local nearest_enemy = nil
+    local nearest_dist = math.huge
+    local SEARCH_RADIUS = 400  -- Raio de busca de inimigos
+
+    if all_entities then
+        for _, ent in ipairs(all_entities) do
+            -- Ignorar a si mesmo
+            if ent.id ~= my_entity.id then
+                -- Verificar se é inimigo (team diferente)
+                local ent_team = ent.team or "unknown"
+                if ent_team ~= my_team then
+                    -- Verificar se está morto
+                    local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
+                    if not is_dead then
+                        -- Calcular distância
+                        local dx = ent.x - my_entity.x
+                        local dy = ent.y - my_entity.y
+                        local dist = math.sqrt(dx * dx + dy * dy)
+
+                        -- Se estiver no raio e for o mais próximo
+                        if dist < SEARCH_RADIUS and dist < nearest_dist then
+                            nearest_dist = dist
+                            nearest_enemy = ent
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Se encontrou inimigo próximo, calcular direção para ele
+    if nearest_enemy then
+        local dx = nearest_enemy.x - my_entity.x
+        local dy = nearest_enemy.y - my_entity.y
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len > 0 then
+            return dx / len, dy / len
+        end
+    end
+
+    -- Fallback: usar última direção de movimento não-zero, ou aponta para cima
+    if not last_nonzero_dx or not last_nonzero_dy then
+        return 0, -1
     end
     return last_nonzero_dx, last_nonzero_dy
 end
@@ -177,6 +248,20 @@ function love.update(dt)
     -- Update rejection message timer
     if rejection_timer > 0 then
         rejection_timer = rejection_timer - dt
+    end
+
+    -- Update screen shake
+    if shake_duration > 0 then
+        shake_duration = shake_duration - dt
+        -- Calculate random shake offset based on intensity
+        shake_offset_x = (math.random() - 0.5) * 2 * shake_intensity
+        shake_offset_y = (math.random() - 0.5) * 2 * shake_intensity
+        -- Amortecimento: intensidade diminui com o tempo
+        shake_intensity = shake_intensity * 0.9
+    else
+        shake_offset_x = 0
+        shake_offset_y = 0
+        shake_intensity = 0
     end
 
     -- Update visual effects
@@ -356,7 +441,7 @@ function love.draw()
     -- 1. Arena World Rendering
     love.graphics.push()
     love.graphics.translate(center_x, center_y)
-    love.graphics.translate(-cam_x, -cam_y)
+    love.graphics.translate(-cam_x + shake_offset_x, -cam_y + shake_offset_y)
 
     -- Draw background grid & physical collision boundaries
     draw_arena_grid()
