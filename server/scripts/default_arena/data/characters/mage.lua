@@ -17,6 +17,7 @@ return {
     },
     tags = { "RANGED", "CASTER" },
     skills = {
-        "fireball"
+        "fireball",  -- Slot 1: Space
+        "dash"       -- Slot 2: Double-tap
     }
 }
