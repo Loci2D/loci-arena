@@ -272,6 +272,23 @@ function loci.send_action(ability_id, aim_x, aim_y)
     loci._send_intent({ action = { ability_id = ability_id, target_direction = { x_bits = float_to_bits(dx), y_bits = float_to_bits(dy) } } })
 end
 
+-- Nova função: envia ação com direção normalizada direta (não converte de coordenadas alvo)
+function loci.send_action_direct(ability_id, dir_x, dir_y)
+    if not loci._udp then return end
+    
+    -- Normalizar direção
+    local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
+    if len > 0 then
+        dir_x = dir_x / len
+        dir_y = dir_y / len
+    else
+        dir_x = 0
+        dir_y = 0
+    end
+    
+    loci._send_intent({ action = { ability_id = ability_id, target_direction = { x_bits = float_to_bits(dir_x), y_bits = float_to_bits(dir_y) } } })
+end
+
 -- Cached to avoid GC pressure
 function loci.get_entities()
     if not loci._entities_list_cache then

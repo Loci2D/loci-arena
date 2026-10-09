@@ -17,6 +17,7 @@ return {
     },
     tags = { "MELEE", "TANK" },
     skills = {
-        "slash"
+        "slash",     -- Slot 1: Space
+        "dash"       -- Slot 2: Double-tap
     }
 }
