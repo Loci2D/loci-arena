@@ -48,8 +48,33 @@ function CharacterFactory.update_tick(tick)
         end
     end
     
-    -- Check for paralysis expiration (for visual/client purposes if needed)
-    -- Actually, it's easier to just check it lazily when moving/attacking.
+    -- Verificar expiração de status effects temporários a cada tick
+    for i = #active_entities, 1, -1 do
+        local entity_id = active_entities[i]
+        local is_dead = Loci.get_entity_property(entity_id, "is_dead") == "true"
+        if not is_dead then
+            local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
+            if stunned_until > 0 and current_tick >= stunned_until then
+                Loci.Commands.set_property(entity_id, "stunned_until", "0")
+            end
+
+            local disarmed_until = tonumber(Loci.get_entity_property(entity_id, "disarmed_until")) or 0
+            if disarmed_until > 0 and current_tick >= disarmed_until then
+                Loci.Commands.set_property(entity_id, "disarmed_until", "0")
+            end
+
+            local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
+            if paralyzed_until > 0 and current_tick >= paralyzed_until then
+                Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
+            end
+
+            local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
+            if dashing_until > 0 and current_tick >= dashing_until then
+                Loci.Commands.set_property(entity_id, "dashing_until", "0")
+                Loci.Commands.set_velocity(entity_id, {x = 0, y = 0})
+            end
+        end
+    end
 end
 
 function CharacterFactory.get_current_tick()
@@ -138,6 +163,10 @@ function CharacterFactory.create_character(entity_id, character_name)
     Loci.Commands.set_property(entity_id, "move_speed", tostring(move_speed))
     Loci.Commands.set_property(entity_id, "hp_regen", tostring(attrs.hp_regen or 10))
     Loci.Commands.set_property(entity_id, "mana_regen", tostring(attrs.mana_regen or 5))
+    Loci.Commands.set_property(entity_id, "stunned_until", "0")
+    Loci.Commands.set_property(entity_id, "disarmed_until", "0")
+    Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
+    Loci.Commands.set_property(entity_id, "dashing_until", "0")
 
     -- 3. Lista de habilidades
     local skills_list = char_data.skills or {}
