@@ -89,6 +89,12 @@ function on_move_intent(entity_id, dir_x, dir_y)
         return false, "Personagem atordoado (Stun)."
     end
 
+    local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
+    if CharacterFactory.get_current_tick() < dashing_until then
+        -- Durante o dash ativo, mantém a velocidade do impulso sem ser cancelada pelos comandos de caminhada
+        return true
+    end
+
     -- Normalize movement vector so diagonal movement doesn't provide a speed boost
     local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
     if len > 0 then

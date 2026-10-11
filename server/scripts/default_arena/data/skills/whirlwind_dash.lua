@@ -38,7 +38,11 @@ return {
         local pos = Loci.get_entity_position(entity_id)
         local caster_x, caster_y = get_coords(pos)
 
-        -- Impulso de deslocamento (Dash físico)
+        -- Impulso de deslocamento (Dash físico com duração controlada de ~0.30s / 9 ticks a 30Hz)
+        local CharacterFactory = require("default_arena.systems.character_factory")
+        local current_tick = CharacterFactory.get_current_tick()
+        Loci.Commands.set_property(entity_id, "dashing_until", tostring(current_tick + 9))
+
         local dash_speed = 22.0
         Loci.Commands.set_velocity(entity_id, {
             x = aim_x * dash_speed,

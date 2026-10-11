@@ -67,6 +67,12 @@ function CharacterFactory.update_tick(tick)
             if paralyzed_until > 0 and current_tick >= paralyzed_until then
                 Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
             end
+
+            local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
+            if dashing_until > 0 and current_tick >= dashing_until then
+                Loci.Commands.set_property(entity_id, "dashing_until", "0")
+                Loci.Commands.set_velocity(entity_id, {x = 0, y = 0})
+            end
         end
     end
 end
@@ -160,6 +166,7 @@ function CharacterFactory.create_character(entity_id, character_name)
     Loci.Commands.set_property(entity_id, "stunned_until", "0")
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
+    Loci.Commands.set_property(entity_id, "dashing_until", "0")
 
     -- 3. Lista de habilidades
     local skills_list = char_data.skills or {}
