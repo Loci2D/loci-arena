@@ -24,6 +24,9 @@ function respawn_system.mark_dead(entity_id)
         table.insert(dead_players, {id = entity_id, death_tick = current_tick_internal})
     end
     Loci.Commands.set_property(entity_id, "is_dead", "true")
+    Loci.Commands.set_property(entity_id, "stunned_until", "0")
+    Loci.Commands.set_property(entity_id, "disarmed_until", "0")
+    Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
 end
 
 -- Remover jogador da lista de mortos (quando reviver)
@@ -33,6 +36,9 @@ function respawn_system.mark_alive(entity_id)
         table.remove(dead_players, idx)
     end
     Loci.Commands.set_property(entity_id, "is_dead", "false")
+    Loci.Commands.set_property(entity_id, "stunned_until", "0")
+    Loci.Commands.set_property(entity_id, "disarmed_until", "0")
+    Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
 end
 
 -- Verificar se um jogador está morto
