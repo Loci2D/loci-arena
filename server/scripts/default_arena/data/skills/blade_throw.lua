@@ -13,16 +13,18 @@ local function get_coords(pos)
     return 0, 0
 end
 
+local VISUAL_SCALE = 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
+
 return {
     id = "blade_throw",
     name = "Arremesso de Lâmina",
     description = "Arremessa a espada. Causa dano físico e Stun em área no impacto, mas aplica Desarme na Arya por 2.0s.",
     mana_cost = 45,
     cooldown = 420, -- 14 segundos a 30Hz
-    range = 260,
+    range = 260 / VISUAL_SCALE,     -- 32.5 unidades no mundo (260px na tela)
     damage = 400,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 55,
+    aoe_radius = 55 / VISUAL_SCALE, -- 6.875 unidades no mundo (55px na tela)
     stun_duration_ticks = 36,   -- 1.2 segundos de Stun a 30Hz
     disarm_duration_ticks = 60, -- 2.0 segundos de Desarme a 30Hz
 

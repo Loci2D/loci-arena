@@ -12,16 +12,18 @@ local function get_coords(pos)
     return 0, 0
 end
 
+local VISUAL_SCALE = 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
+
 return {
     id = "whirlwind_dash",
     name = "Investida Giratória",
     description = "Avança na direção da mira, desferindo um giro de 360º com dano físico em área.",
     mana_cost = 25,
     cooldown = 180, -- 6 segundos a 30Hz
-    range = 160,    -- Distância do avanço
+    range = 160 / VISUAL_SCALE,     -- 20.0 unidades no mundo (160px na tela)
     damage = 450,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 65, -- Raio da área de corte em 360º
+    aoe_radius = 65 / VISUAL_SCALE, -- 8.125 unidades no mundo (65px na tela)
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         -- Normaliza direção da mira

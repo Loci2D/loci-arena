@@ -332,18 +332,21 @@ function love.draw()
 
         elseif fx.ability_id == 3 then
             -- Skill 3 (Whirlwind Dash): Círculo 360º de corte giratório dourado com lâminas
+            local dash_dist = 112 * inv_prog -- Desloca o efeito visual junto com o avanço (14 unidades * VISUAL_SCALE)
+            local curr_x = fx_start_x + fx.dir_x * dash_dist
+            local curr_y = fx_start_y + fx.dir_y * dash_dist
             local r = 65 * (0.7 + 0.5 * inv_prog)
             local spin_angle = inv_prog * math.pi * 5
             love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
             love.graphics.setLineWidth(3)
-            love.graphics.circle("line", fx_start_x, fx_start_y, r)
+            love.graphics.circle("line", curr_x, curr_y, r)
             love.graphics.setColor(1.0, 0.9, 0.5, progress * 0.6)
             for i = 0, 3 do
                 local a = spin_angle + (i * math.pi / 2)
                 love.graphics.line(
-                    fx_start_x, fx_start_y,
-                    fx_start_x + math.cos(a) * r,
-                    fx_start_y + math.sin(a) * r
+                    curr_x, curr_y,
+                    curr_x + math.cos(a) * r,
+                    curr_y + math.sin(a) * r
                 )
             end
 
