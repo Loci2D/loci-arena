@@ -28,8 +28,9 @@ loci-arena/
 ├── bin/                        # Binário executável do loci2d (.gitignore)
 ├── scripts/                    # Scripts utilitários de execução
 │   ├── setup_engine.sh         # Obtém o binário correto da engine loci2d
+│   ├── setup_client.sh         # Instala e verifica dependências do cliente (Love2D e Lua)
 │   ├── run_server.sh           # Inicia o servidor com os scripts locais
-│   └── run_client.sh           # Inicia o cliente Love2D
+│   └── run_client.sh           # Inicia o cliente Love2D (com verificação automática)
 │
 ├── .loci2d-version             # Versão travada da engine loci2d
 └── README.md
@@ -40,8 +41,8 @@ loci-arena/
 ## Como Executar
 
 ### 1. Pré-requisitos
-- [Love2D](https://love2d.org) (v11.x+) instalado na máquina.
 - Bash/Terminal (Linux, macOS ou WSL/Git Bash no Windows).
+- [Love2D](https://love2d.org) (v11.x+) e [Lua](https://www.lua.org) (instalados automaticamente pelo script ou manualmente).
 
 ### 2. Configurar a Engine
 Para obter o binário do servidor compatível com esta versão do jogo:
@@ -61,6 +62,7 @@ Em outro terminal (ou múltiplos para testar mais de um jogador):
 ```bash
 ./scripts/run_client.sh
 ```
+*(Se o Love2D ou o Lua não estiverem instalados, o script executará `./scripts/setup_client.sh` para instalar automaticamente as dependências).*
 
 ---
 
