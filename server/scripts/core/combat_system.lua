@@ -5,7 +5,8 @@ CombatSystem.CONST = {
     DEFENSE_K = 100,               -- Constante para calcular redução de dano (K)
     CRIT_CHANCE_BASE = 0.10,       -- 10% de chance base de crítico
     CRIT_MULTIPLIER = 2.25,        -- Dano x 2.25 quando crita
-    FRAGILITY_MULT = 1.30          -- 30% a mais de dano se o alvo for "Frágil"
+    FRAGILITY_MULT = 1.30,         -- 30% a mais de dano se o alvo for "Frágil"
+    VISUAL_SCALE = 8               -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
 }
 
 -- Tipos de Dano Suportados

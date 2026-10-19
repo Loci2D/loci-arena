@@ -12,18 +12,29 @@ local function get_coords(pos)
     return 0, 0
 end
 
+local VISUAL_SCALE = 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
+
 return {
     id = "slash",
     name = "Slash",
     description = "Ataque corporal com dano físico em área frontal",
     mana_cost = 10,
     cooldown = 15, -- 0.5s a 30Hz
-    range = 80,
+    range = 80 / VISUAL_SCALE,     -- 10.0 unidades no mundo (80px na tela)
     damage = 350,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 45,
+    aoe_radius = 45 / VISUAL_SCALE, -- 5.625 unidades no mundo (45px na tela)
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
+        -- Normaliza vetor de mira
+        local len = math.sqrt(aim_x * aim_x + aim_y * aim_y)
+        if len > 0 then
+            aim_x = aim_x / len
+            aim_y = aim_y / len
+        else
+            aim_x, aim_y = 1, 0
+        end
+
         local pos = Loci.get_entity_position(entity_id)
         local caster_x, caster_y = get_coords(pos)
 

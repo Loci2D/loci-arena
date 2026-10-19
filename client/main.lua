@@ -321,8 +321,9 @@ function love.draw()
 
         elseif fx.ability_id == 2 then
             -- Skill 2 (Fury Reward): Impacto carmesim/fogo com onda de choque
-            local hit_x = fx_start_x + fx.dir_x * 40 * VISUAL_SCALE
-            local hit_y = fx_start_y + fx.dir_y * 40 * VISUAL_SCALE
+            local hit_dist = 60 -- (7.5 unidades no mundo * VISUAL_SCALE = 60px na tela)
+            local hit_x = fx_start_x + fx.dir_x * hit_dist
+            local hit_y = fx_start_y + fx.dir_y * hit_dist
             local r = 50 * (0.5 + 0.8 * inv_prog)
             love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
             love.graphics.setLineWidth(3)

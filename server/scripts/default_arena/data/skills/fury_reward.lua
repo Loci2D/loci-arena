@@ -11,16 +11,18 @@ local function get_coords(pos)
     return 0, 0
 end
 
+local VISUAL_SCALE = 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
+
 return {
     id = "fury_reward",
     name = "Recompensa da Fúria",
     description = "Golpe físico devastador de médio alcance, ativado após um aliado morrer.",
     mana_cost = 0,
     cooldown = 0, -- Ooldown é gerido pela passiva (requer aliado morrer)
-    range = 120,
+    range = 120 / VISUAL_SCALE,     -- 15.0 unidades no mundo (120px na tela)
     damage = 500,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 50,
+    aoe_radius = 50 / VISUAL_SCALE, -- 6.25 unidades no mundo (50px na tela)
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         -- Check if Fury is active
@@ -29,27 +31,47 @@ return {
             return false, "Habilidade bloqueada. Um aliado precisa morrer para ativar."
         end
 
+        -- Normaliza vetor de mira
+        local len = math.sqrt(aim_x * aim_x + aim_y * aim_y)
+        if len > 0 then
+            aim_x = aim_x / len
+            aim_y = aim_y / len
+        else
+            aim_x, aim_y = 1, 0
+        end
+
         local pos = Loci.get_entity_position(entity_id)
         local caster_x, caster_y = get_coords(pos)
 
-        -- Impact in the aim direction
-        local target_x = caster_x + aim_x * (skill_data.range * 0.5)
-        local target_y = caster_y + aim_y * (skill_data.range * 0.5)
-
         local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
-        local hit_ids = Loci.get_entities_in_radius({ x = target_x, y = target_y }, skill_data.aoe_radius)
+        local hit_ids = {}
+        local hit_set = {}
 
-        local hit_count = 0
-        if hit_ids then
-            for _, target_id in ipairs(hit_ids) do
-                if target_id ~= entity_id then
-                    local target_team = Loci.get_entity_property(target_id, "team") or "2"
-                    if target_team ~= caster_team then
-                        -- Força o critico pelo golpe devastador impulsionado por fúria
-                        CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type, true)
-                        hit_count = hit_count + 1
+        -- Testar na área corpo-a-corpo e no ponto focal de impacto da onda de choque
+        local test_points = {
+            { x = caster_x + aim_x * (skill_data.range * 0.2), y = caster_y + aim_y * (skill_data.range * 0.2) },
+            { x = caster_x + aim_x * (skill_data.range * 0.5), y = caster_y + aim_y * (skill_data.range * 0.5) }
+        }
+
+        for _, pt in ipairs(test_points) do
+            local nearby = Loci.get_entities_in_radius(pt, skill_data.aoe_radius)
+            if nearby then
+                for _, target_id in ipairs(nearby) do
+                    if target_id ~= entity_id and not hit_set[target_id] then
+                        hit_set[target_id] = true
+                        table.insert(hit_ids, target_id)
                     end
                 end
+            end
+        end
+
+        local hit_count = 0
+        for _, target_id in ipairs(hit_ids) do
+            local target_team = Loci.get_entity_property(target_id, "team") or "2"
+            if target_team ~= caster_team then
+                -- Força o critico pelo golpe devastador impulsionado por fúria
+                CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type, true)
+                hit_count = hit_count + 1
             end
         end
 

@@ -12,18 +12,29 @@ local function get_coords(pos)
     return 0, 0
 end
 
+local VISUAL_SCALE = 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
+
 return {
     id = "fireball",
     name = "Fireball",
     description = "Bola de fogo explosiva com dano mágico em área",
     mana_cost = 35,
     cooldown = 45, -- 1.5s a 30Hz
-    range = 300,
+    range = 300 / VISUAL_SCALE,     -- 37.5 unidades no mundo (300px na tela)
     damage = 500,
     damage_type = CombatSystem.DamageType.MAGICAL,
-    aoe_radius = 60,
+    aoe_radius = 60 / VISUAL_SCALE, -- 7.5 unidades no mundo (60px na tela)
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
+        -- Normaliza vetor de mira
+        local len = math.sqrt(aim_x * aim_x + aim_y * aim_y)
+        if len > 0 then
+            aim_x = aim_x / len
+            aim_y = aim_y / len
+        else
+            aim_x, aim_y = 1, 0
+        end
+
         local pos = Loci.get_entity_position(entity_id)
         local caster_x, caster_y = get_coords(pos)
 

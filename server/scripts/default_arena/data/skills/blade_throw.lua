@@ -52,25 +52,51 @@ return {
         Loci.Commands.set_property(entity_id, "disarmed_until", tostring(disarm_until))
 
         local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
-        local hit_ids = Loci.get_entities_in_radius({ x = target_x, y = target_y }, skill_data.aoe_radius)
+        local hit_ids = {}
+        local hit_set = {}
 
-        local hit_count = 0
-        if hit_ids then
-            for _, target_id in ipairs(hit_ids) do
-                if target_id ~= entity_id then
-                    local target_team = Loci.get_entity_property(target_id, "team") or "2"
-                    if target_team ~= caster_team then
-                        -- Aplica dano
-                        CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type)
-                        
-                        -- Aplica Stun no alvo atingido
-                        local stun_until = current_tick + skill_data.stun_duration_ticks
-                        Loci.Commands.set_property(target_id, "stunned_until", tostring(stun_until))
-                        Loci.Commands.set_velocity(target_id, { x = 0, y = 0 })
-
-                        hit_count = hit_count + 1
+        -- Amostra ao longo de toda a trajetória do projétil para não ignorar inimigos entre o jogador e a ponta
+        local step = math.max(1.0, skill_data.aoe_radius * 0.6)
+        local d = 0
+        while d < skill_data.range do
+            local sample_x = caster_x + aim_x * d
+            local sample_y = caster_y + aim_y * d
+            local nearby = Loci.get_entities_in_radius({ x = sample_x, y = sample_y }, skill_data.aoe_radius)
+            if nearby then
+                for _, target_id in ipairs(nearby) do
+                    if target_id ~= entity_id and not hit_set[target_id] then
+                        hit_set[target_id] = true
+                        table.insert(hit_ids, target_id)
                     end
                 end
+            end
+            d = d + step
+        end
+
+        -- Amostra final no ponto de impacto no alcance máximo
+        local final_nearby = Loci.get_entities_in_radius({ x = target_x, y = target_y }, skill_data.aoe_radius)
+        if final_nearby then
+            for _, target_id in ipairs(final_nearby) do
+                if target_id ~= entity_id and not hit_set[target_id] then
+                    hit_set[target_id] = true
+                    table.insert(hit_ids, target_id)
+                end
+            end
+        end
+
+        local hit_count = 0
+        for _, target_id in ipairs(hit_ids) do
+            local target_team = Loci.get_entity_property(target_id, "team") or "2"
+            if target_team ~= caster_team then
+                -- Aplica dano
+                CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type)
+                
+                -- Aplica Stun no alvo atingido
+                local stun_until = current_tick + skill_data.stun_duration_ticks
+                Loci.Commands.set_property(target_id, "stunned_until", tostring(stun_until))
+                Loci.Commands.set_velocity(target_id, { x = 0, y = 0 })
+
+                hit_count = hit_count + 1
             end
         end
 
