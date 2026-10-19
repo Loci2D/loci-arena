@@ -5,7 +5,9 @@
 -- Movement speed in units per tick.
 -- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
 local SPEED = 3.0
-local _player_join_count = 0
+-- Rastreamento de jogadores conectados e contagem de times ativos
+local connected_players = {} -- [entity_id] = { team = "1" ou "2" }
+local team_counts = { ["1"] = 0, ["2"] = 0 }
 
 -- =============================================================================
 -- Module Loader Polyfill (require)
@@ -58,12 +60,32 @@ function on_tick(current_tick)
 end
 
 function on_player_join(entity_id)
-    Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
+    -- Proteção contra chamadas duplicadas ([Join] inicial seguido por [Session] re-joined)
+    local existing_record = connected_players[entity_id]
+    local existing_prop_team = (Loci and Loci.get_entity_property) and Loci.get_entity_property(entity_id, "team") or nil
+
+    if existing_record or (existing_prop_team and existing_prop_team ~= "") then
+        local current_team = (existing_record and existing_record.team) or existing_prop_team
+        if not existing_record then
+            connected_players[entity_id] = { team = current_team }
+        end
+        if Loci and Loci.Log then
+            Loci.Log.info("[Arena] Player " .. tostring(entity_id) .. " session re-joined. Mantendo time " .. tostring(current_team))
+        end
+        Loci.Commands.set_property(entity_id, "team", tostring(current_team))
+        return
+    end
+
+    if Loci and Loci.Log then
+        Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
+    end
     
+    -- Aloca jogadores no time com menor quantidade ativa para manter o equilíbrio
+    local team_id = (team_counts["1"] <= team_counts["2"]) and "1" or "2"
+    team_counts[team_id] = team_counts[team_id] + 1
+    connected_players[entity_id] = { team = team_id }
+
     -- Inicializa propriedades básicas de match
-    -- Aloca jogadores em times de forma intercalada (Time 1 e Time 2)
-    _player_join_count = _player_join_count + 1
-    local team_id = tostring((_player_join_count % 2 == 1) and 1 or 2)
     Loci.Commands.set_property(entity_id, "team", team_id)
     Loci.Commands.set_property(entity_id, "score", "0")
     Loci.Commands.set_property(entity_id, "kills", "0")
@@ -153,7 +175,20 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
 end
 
 function on_player_leave(entity_id)
-    Loci.Log.info("[Arena] Player left: " .. tostring(entity_id))
+    if Loci and Loci.Log then
+        Loci.Log.info("[Arena] Player left: " .. tostring(entity_id))
+    end
+
+    -- Atualiza contagem do time ao desconectar
+    local player_data = connected_players[entity_id]
+    if player_data then
+        local team_id = player_data.team
+        if team_counts[team_id] and team_counts[team_id] > 0 then
+            team_counts[team_id] = team_counts[team_id] - 1
+        end
+        connected_players[entity_id] = nil
+    end
+
     CharacterFactory.on_entity_remove(entity_id)
     RespawnSystem.cleanup(entity_id)
     Loci.Commands.destroy_entity(entity_id)
