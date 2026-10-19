@@ -15,6 +15,7 @@ end
 local push = require("src.push")
 local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
+local procedural_anim = require("src.procedural_anim")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Configurar push no sistema de joystick para conversão de coordenadas
@@ -44,8 +45,8 @@ local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 
 function love.load(arg)
-    -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
-    love.graphics.setDefaultFilter("linear", "linear")
+    -- Nearest filter for crisp pixel art rendering
+    love.graphics.setDefaultFilter("nearest", "nearest")
     
     push:setupScreen(GAME_WIDTH, GAME_HEIGHT, 1280, 720, {
         fullscreen = false,
@@ -74,6 +75,25 @@ function love.load(arg)
 
     connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
 
+    -- Load Arya sprite from embedded hex data
+    local arya_sprite_data = require("assets.sprites.arya")
+    local data = love.image.newImageData(16, 16)
+    for y = 0, 15 do
+        for x = 0, 15 do
+            local val = arya_sprite_data[y + 1][x + 1]
+            if val then
+                local r = math.floor(val / 0x1000000) % 256 / 255
+                local g = math.floor(val / 0x10000) % 256 / 255
+                local b = math.floor(val / 0x100) % 256 / 255
+                local a = (val % 256) / 255
+                data:setPixel(x, y, r, g, b, a)
+            else
+                data:setPixel(x, y, 0, 0, 0, 0)
+            end
+        end
+    end
+    _arya_sprite = love.graphics.newImage(data)
+
     -- Event hooks
     loci.on_entity_spawned = function(entity)
         print(string.format("[Event] Entity spawned: ID %s at (%.1f, %.1f)", tostring(entity.id), entity.x, entity.y))
@@ -81,6 +101,7 @@ function love.load(arg)
 
     loci.on_entity_despawned = function(entity_id)
         print("[Event] Entity despawned: ID " .. tostring(entity_id))
+        procedural_anim.clear_state(entity_id)
     end
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
@@ -164,6 +185,24 @@ function love.update(dt)
         -- Direct camera binding eliminates lag jitter between camera and player
         cam_x = my_entity.x * VISUAL_SCALE
         cam_y = my_entity.y * VISUAL_SCALE
+    end
+
+    -- Update procedural animation for all entities
+    local entities = loci.get_entities()
+    for _, ent in ipairs(entities) do
+        local is_moving = false
+        local facing_dir = 0
+        
+        -- Detect movement from velocity
+        if ent.vx and ent.vy then
+            local speed = math.sqrt(ent.vx * ent.vx + ent.vy * ent.vy)
+            if speed > 0.1 then
+                is_moving = true
+                facing_dir = ent.vx > 0 and 1 or (ent.vx < 0 and -1) or 0
+            end
+        end
+        
+        procedural_anim.update_walk(dt, ent.id, is_moving, facing_dir)
     end
 
     -- Update rejection message timer
@@ -470,16 +509,30 @@ function draw_entity(ent, is_me)
 
     local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
     if char_name == "Arya" then
-        -- Placeholder 16x16 pink art for Arya
-        if is_dead then
-            love.graphics.setColor(0.5, 0.2, 0.3, 1) -- Cinza rosado escuro
-        else
-            love.graphics.setColor(1.0, 0.4, 0.7, 1) -- Rosa choque (cabelo rosa)
-        end
-        love.graphics.rectangle("fill", px - radius, py - radius, radius * 2, radius * 2)
-        love.graphics.setColor(1, 1, 1, 0.85)
-        love.graphics.setLineWidth(2)
-        love.graphics.rectangle("line", px - radius, py - radius, radius * 2, radius * 2)
+        -- Render Arya with procedural animation
+        local anim_state = procedural_anim.get_state(ent.id)
+        
+        -- Shadow ellipse at feet
+        local shadow_radius_x = (16 / 2) * VISUAL_SCALE
+        local shadow_radius_y = 3.5 * VISUAL_SCALE
+        love.graphics.setColor(0, 0, 0, 0.4)
+        love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+        
+        -- Pivot at feet (base of sprite)
+        local ox = 16 / 2
+        local oy = 16
+        
+        -- Draw sprite with animation
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.draw(
+            _arya_sprite,
+            px,
+            py + anim_state.bob_offset * VISUAL_SCALE,
+            anim_state.tilt_angle,
+            VISUAL_SCALE * anim_state.squash_x * anim_state.facing,
+            VISUAL_SCALE * anim_state.squash_y,
+            ox, oy
+        )
         
         if is_dead then
             love.graphics.setColor(1, 0, 0, 0.8)
@@ -488,6 +541,19 @@ function draw_entity(ent, is_me)
             love.graphics.line(px + radius, py - radius, px - radius, py + radius)
         end
     else
+        -- Non-Arya entities - apply procedural animation too
+        local anim_state = procedural_anim.get_state(ent.id)
+        
+        -- Shadow ellipse at feet
+        local shadow_radius_x = radius
+        local shadow_radius_y = 3.5 * VISUAL_SCALE
+        love.graphics.setColor(0, 0, 0, 0.4)
+        love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+        
+        -- Pivot at feet (base of circle)
+        local ox = radius
+        local oy = radius
+        
         if is_me then
             if is_dead then
                 love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro
@@ -502,10 +568,10 @@ function draw_entity(ent, is_me)
             end
         end
 
-        love.graphics.circle("fill", px, py, radius)
+        love.graphics.circle("fill", px, py + anim_state.bob_offset * VISUAL_SCALE, radius)
         love.graphics.setColor(1, 1, 1, 0.85)
         love.graphics.setLineWidth(2)
-        love.graphics.circle("line", px, py, radius)
+        love.graphics.circle("line", px, py + anim_state.bob_offset * VISUAL_SCALE, radius)
 
         -- Se morto, desenhar X sobre o jogador
         if is_dead then
