@@ -151,12 +151,16 @@ function love.update(dt)
                     virtual_joystick.trigger_skill(slot, now)
 
                     -- Usar a direção do joystick de movimento, ou direção padrão se parado
-                    local action_dx, action_dy = virtual_joystick.get_move_vector()
-                    if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
-                        action_dx, action_dy = 0, -1
+                    local dir_x, dir_y = virtual_joystick.get_move_vector()
+                    if math.abs(dir_x) < 0.1 and math.abs(dir_y) < 0.1 then
+                        dir_x, dir_y = 0, -1
                     end
 
-                    loci.send_action(slot, action_dx, action_dy)
+                    -- Convert direction vector to world coordinates (50 units range)
+                    local target_x = my_entity.x + dir_x * 50
+                    local target_y = my_entity.y + dir_y * 50
+
+                    loci.send_action(slot, target_x, target_y)
                 end
             end
         end
@@ -196,21 +200,18 @@ local function cast_ability_at_mouse(ability_id)
     if not mx then return end
 
     local sw, sh = GAME_WIDTH, GAME_HEIGHT
-    local world_target_x = (mx - sw / 2) + cam_x
-    local world_target_y = (my - sh / 2) + cam_y
-    
-    local origin_x = me and (me.x * VISUAL_SCALE) or cam_x
-    local origin_y = me and (me.y * VISUAL_SCALE) or cam_y
-    local dir_x = world_target_x - origin_x
-    local dir_y = world_target_y - origin_y
-    local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
-    if len > 0 then
-        dir_x, dir_y = dir_x / len, dir_y / len
-    else
-        dir_x, dir_y = 1, 0
-    end
 
-    loci.send_action(ability_id, dir_x, dir_y)
+    -- Calculate target position in world coordinates (server units, not pixels)
+    -- cam_x/cam_y are in screen pixels (multiplied by VISUAL_SCALE)
+    -- me.x/me.y are in world units (no VISUAL_SCALE)
+    local offset_x_pixels = mx - sw / 2
+    local offset_y_pixels = my - sh / 2
+
+    -- Convert pixel offset to world units
+    local target_x = me.x + (offset_x_pixels / VISUAL_SCALE)
+    local target_y = me.y + (offset_y_pixels / VISUAL_SCALE)
+
+    loci.send_action(ability_id, target_x, target_y)
 end
 
 function love.keypressed(key)
