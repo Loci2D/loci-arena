@@ -33,6 +33,10 @@ local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
 
+-- Screen shake state
+local shake_duration = 0
+local shake_intensity = 0
+
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
@@ -85,6 +89,18 @@ function love.load(arg)
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
         -- Hook for HUD/UI state updates (HP, score, buffs)
+        local my_entity = loci.get_my_entity()
+        if my_entity and entity.id == my_entity.id and key == "hp" then
+            local old_hp = tonumber(old_val) or 0
+            local new_hp = tonumber(new_val) or 0
+            local damage = old_hp - new_hp
+
+            -- Trigger screen shake on significant damage (>10 HP)
+            if damage > 10 then
+                shake_duration = 0.2
+                shake_intensity = math.min(damage / 5, 8) -- Max 8 pixels intensity
+            end
+        end
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
@@ -176,6 +192,18 @@ function love.update(dt)
         visual_fx[i].lifetime = visual_fx[i].lifetime - dt
         if visual_fx[i].lifetime <= 0 then
             table.remove(visual_fx, i)
+        end
+    end
+
+    -- Update screen shake with damping
+    if shake_duration > 0 then
+        shake_duration = shake_duration - dt
+        if shake_duration <= 0 then
+            shake_duration = 0
+            shake_intensity = 0
+        else
+            -- Linear damping: intensity decreases as duration approaches 0
+            shake_intensity = shake_intensity * (shake_duration / 0.2)
         end
     end
 end
@@ -296,7 +324,15 @@ function love.draw()
     -- 1. Arena World Rendering
     love.graphics.push()
     love.graphics.translate(center_x, center_y)
-    love.graphics.translate(-cam_x, -cam_y)
+
+    -- Apply screen shake offset when active
+    local shake_offset_x = 0
+    local shake_offset_y = 0
+    if shake_duration > 0 and shake_intensity > 0 then
+        shake_offset_x = (love.math.random() - 0.5) * 2 * shake_intensity
+        shake_offset_y = (love.math.random() - 0.5) * 2 * shake_intensity
+    end
+    love.graphics.translate(-cam_x + shake_offset_x, -cam_y + shake_offset_y)
 
     -- Draw background grid & physical collision boundaries
     draw_arena_grid()
