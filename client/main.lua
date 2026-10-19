@@ -20,7 +20,6 @@ local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 -- Fontes para efeitos visuais (criadas uma vez)
 local font_damage_normal = love.graphics.newFont(18)
 local font_damage_critical = love.graphics.newFont(24)
-local font_heal = love.graphics.newFont(18)
 
 -- Configurar push no sistema de joystick para conversão de coordenadas
 virtual_joystick.set_push(push)
@@ -107,17 +106,6 @@ function love.load(arg)
                     lifetime = 1.2,
                     max_lifetime = 1.2,
                     is_critical = is_critical
-                })
-            elseif damage < 0 then
-                -- Cura recebida - criar número flutuante verde
-                table.insert(visual_fx, {
-                    type = "heal",
-                    value = math.abs(damage),
-                    x = entity.x,
-                    y = entity.y,
-                    offset_y = 0,
-                    lifetime = 1.2,
-                    max_lifetime = 1.2
                 })
             end
         end
@@ -212,7 +200,7 @@ function love.update(dt)
         visual_fx[i].lifetime = visual_fx[i].lifetime - dt
 
         -- Atualizar posição para números flutuantes (sobe com o tempo)
-        if visual_fx[i].type == "damage" or visual_fx[i].type == "heal" then
+        if visual_fx[i].type == "damage" then
             visual_fx[i].offset_y = visual_fx[i].offset_y + 60 * dt
         end
 
@@ -345,8 +333,8 @@ function love.draw()
 
     -- Draw transient visual effects (Animações e Áreas de Contato)
     for _, fx in ipairs(visual_fx) do
-        -- Skip damage/heal effects here, they are drawn separately
-        if fx.type == "damage" or fx.type == "heal" then
+        -- Skip damage effects here, they are drawn separately
+        if fx.type == "damage" then
             goto continue
         end
 
@@ -434,9 +422,9 @@ function love.draw()
         ::continue::
     end
 
-    -- Draw floating damage/heal numbers
+    -- Draw floating damage numbers
     for _, fx in ipairs(visual_fx) do
-        if fx.type == "damage" or fx.type == "heal" then
+        if fx.type == "damage" then
             local progress = fx.lifetime / fx.max_lifetime
             local alpha = progress
             local scale = 1.0 + (1.0 - progress) * 0.3
@@ -451,27 +439,17 @@ function love.draw()
             love.graphics.translate(text_x, text_y)
             love.graphics.scale(scale, scale)
 
-            if fx.type == "damage" then
-                if fx.is_critical then
-                    -- Dano crítico - vermelho brilhante, maior
-                    love.graphics.setColor(1.0, 0.1, 0.1, alpha)
-                    love.graphics.setFont(font_damage_critical)
-                else
-                    -- Dano normal - branco
-                    love.graphics.setColor(1.0, 1.0, 1.0, alpha)
-                    love.graphics.setFont(font_damage_normal)
-                end
+            if fx.is_critical then
+                -- Dano crítico - vermelho brilhante, maior
+                love.graphics.setColor(1.0, 0.1, 0.1, alpha)
+                love.graphics.setFont(font_damage_critical)
             else
-                -- Cura - verde
-                love.graphics.setColor(0.2, 1.0, 0.4, alpha)
-                love.graphics.setFont(font_heal)
+                -- Dano normal - branco
+                love.graphics.setColor(1.0, 1.0, 1.0, alpha)
+                love.graphics.setFont(font_damage_normal)
             end
 
             local damage_text = string.format("%d", fx.value)
-            if fx.type == "heal" then
-                damage_text = "+" .. damage_text
-            end
-
             local tw = love.graphics.getFont():getWidth(damage_text)
             love.graphics.print(damage_text, -tw / 2, 0)
 
