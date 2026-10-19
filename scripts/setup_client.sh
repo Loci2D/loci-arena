@@ -22,9 +22,16 @@ has_lua() {
     command -v lua5.3 >/dev/null 2>&1
 }
 
+has_protobuf() {
+    [ -f "$ROOT_DIR/client/loci2d/lib/pb.so" ] || \
+    [ -f "$ROOT_DIR/client/loci2d/lib/pb.dylib" ] || \
+    [ -f "$ROOT_DIR/client/loci2d/lib/pb.dll" ]
+}
+
 # 1. Verifica se ja estao instalados
 MISSING_LOVE=false
 MISSING_LUA=false
+MISSING_PB=false
 
 if has_love; then
     LOVE_VER="$(love --version 2>&1 | head -n 1 || echo "love")"
@@ -41,7 +48,13 @@ else
     MISSING_LUA=true
 fi
 
-if [ "$MISSING_LOVE" = false ] && [ "$MISSING_LUA" = false ]; then
+if has_protobuf; then
+    echo "[OK] lua-protobuf (pb) encontrado no client."
+else
+    MISSING_PB=true
+fi
+
+if [ "$MISSING_LOVE" = false ] && [ "$MISSING_LUA" = false ] && [ "$MISSING_PB" = false ]; then
     echo "[OK] Todas as dependencias do cliente ja estao instaladas!"
     exit 0
 fi
@@ -49,6 +62,7 @@ fi
 echo "-> Dependencias ausentes:"
 [ "$MISSING_LOVE" = true ] && echo "   - Love2D (love)"
 [ "$MISSING_LUA" = true ] && echo "   - Lua (lua / lua5.1)"
+[ "$MISSING_PB" = true ] && echo "   - lua-protobuf (pb.so / pb.dylib)"
 
 if [ "$CHECK_ONLY" = true ]; then
     echo "Modo de verificacao (--check): dependencias ausentes encontradas."
@@ -119,18 +133,80 @@ install_opensuse() {
 
 install_macos() {
     echo "-> Sistema detectado: macOS"
-    if command -v brew >/dev/null 2>&1; then
-        echo "-> Instalando dependencias via Homebrew..."
-        if [ "$MISSING_LUA" = true ]; then
+    if [ "$MISSING_LUA" = true ]; then
+        if command -v brew >/dev/null 2>&1; then
+            echo "-> Instalando Lua via Homebrew..."
             brew install lua
+        else
+            echo "Aviso: Homebrew nao encontrado para instalar Lua."
         fi
-        if [ "$MISSING_LOVE" = true ]; then
-            brew install love || brew install --cask love
+    fi
+
+    if [ "$MISSING_LOVE" = true ]; then
+        echo "-> Tentando instalar Love2D..."
+        # Tenta via brew se disponivel (pode falhar se o cask estiver desabilitado pelo Gatekeeper)
+        if command -v brew >/dev/null 2>&1; then
+            brew install love 2>/dev/null || brew install --cask love 2>/dev/null || true
         fi
-    else
-        echo "Erro: Homebrew nao encontrado."
-        echo "Instale o Homebrew em https://brew.sh ou baixe o Love2D em https://love2d.org"
-        exit 1
+
+        # Fallback oficial via GitHub release caso o cask do Homebrew esteja desabilitado
+        if ! has_love; then
+            echo "-> Baixando Love2D 11.5 oficial para macOS..."
+            LOVE_ZIP="/tmp/love-macos.zip"
+            LOVE_TMP_DIR="/tmp/love-install"
+            curl -fSL -o "$LOVE_ZIP" "https://github.com/love2d/love/releases/download/11.5/love-11.5-macos.zip"
+            mkdir -p "$LOVE_TMP_DIR"
+            unzip -q -o "$LOVE_ZIP" -d "$LOVE_TMP_DIR"
+            
+            TARGET_APP="/Applications/love.app"
+            if [ -w "/Applications" ]; then
+                rm -rf "$TARGET_APP"
+                mv "$LOVE_TMP_DIR/love.app" "$TARGET_APP"
+            else
+                TARGET_APP="$HOME/Applications/love.app"
+                mkdir -p "$HOME/Applications"
+                rm -rf "$TARGET_APP"
+                mv "$LOVE_TMP_DIR/love.app" "$TARGET_APP"
+            fi
+
+            # Remove a quarentena do macOS (Gatekeeper) para permitir execucao
+            if command -v xattr >/dev/null 2>&1; then
+                xattr -dr com.apple.quarantine "$TARGET_APP" 2>/dev/null || true
+            fi
+
+            # Cria link simbolico para o PATH
+            BIN_DIR="/opt/homebrew/bin"
+            [ ! -d "$BIN_DIR" ] && BIN_DIR="/usr/local/bin"
+            if [ -w "$BIN_DIR" ]; then
+                ln -sf "$TARGET_APP/Contents/MacOS/love" "$BIN_DIR/love"
+            elif [ -n "$SUDO" ]; then
+                $SUDO ln -sf "$TARGET_APP/Contents/MacOS/love" "$BIN_DIR/love"
+            fi
+
+            rm -rf "$LOVE_ZIP" "$LOVE_TMP_DIR"
+        fi
+    fi
+
+    if [ "$MISSING_PB" = true ]; then
+        echo "-> Compilando lua-protobuf (pb.so) para o client Love2D..."
+        PB_TMP_DIR="/tmp/pb-build-$$"
+        mkdir -p "$PB_TMP_DIR"
+        mkdir -p "$ROOT_DIR/client/loci2d/lib"
+        curl -fSL -o "$PB_TMP_DIR/pb.c" "https://raw.githubusercontent.com/starwing/lua-protobuf/master/pb.c" 2>/dev/null || true
+        curl -fSL -o "$PB_TMP_DIR/pb.h" "https://raw.githubusercontent.com/starwing/lua-protobuf/master/pb.h" 2>/dev/null || true
+
+        LOVE_LUA_INC="/Applications/love.app/Contents/Frameworks/Lua.framework/Versions/A/Headers"
+        SDK_FLAG=""
+        if [ -d "/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk" ]; then
+            SDK_FLAG="-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk"
+        elif [ -d "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk" ]; then
+            SDK_FLAG="-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
+        fi
+
+        if [ -f "$PB_TMP_DIR/pb.c" ] && [ -d "$LOVE_LUA_INC" ]; then
+            clang -O2 -bundle -undefined dynamic_lookup $SDK_FLAG -I"$LOVE_LUA_INC" "$PB_TMP_DIR/pb.c" -o "$ROOT_DIR/client/loci2d/lib/pb.so" 2>/dev/null || true
+        fi
+        rm -rf "$PB_TMP_DIR"
     fi
 }
 
@@ -186,17 +262,20 @@ case "$OS_TYPE" in
 esac
 
 # Verificacao pos-instalacao
-if has_love && has_lua; then
-    echo "[OK] Love2D e Lua configurados com sucesso!"
+if has_love && has_lua && has_protobuf; then
+    echo "[OK] Love2D, Lua e lua-protobuf configurados com sucesso!"
     exit 0
 else
     echo ""
-    echo "Aviso: A instalacao automatica foi executada, mas uma ou mais ferramentas ainda nao foram encontradas no PATH."
+    echo "Aviso: A instalacao automatica foi executada, mas uma ou mais dependencias ainda estao pendentes."
     if ! has_love; then
         echo " - Love2D: certifique-se de que o executavel 'love' esta no seu PATH (https://love2d.org)"
     fi
     if ! has_lua; then
         echo " - Lua: certifique-se de que o executavel 'lua' esta no seu PATH (https://www.lua.org)"
+    fi
+    if ! has_protobuf; then
+        echo " - lua-protobuf: biblioteca 'pb.so' ausente em client/loci2d/lib/"
     fi
     exit 1
 fi
