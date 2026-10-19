@@ -17,6 +17,11 @@ local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
+-- Fontes para efeitos visuais (criadas uma vez)
+local font_damage_normal = love.graphics.newFont(18)
+local font_damage_critical = love.graphics.newFont(24)
+local font_heal = love.graphics.newFont(18)
+
 -- Configurar push no sistema de joystick para conversão de coordenadas
 virtual_joystick.set_push(push)
 
@@ -85,6 +90,37 @@ function love.load(arg)
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
         -- Hook for HUD/UI state updates (HP, score, buffs)
+        if key == "hp" then
+            local old_hp = tonumber(old_val) or 0
+            local new_hp = tonumber(new_val) or 0
+            local damage = old_hp - new_hp
+
+            if damage > 0 then
+                -- Dano recebido - criar número flutuante vermelho
+                local is_critical = damage >= 50
+                table.insert(visual_fx, {
+                    type = "damage",
+                    value = damage,
+                    x = entity.x,
+                    y = entity.y,
+                    offset_y = 0,
+                    lifetime = 1.2,
+                    max_lifetime = 1.2,
+                    is_critical = is_critical
+                })
+            elseif damage < 0 then
+                -- Cura recebida - criar número flutuante verde
+                table.insert(visual_fx, {
+                    type = "heal",
+                    value = math.abs(damage),
+                    x = entity.x,
+                    y = entity.y,
+                    offset_y = 0,
+                    lifetime = 1.2,
+                    max_lifetime = 1.2
+                })
+            end
+        end
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
@@ -174,6 +210,12 @@ function love.update(dt)
     -- Update visual effects
     for i = #visual_fx, 1, -1 do
         visual_fx[i].lifetime = visual_fx[i].lifetime - dt
+
+        -- Atualizar posição para números flutuantes (sobe com o tempo)
+        if visual_fx[i].type == "damage" or visual_fx[i].type == "heal" then
+            visual_fx[i].offset_y = visual_fx[i].offset_y + 60 * dt
+        end
+
         if visual_fx[i].lifetime <= 0 then
             table.remove(visual_fx, i)
         end
@@ -382,6 +424,48 @@ function love.draw()
             love.graphics.setColor(1, 0.85, 0.2, progress)
             love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
             love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
+        end
+    end
+
+    -- Draw floating damage/heal numbers
+    for _, fx in ipairs(visual_fx) do
+        if fx.type == "damage" or fx.type == "heal" then
+            local progress = fx.lifetime / fx.max_lifetime
+            local alpha = progress
+            local scale = 1.0 + (1.0 - progress) * 0.3
+
+            local text_x = fx.x * VISUAL_SCALE
+            local text_y = (fx.y * VISUAL_SCALE) - fx.offset_y
+
+            love.graphics.push()
+            love.graphics.translate(text_x, text_y)
+            love.graphics.scale(scale, scale)
+
+            if fx.type == "damage" then
+                if fx.is_critical then
+                    -- Dano crítico - vermelho brilhante, maior
+                    love.graphics.setColor(1.0, 0.1, 0.1, alpha)
+                    love.graphics.setFont(font_damage_critical)
+                else
+                    -- Dano normal - branco
+                    love.graphics.setColor(1.0, 1.0, 1.0, alpha)
+                    love.graphics.setFont(font_damage_normal)
+                end
+            else
+                -- Cura - verde
+                love.graphics.setColor(0.2, 1.0, 0.4, alpha)
+                love.graphics.setFont(font_heal)
+            end
+
+            local damage_text = string.format("%d", fx.value)
+            if fx.type == "heal" then
+                damage_text = "+" .. damage_text
+            end
+
+            local tw = love.graphics.getFont():getWidth(damage_text)
+            love.graphics.print(damage_text, -tw / 2, 0)
+
+            love.graphics.pop()
         end
     end
 
