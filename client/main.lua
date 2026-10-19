@@ -345,6 +345,11 @@ function love.draw()
 
     -- Draw transient visual effects (Animações e Áreas de Contato)
     for _, fx in ipairs(visual_fx) do
+        -- Skip damage/heal effects here, they are drawn separately
+        if fx.type == "damage" or fx.type == "heal" then
+            goto continue
+        end
+
         local progress = fx.lifetime / fx.max_lifetime
         local inv_prog = 1.0 - progress
         local fx_start_x = fx.x * VISUAL_SCALE
@@ -425,6 +430,8 @@ function love.draw()
             love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
             love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
         end
+
+        ::continue::
     end
 
     -- Draw floating damage/heal numbers
@@ -436,6 +443,9 @@ function love.draw()
 
             local text_x = fx.x * VISUAL_SCALE
             local text_y = (fx.y * VISUAL_SCALE) - fx.offset_y
+
+            -- Salvar a fonte atual antes de alterá-la
+            local original_font = love.graphics.getFont()
 
             love.graphics.push()
             love.graphics.translate(text_x, text_y)
@@ -466,6 +476,9 @@ function love.draw()
             love.graphics.print(damage_text, -tw / 2, 0)
 
             love.graphics.pop()
+
+            -- Restaurar a fonte original
+            love.graphics.setFont(original_font)
         end
     end
 
