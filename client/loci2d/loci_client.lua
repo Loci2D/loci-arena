@@ -2,8 +2,8 @@ local socket = require("socket")
 local pb = nil
 local protoc = nil
 
-package.cpath = package.cpath .. ";./?.so;./lib/?.so;sdks/love2d/lib/?.so;../../sdks/love2d/lib/?.so"
-package.path = package.path .. ";./?.lua;./lib/?.lua;sdks/love2d/lib/?.lua;../../sdks/love2d/lib/?.lua"
+package.cpath = package.cpath .. ";./?.so;./lib/?.so;./loci2d/lib/?.so;./client/loci2d/lib/?.so;sdks/love2d/lib/?.so;../../sdks/love2d/lib/?.so;./?.dylib;./lib/?.dylib;./loci2d/lib/?.dylib"
+package.path = package.path .. ";./?.lua;./lib/?.lua;./loci2d/lib/?.lua;./client/loci2d/lib/?.lua;sdks/love2d/lib/?.lua;../../sdks/love2d/lib/?.lua"
 
 -- Attempt to load lua-protobuf library and protoc parser
 local ok_pb, res_pb = pcall(require, "pb")

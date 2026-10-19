@@ -15,8 +15,14 @@ has_lua() {
     command -v lua5.3 >/dev/null 2>&1
 }
 
-if ! has_love || ! has_lua; then
-    echo "Dependencias do cliente (Love2D e/ou Lua) nao encontradas."
+has_protobuf() {
+    [ -f "$ROOT_DIR/client/loci2d/lib/pb.so" ] || \
+    [ -f "$ROOT_DIR/client/loci2d/lib/pb.dylib" ] || \
+    [ -f "$ROOT_DIR/client/loci2d/lib/pb.dll" ]
+}
+
+if ! has_love || ! has_lua || ! has_protobuf; then
+    echo "Dependencias do cliente (Love2D, Lua e/ou lua-protobuf) nao encontradas."
     echo "Executando configuracao automatica via setup_client.sh..."
     "$ROOT_DIR/scripts/setup_client.sh"
 fi
