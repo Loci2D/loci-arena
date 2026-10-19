@@ -65,14 +65,15 @@ function on_player_join(entity_id)
     local existing_prop_team = (Loci and Loci.get_entity_property) and Loci.get_entity_property(entity_id, "team") or nil
 
     if existing_record or (existing_prop_team and existing_prop_team ~= "") then
-        local current_team = (existing_record and existing_record.team) or existing_prop_team
+        local current_team = tostring((existing_record and existing_record.team) or existing_prop_team)
         if not existing_record then
             connected_players[entity_id] = { team = current_team }
+            team_counts[current_team] = (team_counts[current_team] or 0) + 1
         end
         if Loci and Loci.Log then
-            Loci.Log.info("[Arena] Player " .. tostring(entity_id) .. " session re-joined. Mantendo time " .. tostring(current_team))
+            Loci.Log.info("[Arena] Player " .. tostring(entity_id) .. " session re-joined. Mantendo time " .. current_team)
         end
-        Loci.Commands.set_property(entity_id, "team", tostring(current_team))
+        Loci.Commands.set_property(entity_id, "team", current_team)
         return
     end
 
