@@ -35,6 +35,7 @@ local show_touch_controls = true
 
 -- Screen shake state
 local shake_duration = 0
+local shake_total_duration = 0.2
 local shake_intensity = 0
 
 -- Camera state (tracked directly in world coordinates)
@@ -95,10 +96,12 @@ function love.load(arg)
             local new_hp = tonumber(new_val) or 0
             local damage = old_hp - new_hp
 
-            -- Trigger screen shake on significant damage (>10 HP)
-            if damage > 10 then
+            -- Trigger screen shake on significant damage (>50 HP)
+            if damage > 50 then
+                shake_total_duration = 0.2
                 shake_duration = 0.2
-                shake_intensity = math.min(damage / 5, 8) -- Max 8 pixels intensity
+                local intensity = math.min(8, 2.5 + (damage / 120))
+                shake_intensity = math.max(shake_intensity, intensity)
             end
         end
     end
@@ -195,15 +198,12 @@ function love.update(dt)
         end
     end
 
-    -- Update screen shake with damping
+    -- Update screen shake timer
     if shake_duration > 0 then
         shake_duration = shake_duration - dt
         if shake_duration <= 0 then
             shake_duration = 0
             shake_intensity = 0
-        else
-            -- Linear damping: intensity decreases as duration approaches 0
-            shake_intensity = shake_intensity * (shake_duration / 0.2)
         end
     end
 end
@@ -325,12 +325,13 @@ function love.draw()
     love.graphics.push()
     love.graphics.translate(center_x, center_y)
 
-    -- Apply screen shake offset when active
+    -- Apply screen shake offset when active (smooth linear damping over duration)
     local shake_offset_x = 0
     local shake_offset_y = 0
     if shake_duration > 0 and shake_intensity > 0 then
-        shake_offset_x = (love.math.random() - 0.5) * 2 * shake_intensity
-        shake_offset_y = (love.math.random() - 0.5) * 2 * shake_intensity
+        local current_intensity = shake_intensity * (shake_duration / shake_total_duration)
+        shake_offset_x = (love.math.random() - 0.5) * 2 * current_intensity
+        shake_offset_y = (love.math.random() - 0.5) * 2 * current_intensity
     end
     love.graphics.translate(-cam_x + shake_offset_x, -cam_y + shake_offset_y)
 
