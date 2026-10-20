@@ -65,9 +65,10 @@ function ProceduralAnim.update_walk(dt, entity_id, is_moving, facing_dir)
     else
         -- Parado: desaceleração suave de volta à posição neutra
         state.target_tilt = 0
-        state.bob_offset = state.bob_offset + (0 - state.bob_offset) * WALK_CONFIG.stop_smoothness * dt
-        state.squash_x = state.squash_x + (1 - state.squash_x) * WALK_CONFIG.stop_smoothness * dt
-        state.squash_y = state.squash_y + (1 - state.squash_y) * WALK_CONFIG.stop_smoothness * dt
+        local stop_t = math.min(1, WALK_CONFIG.stop_smoothness * dt)
+        state.bob_offset = state.bob_offset + (0 - state.bob_offset) * stop_t
+        state.squash_x = state.squash_x + (1 - state.squash_x) * stop_t
+        state.squash_y = state.squash_y + (1 - state.squash_y) * stop_t
         
         -- Zera timer se parado por um tempo
         if state.last_moving then
@@ -76,8 +77,9 @@ function ProceduralAnim.update_walk(dt, entity_id, is_moving, facing_dir)
         end
     end
     
-    -- Interpolação suave do ângulo de rotação (Lerp)
-    state.tilt_angle = state.tilt_angle + (state.target_tilt - state.tilt_angle) * 16 * dt
+    -- Interpolação suave do ângulo de rotação (Lerp protegido contra dt spikes)
+    local tilt_t = math.min(1, 16 * dt)
+    state.tilt_angle = state.tilt_angle + (state.target_tilt - state.tilt_angle) * tilt_t
     
     return state
 end
