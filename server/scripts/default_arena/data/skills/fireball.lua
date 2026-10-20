@@ -12,7 +12,7 @@ local function get_coords(pos)
     return 0, 0
 end
 
-local VISUAL_SCALE = 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
+local VISUAL_SCALE = (CombatSystem.CONST and CombatSystem.CONST.VISUAL_SCALE) or 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
 
 return {
     id = "fireball",

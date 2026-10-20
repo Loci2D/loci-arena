@@ -333,7 +333,7 @@ function love.draw()
 
         elseif fx.ability_id == 3 then
             -- Skill 3 (Whirlwind Dash): Círculo 360º de corte giratório dourado com lâminas
-            local dash_dist = 112 * inv_prog -- Desloca o efeito visual junto com o avanço (14 unidades * VISUAL_SCALE)
+            local dash_dist = 160 * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades * VISUAL_SCALE)
             local curr_x = fx_start_x + fx.dir_x * dash_dist
             local curr_y = fx_start_y + fx.dir_y * dash_dist
             local r = 65 * (0.7 + 0.5 * inv_prog)
