@@ -217,14 +217,13 @@
         <div class="card">
             <span class="step-badge">Passo 2</span>
             <h2>Criando Habilidades (Skills)</h2>
-            <p>Quando o cliente chama <code>loci.send_action(ability_id, x, y)</code>, o servidor recebe isso através da
+            <p>Quando o cliente chama <code>loci.send_action(ability_id, dir_x, dir_y)</code>, o servidor recebe isso através da
                 função <code>on_action</code>. É aqui que a mágica acontece!</p>
             <p
                 style="background-color: var(--primary-glow); padding: 12px; border-left: 4px solid var(--primary); border-radius: 0 8px 8px 0; font-size: 0.95rem; margin-bottom: 20px;">
                 💡 <strong>Dica de Input:</strong> O servidor não sabe se o jogador clicou com o mouse, apertou a barra
                 de espaço, ou usou um controle de videogame! O cliente fica encarregado de mapear os botões e chamar a
-                função enviando apenas o <code>ability_id</code>. O servidor recebe apenas a intenção ("Usar habilidade
-                1 nas coordenadas X, Y").
+                função enviando o <code>ability_id</code> e a direção da mira. O servidor recebe a intenção de ação com o vetor de mira.
             </p>
             <pre><code><span class="keyword">function</span> <span class="func">on_action</span>(entity_id, ability_id, aim_x, aim_y)
     <span class="keyword">if</span> ability_id == <span class="number">1</span> <span class="keyword">then</span>
