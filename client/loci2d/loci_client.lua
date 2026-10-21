@@ -256,11 +256,14 @@ end
 function loci.send_action(ability_id, aim_x, aim_y)
     local my_ent = loci.get_my_entity()
     if not my_ent then return end
-    
+
+    -- Cliente envia coordenadas de mundo (onde quer mirar)
+    -- SDK converte para vetor normalizado baseado na posição atual do cliente
+    -- O servidor valida a direção recebida
     local dx = aim_x - my_ent.x
     local dy = aim_y - my_ent.y
     local len = math.sqrt(dx * dx + dy * dy)
-    
+
     if len > 0 then
         dx = dx / len
         dy = dy / len
@@ -268,7 +271,7 @@ function loci.send_action(ability_id, aim_x, aim_y)
         dx = 0
         dy = 0
     end
-    
+
     loci._send_intent({ action = { ability_id = ability_id, target_direction = { x_bits = float_to_bits(dx), y_bits = float_to_bits(dy) } } })
 end
 

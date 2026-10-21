@@ -15,6 +15,9 @@ local team_counts = { ["1"] = 0, ["2"] = 0 }
 -- =============================================================================
 local _LOADED = {}
 local SEARCH_PATTERNS = {
+    "server/scripts/%s.lua",
+    "server/scripts/%s/init.lua",
+    "server/scripts/default_arena/%s.lua",
     "scripts/%s.lua",
     "scripts/%s/init.lua",
     "scripts/default_arena/%s.lua",
@@ -95,6 +98,10 @@ function on_player_join(entity_id)
 
     -- Instancia o personagem (agora definido como Arya para teste)
     CharacterFactory.create_character(entity_id, "arya")
+    if Loci and Loci.Log then
+        Loci.Log.info(string.format("[Arena] Entity ID %s alocado no Time %s (Time 1: %d, Time 2: %d)",
+            tostring(entity_id), team_id, team_counts["1"], team_counts["2"]))
+    end
 end
 
 function on_move_intent(entity_id, dir_x, dir_y)

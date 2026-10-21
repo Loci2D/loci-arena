@@ -43,18 +43,31 @@ return {
         local target_y = caster_y + aim_y * (skill_data.range * 0.5)
 
         local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
-        local hit_ids = Loci.get_entities_in_radius({ x = target_x, y = target_y }, skill_data.aoe_radius)
+        local hit_ids = {}
+        local hit_set = {}
+        local sample_points = {
+            { x = caster_x + aim_x * (skill_data.range * 0.25), y = caster_y + aim_y * (skill_data.range * 0.25) },
+            { x = target_x, y = target_y }
+        }
 
-        local hit_count = 0
-        if hit_ids then
-            for _, target_id in ipairs(hit_ids) do
-                if target_id ~= entity_id then
-                    local target_team = Loci.get_entity_property(target_id, "team") or "2"
-                    if target_team ~= caster_team then
-                        CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type)
-                        hit_count = hit_count + 1
+        for _, pt in ipairs(sample_points) do
+            local nearby = Loci.get_entities_in_radius(pt, skill_data.aoe_radius)
+            if nearby then
+                for _, target_id in ipairs(nearby) do
+                    if target_id ~= entity_id and not hit_set[target_id] then
+                        hit_set[target_id] = true
+                        table.insert(hit_ids, target_id)
                     end
                 end
+            end
+        end
+
+        local hit_count = 0
+        for _, target_id in ipairs(hit_ids) do
+            local target_team = Loci.get_entity_property(target_id, "team") or "2"
+            if target_team ~= caster_team then
+                CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type)
+                hit_count = hit_count + 1
             end
         end
 

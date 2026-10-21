@@ -18,17 +18,36 @@ return {
     name = "Recompensa da Fúria",
     description = "Golpe físico devastador de médio alcance, ativado após um aliado morrer.",
     mana_cost = 0,
-    cooldown = 0, -- Ooldown é gerido pela passiva (requer aliado morrer)
+    cooldown = 150, -- 5.0s a 30Hz (em 1v1/sem aliados; em times é ativado pela passiva de morte de aliado)
     range = 120 / VISUAL_SCALE,     -- 15.0 unidades no mundo (120px na tela)
     damage = 500,
     damage_type = CombatSystem.DamageType.PHYSICAL,
     aoe_radius = 50 / VISUAL_SCALE, -- 6.25 unidades no mundo (50px na tela)
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
+        local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
+
         -- Check if Fury is active
         local is_fury = Loci.get_entity_property(entity_id, "fury_active") == "true"
         if not is_fury then
-            return false, "Habilidade bloqueada. Um aliado precisa morrer para ativar."
+            -- Verifica se existem aliados no time do jogador.
+            -- Se não houver aliados na partida (ex: duelo 1v1 ou modo treino), desbloqueia a habilidade.
+            local has_allies = false
+            local all_entities = Loci.get_entities_in_radius({ x = 0, y = 0 }, 10000)
+            if all_entities then
+                for _, other_id in ipairs(all_entities) do
+                    if other_id ~= entity_id then
+                        local other_team = Loci.get_entity_property(other_id, "team")
+                        if other_team == caster_team then
+                            has_allies = true
+                            break
+                        end
+                    end
+                end
+            end
+            if has_allies then
+                return false, "Habilidade bloqueada. Um aliado precisa morrer para ativar."
+            end
         end
 
         -- Normaliza vetor de mira
