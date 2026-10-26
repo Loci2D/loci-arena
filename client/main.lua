@@ -315,6 +315,8 @@ function love.keypressed(key)
         cast_ability_at_mouse(4)
     elseif key == "5" or key == "f" then
         cast_ability_at_mouse(5)
+    elseif key == "6" or key == "g" then
+        cast_ability_at_mouse(6)
     end
 end
 
