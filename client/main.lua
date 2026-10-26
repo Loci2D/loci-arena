@@ -15,6 +15,7 @@ end
 local push = require("src.push")
 local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
+local procedural_anim = require("src.procedural_anim")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -33,9 +34,16 @@ local connection_status = "Connecting..."
 local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
+local floating_damage = {}
 local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
+local _arya_sprite = nil
+
+-- Screen shake state
+local shake_duration = 0
+local shake_total_duration = 0.2
+local shake_intensity = 0
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
@@ -78,6 +86,37 @@ function love.load(arg)
 
     connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
 
+    -- Load Arya sprite (prefer PNG if available, fallback to embedded hex data)
+    local loaded_from_file = false
+    if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo("assets/sprites/arya.png") then
+        local ok_img, img = pcall(love.graphics.newImage, "assets/sprites/arya.png")
+        if ok_img and img then
+            _arya_sprite = img
+            loaded_from_file = true
+        end
+    end
+
+    if not loaded_from_file then
+        local arya_sprite_data = require("assets.sprites.arya")
+        local data = love.image.newImageData(16, 16)
+        for y = 0, 15 do
+            for x = 0, 15 do
+                local val = arya_sprite_data[y + 1][x + 1]
+                if val then
+                    local r = math.floor(val / 0x1000000) % 256 / 255
+                    local g = math.floor(val / 0x10000) % 256 / 255
+                    local b = math.floor(val / 0x100) % 256 / 255
+                    local a = (val % 256) / 255
+                    data:setPixel(x, y, r, g, b, a)
+                else
+                    data:setPixel(x, y, 0, 0, 0, 0)
+                end
+            end
+        end
+        _arya_sprite = love.graphics.newImage(data)
+    end
+    _arya_sprite:setFilter("nearest", "nearest")
+
     -- Event hooks
     loci.on_entity_spawned = function(entity)
         print(string.format("[Event] Entity spawned: ID %s at (%.1f, %.1f)", tostring(entity.id), entity.x, entity.y))
@@ -85,6 +124,7 @@ function love.load(arg)
 
     loci.on_entity_despawned = function(entity_id)
         print("[Event] Entity despawned: ID " .. tostring(entity_id))
+        procedural_anim.clear_state(entity_id)
     end
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
@@ -95,16 +135,26 @@ function love.load(arg)
             local damage = old_hp - new_hp
 
             if damage > 0 then
-                -- Dano recebido - criar número flutuante vermelho
-                local is_critical = damage >= 50
-                table.insert(visual_fx, {
-                    type = "damage",
+                -- 1. Screen shake apenas para dano significativo no jogador local
+                local my_entity = loci.get_my_entity()
+                if my_entity and entity.id == my_entity.id and damage > 50 then
+                    shake_total_duration = 0.2
+                    shake_duration = 0.2
+                    local intensity = math.min(8, 2.5 + (damage / 120))
+                    shake_intensity = math.max(shake_intensity, intensity)
+                end
+
+                -- 2. Dano flutuante para qualquer entidade (local ou inimiga)
+                -- Ataques normais variam de ~150 a 300 de dano após mitigação de defesa;
+                -- Golpes com dano >= 350 são críticos reais (multiplicador 2.25x)
+                local is_critical = damage >= 350
+                table.insert(floating_damage, {
                     value = damage,
                     x = entity.x,
                     y = entity.y,
-                    offset_y = 0,
-                    lifetime = 1.2,
-                    max_lifetime = 1.2,
+                    offset_y = 35, -- Inicia acima da cabeça do personagem
+                    lifetime = 1.0,
+                    max_lifetime = 1.0,
                     is_critical = is_critical
                 })
             end
@@ -180,6 +230,7 @@ function love.update(dt)
                         action_dx, action_dy = 0, -1
                     end
 
+                    -- Direção de mira enviada diretamente via vetor do joystick
                     loci.send_action(slot, action_dx, action_dy)
                 end
             end
@@ -190,22 +241,53 @@ function love.update(dt)
         cam_y = my_entity.y * VISUAL_SCALE
     end
 
+    -- Update procedural animation for all entities
+    local entities = loci.get_entities()
+    for _, ent in ipairs(entities) do
+        local is_moving = false
+        local facing_dir = 0
+        
+        -- Detect movement from velocity
+        if ent.vx and ent.vy then
+            local speed = math.sqrt(ent.vx * ent.vx + ent.vy * ent.vy)
+            if speed > 0.1 then
+                is_moving = true
+                facing_dir = ent.vx > 0 and 1 or (ent.vx < 0 and -1) or 0
+            end
+        end
+        
+        procedural_anim.update_walk(dt, ent.id, is_moving, facing_dir)
+    end
+
     -- Update rejection message timer
     if rejection_timer > 0 then
         rejection_timer = rejection_timer - dt
     end
 
-    -- Update visual effects
+    -- Update visual effects (skills)
     for i = #visual_fx, 1, -1 do
         visual_fx[i].lifetime = visual_fx[i].lifetime - dt
-
-        -- Atualizar posição para números flutuantes (sobe com o tempo)
-        if visual_fx[i].type == "damage" then
-            visual_fx[i].offset_y = visual_fx[i].offset_y + 60 * dt
-        end
-
         if visual_fx[i].lifetime <= 0 then
             table.remove(visual_fx, i)
+        end
+    end
+
+    -- Update floating damage numbers
+    for i = #floating_damage, 1, -1 do
+        local fd = floating_damage[i]
+        fd.lifetime = fd.lifetime - dt
+        fd.offset_y = fd.offset_y + 50 * dt
+        if fd.lifetime <= 0 then
+            table.remove(floating_damage, i)
+        end
+    end
+
+    -- Update screen shake timer
+    if shake_duration > 0 then
+        shake_duration = shake_duration - dt
+        if shake_duration <= 0 then
+            shake_duration = 0
+            shake_intensity = 0
         end
     end
 end
@@ -228,19 +310,12 @@ local function cast_ability_at_mouse(ability_id)
     local sw, sh = GAME_WIDTH, GAME_HEIGHT
     local world_target_x = (mx - sw / 2) + cam_x
     local world_target_y = (my - sh / 2) + cam_y
-    
-    local origin_x = me and (me.x * VISUAL_SCALE) or cam_x
-    local origin_y = me and (me.y * VISUAL_SCALE) or cam_y
-    local dir_x = world_target_x - origin_x
-    local dir_y = world_target_y - origin_y
-    local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
-    if len > 0 then
-        dir_x, dir_y = dir_x / len, dir_y / len
-    else
-        dir_x, dir_y = 1, 0
-    end
 
-    loci.send_action(ability_id, dir_x, dir_y)
+    -- Converte coordenadas de tela/câmera para coordenadas de mundo reais
+    local aim_x = world_target_x / VISUAL_SCALE
+    local aim_y = world_target_y / VISUAL_SCALE
+
+    loci.send_action_at_position(ability_id, aim_x, aim_y)
 end
 
 function love.keypressed(key)
@@ -326,18 +401,22 @@ function love.draw()
     -- 1. Arena World Rendering
     love.graphics.push()
     love.graphics.translate(center_x, center_y)
-    love.graphics.translate(-cam_x, -cam_y)
+
+    -- Apply screen shake offset when active (smooth linear damping over duration)
+    local shake_offset_x = 0
+    local shake_offset_y = 0
+    if shake_duration > 0 and shake_intensity > 0 then
+        local current_intensity = shake_intensity * (shake_duration / shake_total_duration)
+        shake_offset_x = (love.math.random() - 0.5) * 2 * current_intensity
+        shake_offset_y = (love.math.random() - 0.5) * 2 * current_intensity
+    end
+    love.graphics.translate(-cam_x + shake_offset_x, -cam_y + shake_offset_y)
 
     -- Draw background grid & physical collision boundaries
     draw_arena_grid()
 
     -- Draw transient visual effects (Animações e Áreas de Contato)
     for _, fx in ipairs(visual_fx) do
-        -- Skip damage effects here, they are drawn separately
-        if fx.type == "damage" then
-            goto continue
-        end
-
         local progress = fx.lifetime / fx.max_lifetime
         local inv_prog = 1.0 - progress
         local fx_start_x = fx.x * VISUAL_SCALE
@@ -356,8 +435,9 @@ function love.draw()
 
         elseif fx.ability_id == 2 then
             -- Skill 2 (Fury Reward): Impacto carmesim/fogo com onda de choque
-            local hit_x = fx_start_x + fx.dir_x * 40 * VISUAL_SCALE
-            local hit_y = fx_start_y + fx.dir_y * 40 * VISUAL_SCALE
+            local hit_dist = 60 -- (7.5 unidades no mundo * VISUAL_SCALE = 60px na tela)
+            local hit_x = fx_start_x + fx.dir_x * hit_dist
+            local hit_y = fx_start_y + fx.dir_y * hit_dist
             local r = 50 * (0.5 + 0.8 * inv_prog)
             love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
             love.graphics.setLineWidth(3)
@@ -367,7 +447,7 @@ function love.draw()
 
         elseif fx.ability_id == 3 then
             -- Skill 3 (Whirlwind Dash): Círculo 360º de corte giratório dourado com lâminas
-            local dash_dist = 112 * inv_prog -- Desloca o efeito visual junto com o avanço (14 unidades * VISUAL_SCALE)
+            local dash_dist = 160 * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades * VISUAL_SCALE)
             local curr_x = fx_start_x + fx.dir_x * dash_dist
             local curr_y = fx_start_y + fx.dir_y * dash_dist
             local r = 65 * (0.7 + 0.5 * inv_prog)
@@ -418,46 +498,6 @@ function love.draw()
             love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
             love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
         end
-
-        ::continue::
-    end
-
-    -- Draw floating damage numbers
-    for _, fx in ipairs(visual_fx) do
-        if fx.type == "damage" then
-            local progress = fx.lifetime / fx.max_lifetime
-            local alpha = progress
-            local scale = 1.0 + (1.0 - progress) * 0.3
-
-            local text_x = fx.x * VISUAL_SCALE
-            local text_y = (fx.y * VISUAL_SCALE) - fx.offset_y
-
-            -- Salvar a fonte atual antes de alterá-la
-            local original_font = love.graphics.getFont()
-
-            love.graphics.push()
-            love.graphics.translate(text_x, text_y)
-            love.graphics.scale(scale, scale)
-
-            if fx.is_critical then
-                -- Dano crítico - vermelho brilhante, maior
-                love.graphics.setColor(1.0, 0.1, 0.1, alpha)
-                love.graphics.setFont(font_damage_critical)
-            else
-                -- Dano normal - branco
-                love.graphics.setColor(1.0, 1.0, 1.0, alpha)
-                love.graphics.setFont(font_damage_normal)
-            end
-
-            local damage_text = string.format("%d", fx.value)
-            local tw = love.graphics.getFont():getWidth(damage_text)
-            love.graphics.print(damage_text, -tw / 2, 0)
-
-            love.graphics.pop()
-
-            -- Restaurar a fonte original
-            love.graphics.setFont(original_font)
-        end
     end
 
     -- Draw all network entities
@@ -465,6 +505,41 @@ function love.draw()
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
         draw_entity(ent, my_entity and (ent.id == my_entity.id))
+    end
+
+    -- Draw floating damage numbers (renderizado sobre os personagens)
+    if #floating_damage > 0 then
+        local original_font = love.graphics.getFont()
+        for _, fd in ipairs(floating_damage) do
+            local progress = fd.lifetime / fd.max_lifetime
+            local alpha = progress
+            local scale = 1.0 + (1.0 - progress) * 0.3
+
+            local text_x = fd.x * VISUAL_SCALE
+            local text_y = (fd.y * VISUAL_SCALE) - fd.offset_y
+
+            love.graphics.push()
+            love.graphics.translate(text_x, text_y)
+            love.graphics.scale(scale, scale)
+
+            if fd.is_critical then
+                -- Dano crítico - vermelho brilhante, maior
+                love.graphics.setColor(1.0, 0.15, 0.15, alpha)
+                love.graphics.setFont(font_damage_critical)
+            else
+                -- Dano normal - branco
+                love.graphics.setColor(1.0, 1.0, 1.0, alpha)
+                love.graphics.setFont(font_damage_normal)
+            end
+
+            local damage_text = string.format("%d", fd.value)
+            local tw = love.graphics.getFont():getWidth(damage_text)
+            love.graphics.print(damage_text, -tw / 2, 0)
+
+            love.graphics.pop()
+        end
+        love.graphics.setFont(original_font)
+        love.graphics.setColor(1.0, 1.0, 1.0, 1.0)
     end
 
     love.graphics.pop()
@@ -544,25 +619,56 @@ function draw_entity(ent, is_me)
     local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
 
     local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
-    if char_name == "Arya" then
-        -- Placeholder 16x16 pink art for Arya
-        if is_dead then
-            love.graphics.setColor(0.5, 0.2, 0.3, 1) -- Cinza rosado escuro
-        else
-            love.graphics.setColor(1.0, 0.4, 0.7, 1) -- Rosa choque (cabelo rosa)
-        end
-        love.graphics.rectangle("fill", px - radius, py - radius, radius * 2, radius * 2)
-        love.graphics.setColor(1, 1, 1, 0.85)
-        love.graphics.setLineWidth(2)
-        love.graphics.rectangle("line", px - radius, py - radius, radius * 2, radius * 2)
+    local is_arya = (char_name == "Arya")
+    if is_arya then
+        -- Render Arya with procedural animation
+        local anim_state = procedural_anim.get_state(ent.id)
         
+        -- Shadow ellipse at feet
+        local shadow_radius_x = (16 / 2) * VISUAL_SCALE
+        local shadow_radius_y = 3.5 * VISUAL_SCALE
+        love.graphics.setColor(0, 0, 0, 0.4)
+        love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+        
+        -- Pivot at feet (base of sprite)
+        local ox = 16 / 2
+        local oy = 16
+        
+        -- Draw sprite with animation (tint acinzentado se morta)
         if is_dead then
+            love.graphics.setColor(0.5, 0.5, 0.5, 0.75)
+        else
+            love.graphics.setColor(1, 1, 1, 1)
+        end
+        love.graphics.draw(
+            _arya_sprite,
+            px,
+            py + anim_state.bob_offset * VISUAL_SCALE,
+            anim_state.tilt_angle,
+            VISUAL_SCALE * anim_state.squash_x * anim_state.facing,
+            VISUAL_SCALE * anim_state.squash_y,
+            ox, oy
+        )
+        
+        -- Se morta, desenhar X sobre o centro do corpo
+        if is_dead then
+            local cy = py - (16 / 2) * VISUAL_SCALE
+            local cross_size = radius
             love.graphics.setColor(1, 0, 0, 0.8)
             love.graphics.setLineWidth(3)
-            love.graphics.line(px - radius, py - radius, px + radius, py + radius)
-            love.graphics.line(px + radius, py - radius, px - radius, py + radius)
+            love.graphics.line(px - cross_size, cy - cross_size, px + cross_size, cy + cross_size)
+            love.graphics.line(px + cross_size, cy - cross_size, px - cross_size, cy + cross_size)
         end
     else
+        -- Non-Arya entities - apply procedural animation too
+        local anim_state = procedural_anim.get_state(ent.id)
+        
+        -- Shadow ellipse at feet (base of circle)
+        local shadow_radius_x = radius
+        local shadow_radius_y = 0.4 * radius
+        love.graphics.setColor(0, 0, 0, 0.4)
+        love.graphics.ellipse("fill", px, py + radius, shadow_radius_x, shadow_radius_y)
+        
         if is_me then
             if is_dead then
                 love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro
@@ -577,10 +683,10 @@ function draw_entity(ent, is_me)
             end
         end
 
-        love.graphics.circle("fill", px, py, radius)
+        love.graphics.circle("fill", px, py + anim_state.bob_offset * VISUAL_SCALE, radius)
         love.graphics.setColor(1, 1, 1, 0.85)
         love.graphics.setLineWidth(2)
-        love.graphics.circle("line", px, py, radius)
+        love.graphics.circle("line", px, py + anim_state.bob_offset * VISUAL_SCALE, radius)
 
         -- Se morto, desenhar X sobre o jogador
         if is_dead then
@@ -597,7 +703,8 @@ function draw_entity(ent, is_me)
     local bar_w = 44
     local bar_h = 5
     local bar_x = px - bar_w / 2
-    local bar_y = py - radius - 14
+    local top_y = is_arya and (py - 16 * VISUAL_SCALE) or (py - radius)
+    local bar_y = top_y - 14
 
     love.graphics.setColor(0, 0, 0, 0.7)
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w, bar_h)
@@ -612,22 +719,24 @@ function draw_entity(ent, is_me)
     end
     local font = love.graphics.getFont()
     local tw = font:getWidth(label)
-    love.graphics.print(label, px - tw / 2, py - 7)
+    local label_y = is_arya and (bar_y - 14) or (py - 7)
+    love.graphics.print(label, px - tw / 2, label_y)
 
     -- Status effects (Stun / Desarme)
     local stunned_until = tonumber(ent.stunned_until or (ent.properties and ent.properties["stunned_until"])) or 0
     local disarmed_until = tonumber(ent.disarmed_until or (ent.properties and ent.properties["disarmed_until"])) or 0
     if not is_dead then
+        local status_y = is_arya and (label_y - 14) or (bar_y - 12)
         if stunned_until > 0 then
             love.graphics.setColor(1.0, 0.9, 0.2, 0.95)
             local txt = "* STUNNED *"
             local tw_s = font:getWidth(txt)
-            love.graphics.print(txt, px - tw_s / 2, bar_y - 12)
+            love.graphics.print(txt, px - tw_s / 2, status_y)
         elseif disarmed_until > 0 then
             love.graphics.setColor(1.0, 0.4, 0.4, 0.95)
             local txt = "[DESARMADA]"
             local tw_d = font:getWidth(txt)
-            love.graphics.print(txt, px - tw_d / 2, bar_y - 12)
+            love.graphics.print(txt, px - tw_d / 2, status_y)
         end
     end
 end

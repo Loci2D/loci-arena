@@ -253,14 +253,11 @@ function loci.send_move(dir_x, dir_y)
     loci._send_intent({ move = { direction = { x_bits = float_to_bits(dir_x), y_bits = float_to_bits(dir_y) } } })
 end
 
-function loci.send_action(ability_id, aim_x, aim_y)
-    local my_ent = loci.get_my_entity()
-    if not my_ent then return end
-    
-    local dx = aim_x - my_ent.x
-    local dy = aim_y - my_ent.y
+function loci.send_action(ability_id, dir_x, dir_y)
+    local dx = tonumber(dir_x) or 0
+    local dy = tonumber(dir_y) or 0
     local len = math.sqrt(dx * dx + dy * dy)
-    
+
     if len > 0 then
         dx = dx / len
         dy = dy / len
@@ -268,8 +265,21 @@ function loci.send_action(ability_id, aim_x, aim_y)
         dx = 0
         dy = 0
     end
-    
+
     loci._send_intent({ action = { ability_id = ability_id, target_direction = { x_bits = float_to_bits(dx), y_bits = float_to_bits(dy) } } })
+end
+
+function loci.send_action_at_position(ability_id, aim_x, aim_y)
+    local my_ent = loci.get_my_entity()
+    if not my_ent then return end
+
+    local dx = (tonumber(aim_x) or 0) - (my_ent.x or 0)
+    local dy = (tonumber(aim_y) or 0) - (my_ent.y or 0)
+    loci.send_action(ability_id, dx, dy)
+end
+
+function loci.send_action_direction(ability_id, dir_x, dir_y)
+    loci.send_action(ability_id, dir_x, dir_y)
 end
 
 -- Cached to avoid GC pressure
