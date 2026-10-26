@@ -338,6 +338,8 @@ function love.keypressed(key)
         cast_ability_at_mouse(3)
     elseif key == "4" or key == "r" then
         cast_ability_at_mouse(4)
+    elseif key == "5" or key == "f" then
+        cast_ability_at_mouse(5)
     end
 end
 
@@ -618,6 +620,11 @@ function draw_entity(ent, is_me)
     -- Verificar se está morto
     local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
 
+    -- Verificar escudo (precisa ser antes da barra de HP)
+    local shield_active = (ent.shield_active == "1" or ent.shield_active == 1) or 
+                          (ent.properties and (ent.properties["shield_active"] == "1" or ent.properties["shield_active"] == 1))
+    local shield_value = tonumber(ent.shield or (ent.properties and ent.properties["shield"])) or 0
+
     local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
     local is_arya = (char_name == "Arya")
     if is_arya then
@@ -708,7 +715,13 @@ function draw_entity(ent, is_me)
 
     love.graphics.setColor(0, 0, 0, 0.7)
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w, bar_h)
-    love.graphics.setColor(0.2, 0.9, 0.3, 1)
+    
+    -- Barra de HP fica azul quando escudo está ativo
+    if shield_active and shield_value > 0 then
+        love.graphics.setColor(0.2, 0.6, 1.0, 1) -- Azul
+    else
+        love.graphics.setColor(0.2, 0.9, 0.3, 1) -- Verde normal
+    end
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w * (math.max(0, math.min(1, hp / max_hp))), bar_h)
 
     -- Player label
