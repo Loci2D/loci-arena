@@ -81,6 +81,11 @@ function CharacterFactory.get_current_tick()
     return current_tick
 end
 
+-- Retorna a lista de entidades ativas (array)
+function CharacterFactory.get_active_entities()
+    return active_entities
+end
+
 -- Carregar arquivo de personagem via require
 function CharacterFactory.load_character(character_name)
     if character_cache[character_name] then

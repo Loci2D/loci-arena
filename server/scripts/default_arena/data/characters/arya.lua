@@ -21,6 +21,7 @@ return {
         "slash",          -- Habilidade 1 (Ataque Básico)
         "fury_reward",    -- Habilidade 2 (Ataque Especial / Fúria)
         "whirlwind_dash", -- Habilidade 3 (Investida Giratória 360º)
-        "blade_throw"     -- Habilidade 4 (Arremesso com Stun e Desarme)
+        "blade_throw",    -- Habilidade 4 (Arremesso com Stun e Desarme)
+        "shield"          -- Habilidade 5 (Escudo Temporário)
     }
 }
