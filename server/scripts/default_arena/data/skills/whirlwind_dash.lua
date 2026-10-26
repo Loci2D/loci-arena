@@ -12,7 +12,7 @@ local function get_coords(pos)
     return 0, 0
 end
 
-local VISUAL_SCALE = 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
+local VISUAL_SCALE = (CombatSystem.CONST and CombatSystem.CONST.VISUAL_SCALE) or 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
 
 return {
     id = "whirlwind_dash",
@@ -38,34 +38,60 @@ return {
         local pos = Loci.get_entity_position(entity_id)
         local caster_x, caster_y = get_coords(pos)
 
-        -- Impulso de deslocamento (Dash físico com duração controlada de ~0.30s / 9 ticks a 30Hz)
+        -- Impulso de deslocamento (Dash físico sincronizado com o alcance da habilidade)
         local CharacterFactory = require("default_arena.systems.character_factory")
         local current_tick = CharacterFactory.get_current_tick()
-        Loci.Commands.set_property(entity_id, "dashing_until", tostring(current_tick + 9))
+        local dash_duration_ticks = 4 -- ~0.13s a 30Hz para uma investida rápida
+        Loci.Commands.set_property(entity_id, "dashing_until", tostring(current_tick + dash_duration_ticks))
 
-        local dash_speed = 22.0
+        local dash_speed = skill_data.range / dash_duration_ticks -- Desloca exatamente os 20.0 unidades de alcance (160px na tela)
         Loci.Commands.set_velocity(entity_id, {
             x = aim_x * dash_speed,
             y = aim_y * dash_speed
         })
 
-        -- Ponto de impacto centrado na trajetória intermediária/final
-        local target_x = caster_x + aim_x * (skill_data.range * 0.7)
-        local target_y = caster_y + aim_y * (skill_data.range * 0.7)
-
         local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
-        local hit_ids = Loci.get_entities_in_radius({ x = target_x, y = target_y }, skill_data.aoe_radius)
+        local hit_ids = {}
+        local hit_set = {}
 
-        local hit_count = 0
-        if hit_ids then
-            for _, target_id in ipairs(hit_ids) do
-                if target_id ~= entity_id then
-                    local target_team = Loci.get_entity_property(target_id, "team") or "2"
-                    if target_team ~= caster_team then
-                        CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type)
-                        hit_count = hit_count + 1
+        -- Amostra ao longo de todo o percurso da investida, iniciando em d = 0 (corpo a corpo em 360º)
+        -- até o alcance final da investida, garantindo que inimigos colados no jogador não sejam errados.
+        local step = math.max(1.0, skill_data.aoe_radius * 0.6)
+        local d = 0
+        while d < skill_data.range do
+            local sample_x = caster_x + aim_x * d
+            local sample_y = caster_y + aim_y * d
+            local nearby = Loci.get_entities_in_radius({ x = sample_x, y = sample_y }, skill_data.aoe_radius)
+            if nearby then
+                for _, target_id in ipairs(nearby) do
+                    if target_id ~= entity_id and not hit_set[target_id] then
+                        hit_set[target_id] = true
+                        table.insert(hit_ids, target_id)
                     end
                 end
+            end
+            d = d + step
+        end
+
+        -- Ponto final do percurso da investida
+        local final_x = caster_x + aim_x * skill_data.range
+        local final_y = caster_y + aim_y * skill_data.range
+        local final_nearby = Loci.get_entities_in_radius({ x = final_x, y = final_y }, skill_data.aoe_radius)
+        if final_nearby then
+            for _, target_id in ipairs(final_nearby) do
+                if target_id ~= entity_id and not hit_set[target_id] then
+                    hit_set[target_id] = true
+                    table.insert(hit_ids, target_id)
+                end
+            end
+        end
+
+        local hit_count = 0
+        for _, target_id in ipairs(hit_ids) do
+            local target_team = Loci.get_entity_property(target_id, "team") or "2"
+            if target_team ~= caster_team then
+                CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type)
+                hit_count = hit_count + 1
             end
         end
 

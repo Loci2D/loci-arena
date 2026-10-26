@@ -278,6 +278,10 @@ function loci.send_action_at_position(ability_id, aim_x, aim_y)
     loci.send_action(ability_id, dx, dy)
 end
 
+function loci.send_action_direction(ability_id, dir_x, dir_y)
+    loci.send_action(ability_id, dir_x, dir_y)
+end
+
 -- Cached to avoid GC pressure
 function loci.get_entities()
     if not loci._entities_list_cache then
