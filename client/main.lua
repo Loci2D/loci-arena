@@ -18,6 +18,10 @@ local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
+-- Fontes para efeitos visuais (criadas uma vez)
+local font_damage_normal = love.graphics.newFont(18)
+local font_damage_critical = love.graphics.newFont(24)
+
 -- Configurar push no sistema de joystick para conversão de coordenadas
 virtual_joystick.set_push(push)
 
@@ -30,6 +34,7 @@ local connection_status = "Connecting..."
 local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
+local floating_damage = {}
 local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
@@ -124,18 +129,34 @@ function love.load(arg)
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
         -- Hook for HUD/UI state updates (HP, score, buffs)
-        local my_entity = loci.get_my_entity()
-        if my_entity and entity.id == my_entity.id and key == "hp" then
+        if key == "hp" then
             local old_hp = tonumber(old_val) or 0
             local new_hp = tonumber(new_val) or 0
             local damage = old_hp - new_hp
 
-            -- Trigger screen shake on significant damage (>50 HP)
-            if damage > 50 then
-                shake_total_duration = 0.2
-                shake_duration = 0.2
-                local intensity = math.min(8, 2.5 + (damage / 120))
-                shake_intensity = math.max(shake_intensity, intensity)
+            if damage > 0 then
+                -- 1. Screen shake apenas para dano significativo no jogador local
+                local my_entity = loci.get_my_entity()
+                if my_entity and entity.id == my_entity.id and damage > 50 then
+                    shake_total_duration = 0.2
+                    shake_duration = 0.2
+                    local intensity = math.min(8, 2.5 + (damage / 120))
+                    shake_intensity = math.max(shake_intensity, intensity)
+                end
+
+                -- 2. Dano flutuante para qualquer entidade (local ou inimiga)
+                -- Ataques normais variam de ~150 a 300 de dano após mitigação de defesa;
+                -- Golpes com dano >= 350 são críticos reais (multiplicador 2.25x)
+                local is_critical = damage >= 350
+                table.insert(floating_damage, {
+                    value = damage,
+                    x = entity.x,
+                    y = entity.y,
+                    offset_y = 35, -- Inicia acima da cabeça do personagem
+                    lifetime = 1.0,
+                    max_lifetime = 1.0,
+                    is_critical = is_critical
+                })
             end
         end
     end
@@ -243,11 +264,21 @@ function love.update(dt)
         rejection_timer = rejection_timer - dt
     end
 
-    -- Update visual effects
+    -- Update visual effects (skills)
     for i = #visual_fx, 1, -1 do
         visual_fx[i].lifetime = visual_fx[i].lifetime - dt
         if visual_fx[i].lifetime <= 0 then
             table.remove(visual_fx, i)
+        end
+    end
+
+    -- Update floating damage numbers
+    for i = #floating_damage, 1, -1 do
+        local fd = floating_damage[i]
+        fd.lifetime = fd.lifetime - dt
+        fd.offset_y = fd.offset_y + 50 * dt
+        if fd.lifetime <= 0 then
+            table.remove(floating_damage, i)
         end
     end
 
@@ -474,6 +505,41 @@ function love.draw()
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
         draw_entity(ent, my_entity and (ent.id == my_entity.id))
+    end
+
+    -- Draw floating damage numbers (renderizado sobre os personagens)
+    if #floating_damage > 0 then
+        local original_font = love.graphics.getFont()
+        for _, fd in ipairs(floating_damage) do
+            local progress = fd.lifetime / fd.max_lifetime
+            local alpha = progress
+            local scale = 1.0 + (1.0 - progress) * 0.3
+
+            local text_x = fd.x * VISUAL_SCALE
+            local text_y = (fd.y * VISUAL_SCALE) - fd.offset_y
+
+            love.graphics.push()
+            love.graphics.translate(text_x, text_y)
+            love.graphics.scale(scale, scale)
+
+            if fd.is_critical then
+                -- Dano crítico - vermelho brilhante, maior
+                love.graphics.setColor(1.0, 0.15, 0.15, alpha)
+                love.graphics.setFont(font_damage_critical)
+            else
+                -- Dano normal - branco
+                love.graphics.setColor(1.0, 1.0, 1.0, alpha)
+                love.graphics.setFont(font_damage_normal)
+            end
+
+            local damage_text = string.format("%d", fd.value)
+            local tw = love.graphics.getFont():getWidth(damage_text)
+            love.graphics.print(damage_text, -tw / 2, 0)
+
+            love.graphics.pop()
+        end
+        love.graphics.setFont(original_font)
+        love.graphics.setColor(1.0, 1.0, 1.0, 1.0)
     end
 
     love.graphics.pop()
