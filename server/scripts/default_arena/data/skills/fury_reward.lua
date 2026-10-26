@@ -62,7 +62,6 @@ return {
         local pos = Loci.get_entity_position(entity_id)
         local caster_x, caster_y = get_coords(pos)
 
-        local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
         local hit_ids = {}
         local hit_set = {}
 

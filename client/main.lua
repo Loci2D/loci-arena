@@ -209,12 +209,8 @@ function love.update(dt)
                         action_dx, action_dy = 0, -1
                     end
 
-                    -- Calcular coordenadas de mundo alvo baseadas na direção do joystick
-                    -- Usamos uma distância arbitrária (100 unidades no mundo) para definir o ponto de mira
-                    local aim_x = my_entity.x + action_dx * 100
-                    local aim_y = my_entity.y + action_dy * 100
-
-                    loci.send_action(slot, aim_x, aim_y)
+                    -- Direção de mira enviada diretamente via vetor do joystick
+                    loci.send_action(slot, action_dx, action_dy)
                 end
             end
         end
@@ -284,11 +280,11 @@ local function cast_ability_at_mouse(ability_id)
     local world_target_x = (mx - sw / 2) + cam_x
     local world_target_y = (my - sh / 2) + cam_y
 
-    -- Enviar coordenadas de mundo brutas - o servidor fará as conversões
+    -- Converte coordenadas de tela/câmera para coordenadas de mundo reais
     local aim_x = world_target_x / VISUAL_SCALE
     local aim_y = world_target_y / VISUAL_SCALE
 
-    loci.send_action(ability_id, aim_x, aim_y)
+    loci.send_action_at_position(ability_id, aim_x, aim_y)
 end
 
 function love.keypressed(key)
