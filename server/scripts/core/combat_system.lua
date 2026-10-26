@@ -54,6 +54,23 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
     end
     -- Dano Verdadeiro (TRUE) fica com def = 0
 
+    -- 2.5. Verificar Escudo (absorve dano ANTES da mitigação)
+    local shield = tonumber(Loci.get_entity_property(target_id, "shield")) or 0
+    local shield_absorbed = 0
+    if shield > 0 then
+        shield_absorbed = math.min(shield, base_damage)
+        base_damage = base_damage - shield_absorbed
+        shield = shield - shield_absorbed
+        Loci.Commands.set_property(target_id, "shield", tostring(shield))
+        
+        if shield == 0 then
+            Loci.Commands.set_property(target_id, "shield_active", "0")
+        end
+        
+        Loci.Log.info(string.format("[Combat] Escudo absorveu %d de dano para %s", 
+            math.floor(shield_absorbed), tostring(target_id)))
+    end
+
     -- 3. Calcular Dano Mitigado
     local mitigation = CombatSystem.calculate_mitigation(def)
     local final_damage = base_damage * (1 - mitigation)
