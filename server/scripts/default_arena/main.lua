@@ -135,6 +135,9 @@ function on_move_intent(entity_id, dir_x, dir_y)
         return true
     end
 
+    local slowed_until = tonumber(Loci.get_entity_property(entity_id, "slowed_until")) or 0
+    local slow_multiplier = tonumber(Loci.get_entity_property(entity_id, "slow_multiplier")) or 1.0
+
     -- Normalize movement vector so diagonal movement doesn't provide a speed boost
     local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
     if len > 0 then
@@ -143,6 +146,11 @@ function on_move_intent(entity_id, dir_x, dir_y)
     end
 
     local move_speed = tonumber(Loci.get_entity_property(entity_id, "move_speed") or SPEED) or SPEED
+    
+    -- Aplicar slow se estiver ativo
+    if CharacterFactory.get_current_tick() < slowed_until then
+        move_speed = move_speed * slow_multiplier
+    end
 
     -- Set server authoritative velocity (displacement per tick)
     Loci.Commands.set_velocity(entity_id, {

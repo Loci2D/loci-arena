@@ -172,6 +172,8 @@ function CharacterFactory.create_character(entity_id, character_name)
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
+    Loci.Commands.set_property(entity_id, "slowed_until", "0")
+    Loci.Commands.set_property(entity_id, "slow_multiplier", "1.0")
 
     -- 3. Lista de habilidades
     local skills_list = char_data.skills or {}
