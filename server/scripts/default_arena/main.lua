@@ -60,20 +60,6 @@ local RespawnSystem = require("default_arena.respawn_system")
 function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
-    
-    -- Processar expiração de escudos usando a lista de entidades ativas
-    local active_entities = CharacterFactory.get_active_entities()
-    if active_entities then
-        for i = 1, #active_entities do
-            local entity_id = active_entities[i]
-            local shield_end = tonumber(Loci.get_entity_property(entity_id, "shield_end_tick"))
-            if shield_end and current_tick >= shield_end then
-                Loci.Commands.set_property(entity_id, "shield", "0")
-                Loci.Commands.set_property(entity_id, "shield_active", "0")
-                Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
-            end
-        end
-    end
 end
 
 function on_player_join(entity_id)

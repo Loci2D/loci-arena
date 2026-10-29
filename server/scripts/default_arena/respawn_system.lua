@@ -28,6 +28,9 @@ function respawn_system.mark_dead(entity_id)
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
+    Loci.Commands.set_property(entity_id, "shield", "0")
+    Loci.Commands.set_property(entity_id, "shield_active", "0")
+    Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
 end
 
 -- Remover jogador da lista de mortos (quando reviver)
@@ -41,6 +44,9 @@ function respawn_system.mark_alive(entity_id)
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
+    Loci.Commands.set_property(entity_id, "shield", "0")
+    Loci.Commands.set_property(entity_id, "shield_active", "0")
+    Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
 end
 
 -- Verificar se um jogador está morto

@@ -39,14 +39,6 @@ local SKILL_BUTTON_CONFIGS = {
         radius = 50,
         color_bg = {0.6, 0.6, 0.2, 0.6},
         color_pressed = {0.9, 0.9, 0.3, 0.9}
-    },
-    {
-        skill_id = 5,
-        x_ratio = 0.65,        -- Mais à esquerda do botão 4
-        y_ratio = 0.85,
-        radius = 50,
-        color_bg = {0.2, 0.5, 0.8, 0.6},
-        color_pressed = {0.3, 0.8, 1.0, 0.9}
     }
 }
 

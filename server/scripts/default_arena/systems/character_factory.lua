@@ -73,17 +73,19 @@ function CharacterFactory.update_tick(tick)
                 Loci.Commands.set_property(entity_id, "dashing_until", "0")
                 Loci.Commands.set_velocity(entity_id, {x = 0, y = 0})
             end
+
+            local shield_end = tonumber(Loci.get_entity_property(entity_id, "shield_end_tick")) or 0
+            if shield_end > 0 and current_tick >= shield_end then
+                Loci.Commands.set_property(entity_id, "shield", "0")
+                Loci.Commands.set_property(entity_id, "shield_active", "0")
+                Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
+            end
         end
     end
 end
 
 function CharacterFactory.get_current_tick()
     return current_tick
-end
-
--- Retorna a lista de entidades ativas (array)
-function CharacterFactory.get_active_entities()
-    return active_entities
 end
 
 -- Carregar arquivo de personagem via require
@@ -172,6 +174,9 @@ function CharacterFactory.create_character(entity_id, character_name)
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
+    Loci.Commands.set_property(entity_id, "shield", "0")
+    Loci.Commands.set_property(entity_id, "shield_active", "0")
+    Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
 
     -- 3. Lista de habilidades
     local skills_list = char_data.skills or {}
