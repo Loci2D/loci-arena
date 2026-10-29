@@ -148,11 +148,16 @@ function love.load(arg)
                 -- Ataques normais variam de ~150 a 300 de dano após mitigação de defesa;
                 -- Golpes com dano >= 350 são críticos reais (multiplicador 2.25x)
                 local is_critical = damage >= 350
+                
+                -- Considerar animação de bobbing para posição visual correta
+                local anim_state = procedural_anim.get_state(entity.id)
+                local visual_y = entity.y + (anim_state and anim_state.bob_offset or 0)
+                
                 table.insert(floating_damage, {
                     value = damage,
                     x = entity.x,
-                    y = entity.y,
-                    offset_y = 35, -- Inicia acima da cabeça do personagem
+                    y = visual_y,
+                    offset_y = 170,
                     lifetime = 1.0,
                     max_lifetime = 1.0,
                     is_critical = is_critical,
