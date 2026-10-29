@@ -155,7 +155,33 @@ function love.load(arg)
                     offset_y = 35, -- Inicia acima da cabeça do personagem
                     lifetime = 1.0,
                     max_lifetime = 1.0,
-                    is_critical = is_critical
+                    is_critical = is_critical,
+                    is_shield = false
+                })
+            end
+        elseif key == "shield" then
+            local old_shield = tonumber(old_val) or 0
+            local new_shield = tonumber(new_val) or 0
+            local damage = old_shield - new_shield
+
+            if damage > 0 then
+                local my_entity = loci.get_my_entity()
+                if my_entity and entity.id == my_entity.id and damage > 50 then
+                    shake_total_duration = 0.2
+                    shake_duration = 0.2
+                    local intensity = math.min(8, 2.5 + (damage / 120))
+                    shake_intensity = math.max(shake_intensity, intensity)
+                end
+
+                table.insert(floating_damage, {
+                    value = damage,
+                    x = entity.x,
+                    y = entity.y,
+                    offset_y = 35,
+                    lifetime = 1.0,
+                    max_lifetime = 1.0,
+                    is_critical = false,
+                    is_shield = true
                 })
             end
         end
@@ -522,7 +548,11 @@ function love.draw()
             love.graphics.translate(text_x, text_y)
             love.graphics.scale(scale, scale)
 
-            if fd.is_critical then
+            if fd.is_shield then
+                -- Dano absorvido pelo escudo - azul ciano
+                love.graphics.setColor(0.3, 0.75, 1.0, alpha)
+                love.graphics.setFont(font_damage_normal)
+            elseif fd.is_critical then
                 -- Dano crítico - vermelho brilhante, maior
                 love.graphics.setColor(1.0, 0.15, 0.15, alpha)
                 love.graphics.setFont(font_damage_critical)
@@ -618,6 +648,11 @@ function draw_entity(ent, is_me)
     -- Verificar se está morto
     local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
 
+    -- Verificar escudo (precisa ser antes da barra de HP)
+    local shield_active = (ent.shield_active == "1" or ent.shield_active == 1) or 
+                          (ent.properties and (ent.properties["shield_active"] == "1" or ent.properties["shield_active"] == 1))
+    local shield_value = tonumber(ent.shield or (ent.properties and ent.properties["shield"])) or 0
+
     local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
     local is_arya = (char_name == "Arya")
     if is_arya then
@@ -708,8 +743,20 @@ function draw_entity(ent, is_me)
 
     love.graphics.setColor(0, 0, 0, 0.7)
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w, bar_h)
+    
+    -- Barra de HP (verde normal)
     love.graphics.setColor(0.2, 0.9, 0.3, 1)
     love.graphics.rectangle("fill", bar_x, bar_y, bar_w * (math.max(0, math.min(1, hp / max_hp))), bar_h)
+
+    -- Barra de Escudo sobreposta (azul ciano com borda de destaque)
+    if shield_active and shield_value > 0 then
+        local shield_ratio = math.max(0, math.min(1, shield_value / max_hp))
+        love.graphics.setColor(0.2, 0.7, 1.0, 0.85)
+        love.graphics.rectangle("fill", bar_x, bar_y, bar_w * shield_ratio, bar_h)
+        love.graphics.setColor(0.4, 0.85, 1.0, 0.9)
+        love.graphics.setLineWidth(1)
+        love.graphics.rectangle("line", bar_x - 1, bar_y - 1, bar_w + 2, bar_h + 2)
+    end
 
     -- Player label
     love.graphics.setColor(1, 1, 1, 0.95)
