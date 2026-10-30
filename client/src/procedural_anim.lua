@@ -1,12 +1,12 @@
 -- Procedural Animation System
--- Estilo "fantoche/South Park" - caminhada com rotação/balanço
+-- Estilo "fantoche/South Park" - caminhada com rotação/balanço calibrada para sprites 32x32
 
 local WALK_CONFIG = {
     step_frequency  = 13,      -- Ritmo dos passos ao caminhar
-    max_tilt_deg    = 6,       -- Inclinação lateral da troca de peso dos pés (graus)
-    bob_pixels      = 1.5,     -- Elevação vertical do passo em pixels nativos (16x16)
+    max_tilt_deg    = 5.5,     -- Inclinação lateral da troca de peso dos pés (graus)
+    bob_pixels      = 3.0,     -- Elevação vertical do passo em pixels nativos (calibrado para 32x32)
     stop_smoothness = 12,      -- Velocidade do retorno à posição neutra ao parar
-    squash_amount   = 0.05,    -- Compressão no solo a cada passada (squash & stretch)
+    squash_amount   = 0.045,   -- Compressão no solo a cada passada (squash & stretch proporcional a 32px)
 }
 
 local ProceduralAnim = {}
