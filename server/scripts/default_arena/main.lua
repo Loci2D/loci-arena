@@ -80,31 +80,72 @@ local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("default_arena.systems.character_factory")
 local RespawnSystem = require("default_arena.respawn_system")
 
+local function is_player_alive(entity_id)
+    if not connected_players[entity_id] then return false end
+    if RespawnSystem and RespawnSystem.is_dead(entity_id) then return false end
+    if Loci and Loci.get_entity_property then
+        local dead_prop = Loci.get_entity_property(entity_id, "is_dead")
+        if dead_prop == "true" or dead_prop == true or dead_prop == "1" or dead_prop == 1 then
+            return false
+        end
+    end
+    return true
+end
+
+local function is_entity_dashing(entity_id)
+    if not (Loci and Loci.get_entity_property) then return false end
+    local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
+    local current_tick = (CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0
+    return current_tick < dashing_until
+end
+
 local function is_blocked_by_player(entity_id, dir_x, dir_y)
     if not dir_x or not dir_y or (dir_x == 0 and dir_y == 0) then
         return false
     end
+    if not is_player_alive(entity_id) or is_entity_dashing(entity_id) then
+        return false
+    end
 
-    local my_pos_ud = Loci.get_entity_position(entity_id)
-    if not my_pos_ud then return false end
-    local my_x, my_y = get_coords(my_pos_ud)
+    local my_pos = last_tick_positions[entity_id]
+    local my_x, my_y
+    if my_pos then
+        my_x, my_y = my_pos.x, my_pos.y
+    else
+        local my_pos_ud = Loci.get_entity_position(entity_id)
+        if not my_pos_ud then return false end
+        my_x, my_y = get_coords(my_pos_ud)
+    end
 
     -- Distância máxima de contato: 4.15 (raios 2.0 + 2.0 + margem)
     local MIN_BLOCK_DIST_SQ = 4.15 * 4.15
 
     for other_id, _ in safe_pairs(connected_players) do
-        if other_id ~= entity_id then
-            local other_pos_ud = Loci.get_entity_position(other_id)
-            if other_pos_ud then
-                local ox, oy = get_coords(other_pos_ud)
+        if other_id ~= entity_id and is_player_alive(other_id) and not is_entity_dashing(other_id) then
+            local other_pos = last_tick_positions[other_id]
+            local ox, oy
+            if other_pos then
+                ox, oy = other_pos.x, other_pos.y
+            else
+                local other_pos_ud = Loci.get_entity_position(other_id)
+                if other_pos_ud then
+                    ox, oy = get_coords(other_pos_ud)
+                end
+            end
+
+            if ox and oy then
                 local dx = ox - my_x
                 local dy = oy - my_y
                 local dist_sq = dx * dx + dy * dy
 
-                if dist_sq <= MIN_BLOCK_DIST_SQ then
-                    -- Produto escalar: verifica se o movimento aponta contra o corpo do outro jogador
-                    local dot = dir_x * dx + dir_y * dy
-                    if dot > 0.01 then
+                if dist_sq <= MIN_BLOCK_DIST_SQ and dist_sq > 0.0001 then
+                    local dist = math.sqrt(dist_sq)
+                    local nx = dx / dist
+                    local ny = dy / dist
+                    -- Produto escalar entre direção pretendida e vetor até o outro jogador
+                    local dot = dir_x * nx + dir_y * ny
+                    -- Bloqueia se o movimento estiver apontando diretamente contra o outro corpo (> 60 graus)
+                    if dot > 0.5 then
                         return true
                     end
                 end
@@ -118,31 +159,39 @@ function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
 
-    -- 1. Salva posições antes da integração de física do tick
+    -- 1. Salva posições antes da integração de física do tick (apenas para vivos)
     for entity_id, _ in safe_pairs(connected_players) do
-        local pos = Loci.get_entity_position(entity_id)
-        if pos then
-            local px, py = get_coords(pos)
-            last_tick_positions[entity_id] = { x = px, y = py }
+        if is_player_alive(entity_id) then
+            local pos = Loci.get_entity_position(entity_id)
+            if pos then
+                local px, py = get_coords(pos)
+                last_tick_positions[entity_id] = { x = px, y = py }
+            end
+        else
+            last_tick_positions[entity_id] = nil
         end
     end
 
-    -- 2. Atualiza velocidade pretendida para jogadores
+    -- 2. Atualiza velocidade pretendida para jogadores vivos
     for entity_id, intent in safe_pairs(player_intents) do
-        if intent and (intent.dir_x ~= 0 or intent.dir_y ~= 0) then
-            local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
-            local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
-            local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
-            
-            if current_tick >= paralyzed_until and current_tick >= stunned_until and current_tick >= dashing_until then
-                if is_blocked_by_player(entity_id, intent.dir_x, intent.dir_y) then
-                    -- Se já está em contato bloqueado com outro jogador, mantém 100% estático (sem jitter/sem ir e voltar)
-                    Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
-                else
-                    Loci.Commands.set_velocity(entity_id, {
-                        x = intent.dir_x * intent.speed,
-                        y = intent.dir_y * intent.speed
-                    })
+        if not is_player_alive(entity_id) then
+            player_intents[entity_id] = nil
+        elseif intent and (intent.dir_x ~= 0 or intent.dir_y ~= 0) then
+            -- Se estiver executando dash, a velocidade física da habilidade prevalece
+            if not is_entity_dashing(entity_id) then
+                local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
+                local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
+                
+                if current_tick >= paralyzed_until and current_tick >= stunned_until then
+                    if is_blocked_by_player(entity_id, intent.dir_x, intent.dir_y) then
+                        -- Se já está em contato bloqueado com outro jogador, mantém 100% estático (sem jitter)
+                        Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
+                    else
+                        Loci.Commands.set_velocity(entity_id, {
+                            x = intent.dir_x * intent.speed,
+                            y = intent.dir_y * intent.speed
+                        })
+                    end
                 end
             end
         end
@@ -295,8 +344,15 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
 end
 
 function on_collision(entity_a, entity_b)
-    -- Só processa colisão sólida e body-blocking se ambos forem jogadores conectados
+    -- Só processa colisão sólida e body-blocking se ambos forem jogadores conectados e vivos
     if not (connected_players[entity_a] and connected_players[entity_b]) then
+        return
+    end
+    if not (is_player_alive(entity_a) and is_player_alive(entity_b)) then
+        return
+    end
+    -- Dashing atravessa inimigos e aliados sem interromper o impulso
+    if is_entity_dashing(entity_a) or is_entity_dashing(entity_b) then
         return
     end
 
@@ -319,14 +375,27 @@ function on_collision(entity_a, entity_b)
     -- Raio dos personagens da arena (2.0 cada) + folga de 0.05 para garantir separação estática
     local MIN_DIST = 4.05
 
+    -- Vetor relativo de B para A (onde A está em relação a B)
+    local rel_x = cur_a_x - cur_b_x
+    local rel_y = cur_a_y - cur_b_y
+    local rel_dist = math.sqrt(rel_x * rel_x + rel_y * rel_y)
+
     -- Caso 1: Jogador A está se movendo e Jogador B está parado
     if moving_a and not moving_b then
+        -- Se A estiver se afastando de B, não interfere
+        if rel_dist > 0.001 then
+            local dot_away = intent_a.dir_x * (rel_x / rel_dist) + intent_a.dir_y * (rel_y / rel_dist)
+            if dot_away > 0.1 then
+                return
+            end
+        end
+
         -- Trava B estritamente na sua posição anterior sem sofrer empurrão espúrio
         Loci.Commands.set_position(entity_b, { x = prev_b.x, y = prev_b.y })
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
 
-        local target_x = prev_a.x
-        local target_y = prev_a.y
+        local target_x = cur_a_x
+        local target_y = cur_a_y
 
         -- Se A andava puramente na horizontal
         if intent_a.dir_y == 0 and intent_a.dir_x ~= 0 then
@@ -335,7 +404,8 @@ function on_collision(entity_a, entity_b)
             local dy2 = dy * dy
             if dy2 < MIN_DIST * MIN_DIST then
                 local needed_dx = math.sqrt(MIN_DIST * MIN_DIST - dy2)
-                target_x = (intent_a.dir_x > 0) and (prev_b.x - needed_dx) or (prev_b.x + needed_dx)
+                -- Lado determinado pela posição relativa real de A em relação a B (evita teletransporte)
+                target_x = (cur_a_x >= prev_b.x) and (prev_b.x + needed_dx) or (prev_b.x - needed_dx)
             else
                 target_x = prev_a.x
             end
@@ -347,36 +417,47 @@ function on_collision(entity_a, entity_b)
             local dx2 = dx * dx
             if dx2 < MIN_DIST * MIN_DIST then
                 local needed_dy = math.sqrt(MIN_DIST * MIN_DIST - dx2)
-                target_y = (intent_a.dir_y > 0) and (prev_b.y - needed_dy) or (prev_b.y + needed_dy)
+                -- Lado determinado pela posição relativa real de A em relação a B
+                target_y = (cur_a_y >= prev_b.y) and (prev_b.y + needed_dy) or (prev_b.y - needed_dy)
             else
                 target_y = prev_a.y
             end
 
-        -- Se A andava em diagonal: trava no ponto de contato sem deslize
+        -- Se A andava em diagonal: separa ao longo do vetor normal relativo
         else
-            local dx = prev_a.x - prev_b.x
-            local dy = prev_a.y - prev_b.y
-            local dist = math.sqrt(dx * dx + dy * dy)
-            if dist > 0.001 then
-                target_x = prev_b.x + (dx / dist) * MIN_DIST
-                target_y = prev_b.y + (dy / dist) * MIN_DIST
+            if rel_dist > 0.001 then
+                target_x = prev_b.x + (rel_x / rel_dist) * MIN_DIST
+                target_y = prev_b.y + (rel_y / rel_dist) * MIN_DIST
             else
                 target_x = prev_b.x - MIN_DIST
                 target_y = prev_b.y
             end
         end
 
-        -- Bate e para: trava posição no contato e zera totalmente a velocidade
+        -- Bate e para: trava posição no contato e zera velocidade
         Loci.Commands.set_position(entity_a, { x = target_x, y = target_y })
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
 
     -- Caso 2: Jogador B está se movendo e Jogador A está parado
     elseif moving_b and not moving_a then
+        -- Vetor relativo de A para B (onde B está em relação a A)
+        local inv_rel_x = cur_b_x - cur_a_x
+        local inv_rel_y = cur_b_y - cur_a_y
+        local inv_dist = math.sqrt(inv_rel_x * inv_rel_x + inv_rel_y * inv_rel_y)
+
+        -- Se B estiver se afastando de A, não interfere
+        if inv_dist > 0.001 then
+            local dot_away = intent_b.dir_x * (inv_rel_x / inv_dist) + intent_b.dir_y * (inv_rel_y / inv_dist)
+            if dot_away > 0.1 then
+                return
+            end
+        end
+
         Loci.Commands.set_position(entity_a, { x = prev_a.x, y = prev_a.y })
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
 
-        local target_x = prev_b.x
-        local target_y = prev_b.y
+        local target_x = cur_b_x
+        local target_y = cur_b_y
 
         if intent_b.dir_y == 0 and intent_b.dir_x ~= 0 then
             target_y = prev_b.y
@@ -384,7 +465,7 @@ function on_collision(entity_a, entity_b)
             local dy2 = dy * dy
             if dy2 < MIN_DIST * MIN_DIST then
                 local needed_dx = math.sqrt(MIN_DIST * MIN_DIST - dy2)
-                target_x = (intent_b.dir_x > 0) and (prev_a.x - needed_dx) or (prev_a.x + needed_dx)
+                target_x = (cur_b_x >= prev_a.x) and (prev_a.x + needed_dx) or (prev_a.x - needed_dx)
             else
                 target_x = prev_b.x
             end
@@ -395,18 +476,15 @@ function on_collision(entity_a, entity_b)
             local dx2 = dx * dx
             if dx2 < MIN_DIST * MIN_DIST then
                 local needed_dy = math.sqrt(MIN_DIST * MIN_DIST - dx2)
-                target_y = (intent_b.dir_y > 0) and (prev_a.y - needed_dy) or (prev_a.y + needed_dy)
+                target_y = (cur_b_y >= prev_a.y) and (prev_a.y + needed_dy) or (prev_a.y - needed_dy)
             else
                 target_y = prev_b.y
             end
 
         else
-            local dx = prev_b.x - prev_a.x
-            local dy = prev_b.y - prev_a.y
-            local dist = math.sqrt(dx * dx + dy * dy)
-            if dist > 0.001 then
-                target_x = prev_a.x + (dx / dist) * MIN_DIST
-                target_y = prev_a.y + (dy / dist) * MIN_DIST
+            if inv_dist > 0.001 then
+                target_x = prev_a.x + (inv_rel_x / inv_dist) * MIN_DIST
+                target_y = prev_a.y + (inv_rel_y / inv_dist) * MIN_DIST
             else
                 target_x = prev_a.x + MIN_DIST
                 target_y = prev_a.y
@@ -418,11 +496,8 @@ function on_collision(entity_a, entity_b)
 
     -- Caso 3: Ambos estão se movendo (colisão mútua / de frente)
     elseif moving_a and moving_b then
-        local dx = prev_a.x - prev_b.x
-        local dy = prev_a.y - prev_b.y
-        local dist = math.sqrt(dx * dx + dy * dy)
-        local nx = (dist > 0.001) and (dx / dist) or 1
-        local ny = (dist > 0.001) and (dy / dist) or 0
+        local nx = (rel_dist > 0.001) and (rel_x / rel_dist) or 1
+        local ny = (rel_dist > 0.001) and (rel_y / rel_dist) or 0
 
         local mid_x = (prev_a.x + prev_b.x) * 0.5
         local mid_y = (prev_a.y + prev_b.y) * 0.5
@@ -434,8 +509,14 @@ function on_collision(entity_a, entity_b)
 
     -- Caso 4: Ambos parados
     else
-        Loci.Commands.set_position(entity_a, { x = prev_a.x, y = prev_a.y })
-        Loci.Commands.set_position(entity_b, { x = prev_b.x, y = prev_b.y })
+        local nx = (rel_dist > 0.001) and (rel_x / rel_dist) or 1
+        local ny = (rel_dist > 0.001) and (rel_y / rel_dist) or 0
+
+        local mid_x = (prev_a.x + prev_b.x) * 0.5
+        local mid_y = (prev_a.y + prev_b.y) * 0.5
+
+        Loci.Commands.set_position(entity_a, { x = mid_x + nx * (MIN_DIST * 0.5), y = mid_y + ny * (MIN_DIST * 0.5) })
+        Loci.Commands.set_position(entity_b, { x = mid_x - nx * (MIN_DIST * 0.5), y = mid_y - ny * (MIN_DIST * 0.5) })
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
     end
