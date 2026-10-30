@@ -2,6 +2,10 @@
 /bin/loci2d*
 !/bin/.gitkeep
 
+# Loci2D Client SDK (managed via scripts/setup_sdk.sh)
+/client/loci2d
+/client/loci2d.bak
+
 # Environment files
 .env
 *.env.local

@@ -21,8 +21,8 @@ has_protobuf() {
     [ -f "$ROOT_DIR/client/loci2d/lib/pb.dll" ]
 }
 
-if ! has_love || ! has_lua || ! has_protobuf; then
-    echo "Dependencias do cliente (Love2D, Lua e/ou lua-protobuf) nao encontradas."
+if [ ! -d "$ROOT_DIR/client/loci2d" ] || ! has_love || ! has_lua || ! has_protobuf; then
+    echo "Dependencias do cliente (Love2D, Lua e/ou SDK loci2d) nao encontradas."
     echo "Executando configuracao automatica via setup_client.sh..."
     "$ROOT_DIR/scripts/setup_client.sh"
 fi

@@ -10,6 +10,13 @@ fi
 
 echo "=== Loci Arena - Client Setup (Love2D & Lua) ==="
 
+# 0. Configura o SDK do cliente (symlink local ou download de release)
+if [ "$CHECK_ONLY" = false ]; then
+    if [ ! -d "$ROOT_DIR/client/loci2d" ] || [ "$1" = "--download" ] || [ "$1" = "-d" ] || [ "$1" = "--force" ]; then
+        "$ROOT_DIR/scripts/setup_sdk.sh" "$@"
+    fi
+fi
+
 has_love() {
     command -v love >/dev/null 2>&1
 }
