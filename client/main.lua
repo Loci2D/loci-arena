@@ -246,7 +246,9 @@ function love.update(dt)
         local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
         if not is_dead and show_touch_controls then
             local now = love.timer.getTime()
-            for slot = 1, 4 do
+
+            -- Botões 1 e 2: comportamento original (disparo imediato ao pressionar)
+            for slot = 1, 2 do
                 if virtual_joystick.is_skill_active(slot) and virtual_joystick.can_trigger_skill(slot, now) then
                     virtual_joystick.trigger_skill(slot, now)
 
@@ -259,6 +261,38 @@ function love.update(dt)
                     -- Direção de mira enviada diretamente via vetor do joystick
                     loci.send_action(slot, action_dx, action_dy)
                 end
+            end
+
+            -- Botões 3 e 4: sempre disparam no release (drag-to-aim)
+            local release_events = virtual_joystick.pop_release_events()
+            for _, event in ipairs(release_events) do
+                local slot = event.skill_id
+                if slot >= 3 and slot <= 4 and virtual_joystick.can_trigger_skill(slot, now) then
+                    -- Não disparar se foi cancelado (arrastou de volta para a zona de cancelamento)
+                    if not event.is_cancelled then
+                        virtual_joystick.trigger_skill(slot, now)
+
+                        -- Determinar direção de mira
+                        local action_dx, action_dy
+                        if event.was_aiming then
+                            -- Release-to-cast: usar direção do arrasto
+                            action_dx, action_dy = event.aim_dx, event.aim_dy
+                        else
+                            -- Quick tap: usar direção do joystick de movimento, ou padrão se parado
+                            action_dx, action_dy = virtual_joystick.get_move_vector()
+                            if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
+                                action_dx, action_dy = 0, -1
+                            end
+                        end
+
+                        loci.send_action(slot, action_dx, action_dy)
+                    end
+                end
+            end
+        else
+            -- Se estiver morto, descarta eventos de release para evitar disparo fantasma pós-respawn
+            if is_dead and show_touch_controls then
+                virtual_joystick.pop_release_events()
             end
         end
         
@@ -531,6 +565,71 @@ function love.draw()
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
         draw_entity(ent, my_entity and (ent.id == my_entity.id))
+    end
+
+    -- Draw aim indicator (drag-to-aim) enquanto botões 3 ou 4 estão aiming ou cancelando
+    if my_entity and show_touch_controls then
+        -- Alcance no mundo de cada habilidade (em pixels visuais: range * VISUAL_SCALE)
+        local SKILL_RANGES = {
+            [3] = 160, -- Whirlwind Dash (20.0 * 8)
+            [4] = 260, -- Blade Throw (32.5 * 8)
+        }
+
+        for slot = 3, 4 do
+            if virtual_joystick.is_aiming(slot) or virtual_joystick.is_skill_cancelled(slot) then
+                local aim_dx, aim_dy = virtual_joystick.get_aim_vector(slot)
+                if math.abs(aim_dx) > 0.01 or math.abs(aim_dy) > 0.01 then
+                    local player_x = my_entity.x * VISUAL_SCALE
+                    local player_y = my_entity.y * VISUAL_SCALE
+                    local aim_length = SKILL_RANGES[slot] or 200
+                    local end_x = player_x + aim_dx * aim_length
+                    local end_y = player_y + aim_dy * aim_length
+
+                    -- Verificar se está cancelado
+                    local is_cancelled = virtual_joystick.is_skill_cancelled(slot)
+
+                    -- Linha de mira no chão (vermelho se cancelado, amarelo se aiming)
+                    if is_cancelled then
+                        love.graphics.setColor(1.0, 0.2, 0.2, 0.6)
+                    else
+                        love.graphics.setColor(1.0, 1.0, 0.3, 0.6)
+                    end
+                    love.graphics.setLineWidth(3)
+                    love.graphics.line(player_x, player_y, end_x, end_y)
+
+                    -- Círculo no final (indicando o alcance ou área de impacto)
+                    local circle_radius = (slot == 4) and 14 or 8
+                    if is_cancelled then
+                        love.graphics.setColor(1.0, 0.2, 0.2, 0.3)
+                        love.graphics.circle("fill", end_x, end_y, circle_radius)
+                        love.graphics.setColor(1.0, 0.2, 0.2, 0.8)
+                    else
+                        love.graphics.setColor(1.0, 1.0, 0.3, 0.3)
+                        love.graphics.circle("fill", end_x, end_y, circle_radius)
+                        love.graphics.setColor(1.0, 1.0, 0.3, 0.8)
+                    end
+                    love.graphics.circle("line", end_x, end_y, circle_radius)
+
+                    -- Pequeno triângulo na direção
+                    local arrow_size = 15
+                    local angle = math.atan2(aim_dy, aim_dx)
+                    if is_cancelled then
+                        love.graphics.setColor(1.0, 0.2, 0.2, 0.9)
+                    else
+                        love.graphics.setColor(1.0, 1.0, 0.3, 0.9)
+                    end
+                    love.graphics.polygon("fill",
+                        end_x,
+                        end_y,
+                        end_x - math.cos(angle - 0.4) * arrow_size,
+                        end_y - math.sin(angle - 0.4) * arrow_size,
+                        end_x - math.cos(angle + 0.4) * arrow_size,
+                        end_y - math.sin(angle + 0.4) * arrow_size
+                    )
+                    love.graphics.setLineWidth(1)
+                end
+            end
+        end
     end
 
     -- Draw floating damage numbers (renderizado sobre os personagens)
