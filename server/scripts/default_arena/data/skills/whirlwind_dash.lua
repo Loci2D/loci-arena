@@ -39,7 +39,7 @@ return {
         local caster_x, caster_y = get_coords(pos)
 
         -- Impulso de deslocamento (Dash físico sincronizado com o alcance da habilidade)
-        local CharacterFactory = require("default_arena.systems.character_factory")
+        local CharacterFactory = require("systems.character_factory")
         local current_tick = CharacterFactory.get_current_tick()
         local dash_duration_ticks = 4 -- ~0.13s a 30Hz para uma investida rápida
         Loci.Commands.set_property(entity_id, "dashing_until", tostring(current_tick + dash_duration_ticks))

@@ -128,7 +128,7 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
 
     -- 7. Checar Morte
     if target_hp == 0 then
-        local RespawnSystem = require("default_arena.respawn_system")
+        local RespawnSystem = require("respawn_system")
         RespawnSystem.mark_dead(target_id)
         
         -- Atualizar KDA
@@ -142,7 +142,7 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
 
         Loci.Log.info("[Combat] " .. tostring(target_id) .. " foi eliminado por " .. tostring(attacker_id))
         
-        local CharacterFactory = require("default_arena.systems.character_factory")
+        local CharacterFactory = require("systems.character_factory")
         CharacterFactory.on_entity_die(target_id)
     end
 
