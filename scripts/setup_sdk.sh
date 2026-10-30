@@ -4,13 +4,27 @@ set -e
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLIENT_DIR="$ROOT_DIR/client"
 TARGET_DIR="$CLIENT_DIR/loci2d"
-SDK_VERSION="$(cat "$ROOT_DIR/.loci2d-sdk-version" 2>/dev/null || echo "v0.6.1")"
-ENGINE_VERSION="$(cat "$ROOT_DIR/.loci2d-version" 2>/dev/null || echo "latest")"
+SDK_VERSION="$(cat "$ROOT_DIR/.loci2d-sdk-version" 2>/dev/null | tr -d '[:space:]')"
+[ -z "$SDK_VERSION" ] && SDK_VERSION="v0.6.1"
+ENGINE_VERSION="$(cat "$ROOT_DIR/.loci2d-version" 2>/dev/null | tr -d '[:space:]')"
+[ -z "$ENGINE_VERSION" ] && ENGINE_VERSION="latest"
 FORCE_DOWNLOAD=false
 
 if [ "$1" = "--download" ] || [ "$1" = "-d" ] || [ "$1" = "--force" ]; then
     FORCE_DOWNLOAD=true
 fi
+
+compile_pb_if_needed() {
+    local sdk_dir="$1"
+    if [ ! -f "$sdk_dir/lib/pb.so" ] && [ ! -f "$sdk_dir/lib/pb.dylib" ] && [ ! -f "$sdk_dir/lib/pb.dll" ]; then
+        if [ -f "$sdk_dir/lib/src/pb.c" ] && command -v gcc >/dev/null 2>&1; then
+            echo "-> Compilando lua-protobuf nativo (pb.so) em $sdk_dir..."
+            local inc_dir="$sdk_dir/lib/src/include"
+            [ ! -d "$inc_dir" ] && inc_dir="/usr/include/lua5.1"
+            gcc -O2 -shared -fPIC -I"$inc_dir" "$sdk_dir/lib/src/pb.c" -o "$sdk_dir/lib/pb.so" 2>/dev/null || true
+        fi
+    fi
+}
 
 echo "=== Loci Arena - Client SDK Setup (${SDK_VERSION}) ==="
 
@@ -33,13 +47,7 @@ LOCAL_SDK="${LOCI_SDK_DIR:-$ROOT_DIR/../sdk-love2d}"
 if [ "$FORCE_DOWNLOAD" = false ] && [ -d "$LOCAL_SDK" ]; then
     echo "-> Repositorio local do SDK detectado em: $LOCAL_SDK"
 
-    # Pre-compile native pb.so locally if needed and gcc is available
-    if [ ! -f "$LOCAL_SDK/lib/pb.so" ] && [ -f "$LOCAL_SDK/lib/src/pb.c" ] && command -v gcc >/dev/null 2>&1; then
-        echo "-> Compilando lua-protobuf nativo (pb.so) no SDK local..."
-        INC_DIR="$LOCAL_SDK/lib/src/include"
-        [ ! -d "$INC_DIR" ] && INC_DIR="/usr/include/lua5.1"
-        gcc -O2 -shared -fPIC -I"$INC_DIR" "$LOCAL_SDK/lib/src/pb.c" -o "$LOCAL_SDK/lib/pb.so" 2>/dev/null || true
-    fi
+    compile_pb_if_needed "$LOCAL_SDK"
 
     # Backup existing client/loci2d if it's a real folder (not a symlink)
     if [ -d "$TARGET_DIR" ] && [ ! -L "$TARGET_DIR" ]; then
@@ -65,6 +73,8 @@ ZIP_NAME="loci2d-sdk-love2d.zip"
 TMP_ZIP="/tmp/loci2d-sdk-$$.zip"
 TMP_EXTRACT="/tmp/loci2d-sdk-extract-$$"
 DOWNLOAD_SUCCESS=false
+
+trap 'rm -rf "$TMP_ZIP" "$TMP_EXTRACT"' EXIT
 
 # Try GitHub CLI (gh)
 if command -v gh >/dev/null 2>&1; then
@@ -97,7 +107,8 @@ if [ "$DOWNLOAD_SUCCESS" = true ]; then
         mv "$TMP_EXTRACT" "$TARGET_DIR"
     fi
 
-    rm -rf "$TMP_ZIP" "$TMP_EXTRACT"
+    compile_pb_if_needed "$TARGET_DIR"
+
     echo "[OK] SDK (${SDK_VERSION}) instalado com sucesso em client/loci2d a partir do GitHub Releases!"
     exit 0
 fi

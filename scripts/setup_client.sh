@@ -88,6 +88,27 @@ fi
 
 OS_TYPE="$(uname -s 2>/dev/null || echo "Linux")"
 
+compile_pb_linux() {
+    if [ "$MISSING_PB" = true ] && ! has_protobuf && command -v gcc >/dev/null 2>&1; then
+        echo "-> Compilando lua-protobuf (pb.so) para o client Love2D no Linux..."
+        mkdir -p "$ROOT_DIR/client/loci2d/lib"
+        if [ -f "$ROOT_DIR/client/loci2d/lib/src/pb.c" ]; then
+            INC_DIR="$ROOT_DIR/client/loci2d/lib/src/include"
+            [ ! -d "$INC_DIR" ] && INC_DIR="/usr/include/lua5.1"
+            gcc -O2 -shared -fPIC -I"$INC_DIR" "$ROOT_DIR/client/loci2d/lib/src/pb.c" -o "$ROOT_DIR/client/loci2d/lib/pb.so" 2>/dev/null || true
+        else
+            PB_TMP_DIR="/tmp/pb-build-$$"
+            mkdir -p "$PB_TMP_DIR"
+            curl -fSL -o "$PB_TMP_DIR/pb.c" "https://raw.githubusercontent.com/starwing/lua-protobuf/master/pb.c" 2>/dev/null || true
+            curl -fSL -o "$PB_TMP_DIR/pb.h" "https://raw.githubusercontent.com/starwing/lua-protobuf/master/pb.h" 2>/dev/null || true
+            if [ -f "$PB_TMP_DIR/pb.c" ]; then
+                gcc -O2 -shared -fPIC -I/usr/include/lua5.1 -I/usr/include/luajit-2.1 "$PB_TMP_DIR/pb.c" -o "$ROOT_DIR/client/loci2d/lib/pb.so" 2>/dev/null || true
+            fi
+            rm -rf "$PB_TMP_DIR"
+        fi
+    fi
+}
+
 install_debian_ubuntu() {
     echo "-> Gerenciador detectado: apt-get (Debian / Ubuntu)"
     PKGS=()
@@ -106,9 +127,12 @@ install_debian_ubuntu() {
         fi
     fi
 
-    echo "-> Atualizando repositorios e instalando: ${PKGS[*]}..."
-    $SUDO apt-get update
-    $SUDO apt-get install -y "${PKGS[@]}"
+    if [ ${#PKGS[@]} -gt 0 ]; then
+        echo "-> Atualizando repositorios e instalando: ${PKGS[*]}..."
+        $SUDO apt-get update
+        $SUDO apt-get install -y "${PKGS[@]}"
+    fi
+    compile_pb_linux
 }
 
 install_arch() {
@@ -116,8 +140,11 @@ install_arch() {
     PKGS=()
     [ "$MISSING_LOVE" = true ] && PKGS+=("love")
     [ "$MISSING_LUA" = true ] && PKGS+=("lua")
-    echo "-> Instalando pacotes via pacman: ${PKGS[*]}..."
-    $SUDO pacman -Sy --noconfirm "${PKGS[@]}"
+    if [ ${#PKGS[@]} -gt 0 ]; then
+        echo "-> Instalando pacotes via pacman: ${PKGS[*]}..."
+        $SUDO pacman -Sy --noconfirm "${PKGS[@]}"
+    fi
+    compile_pb_linux
 }
 
 install_fedora() {
@@ -125,8 +152,11 @@ install_fedora() {
     PKGS=()
     [ "$MISSING_LOVE" = true ] && PKGS+=("love")
     [ "$MISSING_LUA" = true ] && PKGS+=("lua")
-    echo "-> Instalando pacotes via dnf: ${PKGS[*]}..."
-    $SUDO dnf install -y "${PKGS[@]}"
+    if [ ${#PKGS[@]} -gt 0 ]; then
+        echo "-> Instalando pacotes via dnf: ${PKGS[*]}..."
+        $SUDO dnf install -y "${PKGS[@]}"
+    fi
+    compile_pb_linux
 }
 
 install_opensuse() {
@@ -134,8 +164,11 @@ install_opensuse() {
     PKGS=()
     [ "$MISSING_LOVE" = true ] && PKGS+=("love")
     [ "$MISSING_LUA" = true ] && PKGS+=("lua")
-    echo "-> Instalando pacotes via zypper: ${PKGS[*]}..."
-    $SUDO zypper install -y "${PKGS[@]}"
+    if [ ${#PKGS[@]} -gt 0 ]; then
+        echo "-> Instalando pacotes via zypper: ${PKGS[*]}..."
+        $SUDO zypper install -y "${PKGS[@]}"
+    fi
+    compile_pb_linux
 }
 
 install_macos() {
