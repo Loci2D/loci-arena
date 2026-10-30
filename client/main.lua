@@ -289,6 +289,11 @@ function love.update(dt)
                     end
                 end
             end
+        else
+            -- Se estiver morto, descarta eventos de release para evitar disparo fantasma pós-respawn
+            if is_dead and show_touch_controls then
+                virtual_joystick.pop_release_events()
+            end
         end
         
         -- Direct camera binding eliminates lag jitter between camera and player
@@ -564,13 +569,19 @@ function love.draw()
 
     -- Draw aim indicator (drag-to-aim) enquanto botões 3 ou 4 estão aiming ou cancelando
     if my_entity and show_touch_controls then
+        -- Alcance no mundo de cada habilidade (em pixels visuais: range * VISUAL_SCALE)
+        local SKILL_RANGES = {
+            [3] = 160, -- Whirlwind Dash (20.0 * 8)
+            [4] = 260, -- Blade Throw (32.5 * 8)
+        }
+
         for slot = 3, 4 do
             if virtual_joystick.is_aiming(slot) or virtual_joystick.is_skill_cancelled(slot) then
                 local aim_dx, aim_dy = virtual_joystick.get_aim_vector(slot)
                 if math.abs(aim_dx) > 0.01 or math.abs(aim_dy) > 0.01 then
                     local player_x = my_entity.x * VISUAL_SCALE
                     local player_y = my_entity.y * VISUAL_SCALE
-                    local aim_length = 200 -- Comprimento do indicador no mundo
+                    local aim_length = SKILL_RANGES[slot] or 200
                     local end_x = player_x + aim_dx * aim_length
                     local end_y = player_y + aim_dy * aim_length
 
@@ -586,17 +597,18 @@ function love.draw()
                     love.graphics.setLineWidth(3)
                     love.graphics.line(player_x, player_y, end_x, end_y)
 
-                    -- Círculo no final (indicando o alcance da habilidade)
+                    -- Círculo no final (indicando o alcance ou área de impacto)
+                    local circle_radius = (slot == 4) and 14 or 8
                     if is_cancelled then
                         love.graphics.setColor(1.0, 0.2, 0.2, 0.3)
-                        love.graphics.circle("fill", end_x, end_y, 8)
+                        love.graphics.circle("fill", end_x, end_y, circle_radius)
                         love.graphics.setColor(1.0, 0.2, 0.2, 0.8)
                     else
                         love.graphics.setColor(1.0, 1.0, 0.3, 0.3)
-                        love.graphics.circle("fill", end_x, end_y, 8)
+                        love.graphics.circle("fill", end_x, end_y, circle_radius)
                         love.graphics.setColor(1.0, 1.0, 0.3, 0.8)
                     end
-                    love.graphics.circle("line", end_x, end_y, 8)
+                    love.graphics.circle("line", end_x, end_y, circle_radius)
 
                     -- Pequeno triângulo na direção
                     local arrow_size = 15
@@ -614,6 +626,7 @@ function love.draw()
                         end_x - math.cos(angle + 0.4) * arrow_size,
                         end_y - math.sin(angle + 0.4) * arrow_size
                     )
+                    love.graphics.setLineWidth(1)
                 end
             end
         end

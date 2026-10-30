@@ -195,7 +195,7 @@ function ActionButton.new(config)
     self.aim_deadzone = 15 -- Pixels de deadzone para considerar arrasto
     self.passed_deadzone = false -- Flag para saber se o toque passou da deadzone
     self.is_cancelled = false -- Flag para indicar que o aiming foi cancelado
-    self.cancel_deadzone = 20 -- Pixels de deadzone para cancelamento (arrastar de volta)
+    self.cancel_deadzone = (config.radius or 50) * 0.75 -- Pixels de deadzone para cancelamento (arrastar de volta para o botão)
     return self
 end
 
@@ -235,6 +235,13 @@ function ActionButton:handle_move(x, y, touch_id)
                 self.passed_deadzone = true
             end
 
+            -- Atualizar vetor de mira sempre que houver deslocamento
+            if dist > 0.001 then
+                local angle = math.atan2(dy, dx)
+                self.aim_dx = math.cos(angle)
+                self.aim_dy = math.sin(angle)
+            end
+
             if self.passed_deadzone then
                 -- Se já passou da deadzone e agora o toque voltou para a deadzone do botão (ao redor do centro) ou do toque inicial, cancela
                 if dist_center < self.cancel_deadzone or dist < self.cancel_deadzone then
@@ -243,10 +250,6 @@ function ActionButton:handle_move(x, y, touch_id)
                 else
                     self.is_cancelled = false
                     self.is_aiming = true
-                    -- Calcular vetor de mira normalizado (vetor unitário)
-                    local angle = math.atan2(dy, dx)
-                    self.aim_dx = math.cos(angle)
-                    self.aim_dy = math.sin(angle)
                 end
             else
                 self.is_aiming = false
@@ -284,6 +287,7 @@ function ActionButton:handle_release(touch_id)
         self.aim_dx = 0
         self.aim_dy = 0
         self.is_cancelled = false
+        self.passed_deadzone = false
 
         -- Retorna true para indicar release, com informações de aiming e cancelamento
         -- Botões sem support_aiming sempre retornam was_aiming = false (quick cast)
@@ -334,6 +338,7 @@ function ActionButton:draw()
             end_x - math.cos(angle + 0.5) * arrow_size,
             end_y - math.sin(angle + 0.5) * arrow_size
         )
+        love.graphics.setLineWidth(1)
     end
 
     -- Indicador de cancelamento (X vermelho)
@@ -349,6 +354,7 @@ function ActionButton:draw()
             self.center_x + cross_size, self.center_y - cross_size,
             self.center_x - cross_size, self.center_y + cross_size
         )
+        love.graphics.setLineWidth(1)
     end
 end
 
@@ -417,17 +423,19 @@ function VirtualJoystick.handle_touchrelease(id)
         local released, was_aiming, aim_dx, aim_dy, is_cancelled = btn:handle_release(id)
         if released then
             handled = true
-            -- Armazenar informações de release para o main.lua processar
-            if not VirtualJoystick.release_events then
-                VirtualJoystick.release_events = {}
+            -- Armazenar informações de release apenas para botões que usam release-to-cast
+            if btn.config.support_aiming then
+                if not VirtualJoystick.release_events then
+                    VirtualJoystick.release_events = {}
+                end
+                table.insert(VirtualJoystick.release_events, {
+                    skill_id = btn.config.skill_id,
+                    was_aiming = was_aiming,
+                    aim_dx = aim_dx,
+                    aim_dy = aim_dy,
+                    is_cancelled = is_cancelled
+                })
             end
-            table.insert(VirtualJoystick.release_events, {
-                skill_id = btn.config.skill_id,
-                was_aiming = was_aiming,
-                aim_dx = aim_dx,
-                aim_dy = aim_dy,
-                is_cancelled = is_cancelled
-            })
         end
     end
     return handled
