@@ -94,10 +94,7 @@ function CharacterFactory.load_character(character_name)
         return character_cache[character_name]
     end
 
-    local ok, data = pcall(require, "default_arena.data.characters." .. character_name)
-    if not ok or not data then
-        ok, data = pcall(require, "data.characters." .. character_name)
-    end
+    local ok, data = pcall(require, "data.characters." .. character_name)
 
     if not ok or type(data) ~= "table" then
         if Loci and Loci.Log then
@@ -116,10 +113,7 @@ function CharacterFactory.load_skill(skill_name)
         return skill_cache[skill_name]
     end
 
-    local ok, data = pcall(require, "default_arena.data.skills." .. skill_name)
-    if not ok or not data then
-        ok, data = pcall(require, "data.skills." .. skill_name)
-    end
+    local ok, data = pcall(require, "data.skills." .. skill_name)
 
     if not ok or type(data) ~= "table" then
         if Loci and Loci.Log then

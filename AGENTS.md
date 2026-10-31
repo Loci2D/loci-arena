@@ -27,12 +27,15 @@ Este é um jogo multiplayer 2D usando:
   - `on_action`: Processa habilidades/ataques
   - `on_player_leave`: Limpeza ao desconectar
 
-- `server/scripts/default_arena/projectile_system.lua`: Sistema de tiro (adicionado)
-  - Usa raycast instantâneo para detecção de colisão
-  - Aplica dano via `Loci.Commands.set_property(entity_id, "hp", new_hp)`
-  - Cooldown de 15 ticks (0.5s a 30Hz)
-  - Alcance de 200 unidades
-  - Dano de 10 por acerto
+- Estrutura Modular (VFS nativo via `loci2d` v0.6.5-sdk.4):
+  - Todos os submódulos do mapa residem dentro de `server/scripts/default_arena/`.
+  - A engine empacota automaticamente todos os `.lua` do diretório do mapa no VFS durante o boot e nos replays (`.loci`).
+  - O comando `require("core.combat_system")` carrega `server/scripts/default_arena/core/combat_system.lua`.
+  - `core/combat_system.lua`: Fórmulas matemáticas de mitigação, crítico, debuffs e dano.
+  - `systems/character_factory.lua`: Fábrica de carregamento de personagens e habilidades com controle de cooldown e mana.
+  - `respawn_system.lua`: Rastreamento de morte e temporizador de reviver jogadores.
+  - `data/characters/*.lua`: Tabelas de atributos dos heróis (ex: warrior, mage, arya, default).
+  - `data/skills/*.lua`: Definições e lógica de execução das habilidades.
 
 ## API do Servidor (Loci.Commands)
 
@@ -46,7 +49,7 @@ Este é um jogo multiplayer 2D usando:
 
 ## Observações Importantes
 
-- O servidor loci2d usa callbacks específicos que são chamados automaticamente
-- Não há função `on_tick` padrão documentada no código existente
-- O sistema de projéteis usa raycast instantâneo em vez de projéteis físicos porque a API para spawn de entidades dinâmicas não está clara
-- As propriedades (hp, score, team) são sincronizadas automaticamente para os clientes
+- O servidor loci2d usa callbacks específicos que são chamados automaticamente (`on_player_join`, `on_move_intent`, `on_action`, `on_player_leave`)
+- A função global `require` é fornecida nativamente pelo VFS seguro da engine (a partir da v0.6.5-sdk.4), sem necessidade de polyfill
+- Todos os arquivos `.lua` necessários para um mapa devem ficar contidos no diretório desse mapa para serem incluídos no VFS e nos replays
+- As propriedades (hp, score, team, etc.) são sincronizadas automaticamente para os clientes

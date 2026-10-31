@@ -1,7 +1,7 @@
 -- Shield Skill Data (Placeholder)
 -- Habilidade defensiva genérica que cria um escudo temporário absorvendo dano
 local CombatSystem = require("core.combat_system")
-local CharacterFactory = require("default_arena.systems.character_factory")
+local CharacterFactory = require("systems.character_factory")
 
 return {
     id = "shield",

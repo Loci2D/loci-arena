@@ -282,7 +282,7 @@ function loci.send_action_direction(ability_id, dir_x, dir_y)
     loci.send_action(ability_id, dir_x, dir_y)
 end
 
--- Cached to avoid GC pressure
+-- Cached to avoid GC pressure, returns a pooled shallow copy to prevent internal cache mutation
 function loci.get_entities()
     if not loci._entities_list_cache then
         local list = {}
@@ -291,7 +291,21 @@ function loci.get_entities()
         end
         loci._entities_list_cache = list
     end
-    return loci._entities_list_cache
+    
+    if not loci._public_entities_list then
+        loci._public_entities_list = {}
+    end
+    
+    -- Clear and refill the public list to prevent internal cache corruption
+    local public_list = loci._public_entities_list
+    for i = 1, #public_list do
+        public_list[i] = nil
+    end
+    for i = 1, #loci._entities_list_cache do
+        public_list[i] = loci._entities_list_cache[i]
+    end
+    
+    return public_list
 end
 
 function loci.get_entities_by_blueprint(blueprint_name)

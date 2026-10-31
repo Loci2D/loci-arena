@@ -46,7 +46,7 @@ return {
         local target_y = caster_y + aim_y * skill_data.range
 
         -- Aplica penalidade temática de Desarme na própria Arya
-        local CharacterFactory = require("default_arena.systems.character_factory")
+        local CharacterFactory = require("systems.character_factory")
         local current_tick = CharacterFactory.get_current_tick()
         local disarm_until = current_tick + skill_data.disarm_duration_ticks
         Loci.Commands.set_property(entity_id, "disarmed_until", tostring(disarm_until))

@@ -32,53 +32,10 @@ local function get_coords(pos)
     return 0, 0
 end
 
--- =============================================================================
--- Module Loader Polyfill (require)
--- Suporte a múltiplos arquivos e importações modulares no ambiente sandbox do Lua.
--- =============================================================================
-local _LOADED = {}
-local SEARCH_PATTERNS = {
-    "server/scripts/%s.lua",
-    "server/scripts/%s/init.lua",
-    "server/scripts/default_arena/%s.lua",
-    "scripts/%s.lua",
-    "scripts/%s/init.lua",
-    "scripts/default_arena/%s.lua",
-    "%s.lua"
-}
-
-function require(modname)
-    if _LOADED[modname] then
-        return _LOADED[modname]
-    end
-
-    local clean_name = modname:gsub("%.", "/")
-    local chunk, err = nil, nil
-    local tried = {}
-
-    for _, pattern in ipairs(SEARCH_PATTERNS) do
-        local path = string.format(pattern, clean_name)
-        chunk, err = loadfile(path)
-        if chunk then
-            break
-        end
-        table.insert(tried, path)
-    end
-
-    if not chunk then
-        error(string.format("module '%s' not found:\n\tno file '%s'\n\tlast error: %s",
-            modname, table.concat(tried, "'\n\tno file '"), tostring(err)))
-    end
-
-    local result = chunk()
-    _LOADED[modname] = (result ~= nil) and result or true
-    return _LOADED[modname]
-end
-
--- Importa os sistemas modulares da arena
+-- Importa os sistemas modulares da arena (via VFS nativo do Loci2D)
 local CombatSystem = require("core.combat_system")
-local CharacterFactory = require("default_arena.systems.character_factory")
-local RespawnSystem = require("default_arena.respawn_system")
+local CharacterFactory = require("systems.character_factory")
+local RespawnSystem = require("respawn_system")
 
 local function is_player_alive(entity_id)
     if not connected_players[entity_id] then return false end
