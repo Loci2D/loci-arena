@@ -15,23 +15,30 @@ loci-arena/
 │   │   ├── sprites/
 │   │   └── audio/
 │   ├── src/                    # Módulos do cliente (cenas, entidades, HUD)
-│   ├── loci2d/                 # SDK Love2D do loci2d (comunicação de rede)
+│   ├── loci2d/                 # SDK Love2D do loci2d (gerenciado via setup_sdk.sh)
 │   ├── conf.lua                # Configuração da janela do Love2D
 │   └── main.lua                # Ponto de entrada do cliente
 │
 ├── server/                     # Lógica autoritativa do servidor
 │   ├── scripts/
-│   │   └── default_arena/      # Regras do jogo em Lua
-│   │       └── main.lua        # Callbacks autoritativos (join, move, action)
+│   │   └── default_arena/      # Regras do jogo em Lua (empacotadas no VFS nativo)
+│   │       ├── core/           # Sistema de combate (mitigação, crítico, escudos)
+│   │       ├── systems/        # Fábrica de personagens e habilidades
+│   │       ├── data/           # Atributos de heróis (characters/) e skills (skills/)
+│   │       ├── respawn_system.lua
+│   │       └── main.lua        # Callbacks autoritativos (join, move, action, tick)
 │   └── .env.example            # Configurações de porta e tick-rate
 │
 ├── bin/                        # Binário executável do loci2d (.gitignore)
 ├── scripts/                    # Scripts utilitários de execução
 │   ├── setup_engine.sh         # Obtém o binário correto da engine loci2d
+│   ├── setup_sdk.sh            # Configura o SDK Love2D (symlink local ou GitHub release)
+│   ├── setup_client.sh         # Instala e verifica dependências do cliente (Love2D, Lua e SDK)
 │   ├── run_server.sh           # Inicia o servidor com os scripts locais
-│   └── run_client.sh           # Inicia o cliente Love2D
+│   └── run_client.sh           # Inicia o cliente Love2D (com verificação automática)
 │
 ├── .loci2d-version             # Versão travada da engine loci2d
+├── .loci2d-sdk-version         # Versão travada do SDK Love2D (sdk-love2d)
 └── README.md
 ```
 
@@ -40,8 +47,8 @@ loci-arena/
 ## Como Executar
 
 ### 1. Pré-requisitos
-- [Love2D](https://love2d.org) (v11.x+) instalado na máquina.
 - Bash/Terminal (Linux, macOS ou WSL/Git Bash no Windows).
+- [Love2D](https://love2d.org) (v11.x+) e [Lua](https://www.lua.org) (instalados automaticamente pelo script ou manualmente).
 
 ### 2. Configurar a Engine
 Para obter o binário do servidor compatível com esta versão do jogo:
@@ -61,6 +68,7 @@ Em outro terminal (ou múltiplos para testar mais de um jogador):
 ```bash
 ./scripts/run_client.sh
 ```
+*(Se o Love2D ou o Lua não estiverem instalados, o script executará `./scripts/setup_client.sh` para instalar automaticamente as dependências).*
 
 ---
 

@@ -2,8 +2,8 @@ local socket = require("socket")
 local pb = nil
 local protoc = nil
 
-package.cpath = package.cpath .. ";./?.so;./lib/?.so;docs/lib/?.so;../../docs/lib/?.so"
-package.path = package.path .. ";./?.lua;./lib/?.lua;docs/lib/?.lua;../../docs/lib/?.lua"
+package.cpath = package.cpath .. ";./?.so;./lib/?.so;./loci2d/lib/?.so;./client/loci2d/lib/?.so;docs/lib/?.so;sdks/love2d/lib/?.so;../../sdks/love2d/lib/?.so;./?.dylib;./lib/?.dylib;./loci2d/lib/?.dylib"
+package.path = package.path .. ";./?.lua;./lib/?.lua;./loci2d/lib/?.lua;./client/loci2d/lib/?.lua;docs/lib/?.lua;sdks/love2d/lib/?.lua;../../sdks/love2d/lib/?.lua"
 
 -- Attempt to load lua-protobuf library and protoc parser
 local ok_pb, res_pb = pcall(require, "pb")
@@ -253,12 +253,9 @@ function loci.send_move(dir_x, dir_y)
     loci._send_intent({ move = { direction = { x_bits = float_to_bits(dir_x), y_bits = float_to_bits(dir_y) } } })
 end
 
-function loci.send_action(ability_id, aim_x, aim_y)
-    local my_ent = loci.get_my_entity()
-    if not my_ent then return end
-    
-    local dx = aim_x - my_ent.x
-    local dy = aim_y - my_ent.y
+function loci.send_action(ability_id, dir_x, dir_y)
+    local dx = tonumber(dir_x) or 0
+    local dy = tonumber(dir_y) or 0
     local len = math.sqrt(dx * dx + dy * dy)
     
     if len > 0 then
@@ -272,7 +269,20 @@ function loci.send_action(ability_id, aim_x, aim_y)
     loci._send_intent({ action = { ability_id = ability_id, target_direction = { x_bits = float_to_bits(dx), y_bits = float_to_bits(dy) } } })
 end
 
--- Cached to avoid GC pressure
+function loci.send_action_at_position(ability_id, aim_x, aim_y)
+    local my_ent = loci.get_my_entity()
+    if not my_ent then return end
+    
+    local dx = (tonumber(aim_x) or 0) - (my_ent.x or 0)
+    local dy = (tonumber(aim_y) or 0) - (my_ent.y or 0)
+    loci.send_action(ability_id, dx, dy)
+end
+
+function loci.send_action_direction(ability_id, dir_x, dir_y)
+    loci.send_action(ability_id, dir_x, dir_y)
+end
+
+-- Cached to avoid GC pressure, returns a pooled shallow copy to prevent internal cache mutation
 function loci.get_entities()
     if not loci._entities_list_cache then
         local list = {}
@@ -281,7 +291,21 @@ function loci.get_entities()
         end
         loci._entities_list_cache = list
     end
-    return loci._entities_list_cache
+    
+    if not loci._public_entities_list then
+        loci._public_entities_list = {}
+    end
+    
+    -- Clear and refill the public list to prevent internal cache corruption
+    local public_list = loci._public_entities_list
+    for i = 1, #public_list do
+        public_list[i] = nil
+    end
+    for i = 1, #loci._entities_list_cache do
+        public_list[i] = loci._entities_list_cache[i]
+    end
+    
+    return public_list
 end
 
 function loci.get_entities_by_blueprint(blueprint_name)

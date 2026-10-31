@@ -13,7 +13,7 @@ local function get_coords(pos)
     return 0, 0
 end
 
-local VISUAL_SCALE = 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
+local VISUAL_SCALE = (CombatSystem.CONST and CombatSystem.CONST.VISUAL_SCALE) or 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
 
 return {
     id = "blade_throw",
@@ -46,15 +46,53 @@ return {
         local target_y = caster_y + aim_y * skill_data.range
 
         -- Aplica penalidade temática de Desarme na própria Arya
-        local CharacterFactory = require("default_arena.systems.character_factory")
+        local CharacterFactory = require("systems.character_factory")
         local current_tick = CharacterFactory.get_current_tick()
         local disarm_until = current_tick + skill_data.disarm_duration_ticks
         Loci.Commands.set_property(entity_id, "disarmed_until", tostring(disarm_until))
 
         local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
-        local hit_ids = Loci.get_entities_in_radius({ x = target_x, y = target_y }, skill_data.aoe_radius)
 
+        -- Trajetória do projétil: amostragem linear com raio de colisão da lâmina (1.5 unidade / 12px)
+        -- Inicia em d = 2.0 (à frente do corpo da Arya) para não atingir inimigos posicionados atrás
+        local proj_radius = 1.5
+        local step = 1.0
+        local impact_x = target_x
+        local impact_y = target_y
+        local d = 2.0
+
+        while d < skill_data.range do
+            local sample_x = caster_x + aim_x * d
+            local sample_y = caster_y + aim_y * d
+            local nearby = Loci.get_entities_in_radius({ x = sample_x, y = sample_y }, proj_radius)
+            local hit_enemy = false
+
+            if nearby then
+                for _, target_id in ipairs(nearby) do
+                    if target_id ~= entity_id then
+                        local target_team = Loci.get_entity_property(target_id, "team") or "2"
+                        if target_team ~= caster_team then
+                            -- Primeiro inimigo atingido no percurso: fixa o ponto de impacto da lâmina aqui
+                            impact_x = sample_x
+                            impact_y = sample_y
+                            hit_enemy = true
+                            break
+                        end
+                    end
+                end
+            end
+
+            if hit_enemy then
+                break
+            end
+            d = d + step
+        end
+
+        -- Aplica a explosão de impacto em área (aoe_radius = 55px) no ponto de impacto (impact_x, impact_y)
+        -- Causa dano físico e Stun em todos os alvos inimigos na área de impacto
+        local hit_ids = Loci.get_entities_in_radius({ x = impact_x, y = impact_y }, skill_data.aoe_radius)
         local hit_count = 0
+
         if hit_ids then
             for _, target_id in ipairs(hit_ids) do
                 if target_id ~= entity_id then
@@ -62,7 +100,7 @@ return {
                     if target_team ~= caster_team then
                         -- Aplica dano
                         CombatSystem.process_hit(entity_id, target_id, skill_data.damage, skill_data.damage_type)
-                        
+
                         -- Aplica Stun no alvo atingido
                         local stun_until = current_tick + skill_data.stun_duration_ticks
                         Loci.Commands.set_property(target_id, "stunned_until", tostring(stun_until))
@@ -74,8 +112,8 @@ return {
             end
         end
 
-        Loci.Log.info(string.format("[Blade Throw] Executado por %s (acertou %d alvos, Arya desarmada por %d ticks)",
-            tostring(entity_id), hit_count, skill_data.disarm_duration_ticks))
+        Loci.Log.info(string.format("[Blade Throw] Executado por %s (impacto a %.1f unidades, acertou %d alvos, Arya desarmada por %d ticks)",
+            tostring(entity_id), math.sqrt((impact_x - caster_x)^2 + (impact_y - caster_y)^2), hit_count, skill_data.disarm_duration_ticks))
         return true
     end
 }

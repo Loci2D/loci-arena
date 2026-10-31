@@ -5,7 +5,8 @@ CombatSystem.CONST = {
     DEFENSE_K = 100,               -- Constante para calcular redução de dano (K)
     CRIT_CHANCE_BASE = 0.10,       -- 10% de chance base de crítico
     CRIT_MULTIPLIER = 2.25,        -- Dano x 2.25 quando crita
-    FRAGILITY_MULT = 1.30          -- 30% a mais de dano se o alvo for "Frágil"
+    FRAGILITY_MULT = 1.30,         -- 30% a mais de dano se o alvo for "Frágil"
+    VISUAL_SCALE = 8               -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
 }
 
 -- Tipos de Dano Suportados
@@ -24,8 +25,31 @@ function CombatSystem.init_entity(entity_id, max_hp, phys_def, mag_def)
     
     -- Status effects (0 = off, 1 = on)
     Loci.Commands.set_property(entity_id, "fragile", "0")
+    Loci.Commands.set_property(entity_id, "shield", "0")
+    Loci.Commands.set_property(entity_id, "shield_active", "0")
+    Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
     
     Loci.Log.info("[Combat] Atributos base definidos para " .. tostring(entity_id))
+end
+
+-- Helper para aplicar escudo temporário em uma entidade
+function CombatSystem.apply_shield(entity_id, amount, duration_ticks, current_tick)
+    current_tick = current_tick or 0
+    local end_tick = current_tick + (duration_ticks or 0)
+    Loci.Commands.set_property(entity_id, "shield", tostring(amount))
+    Loci.Commands.set_property(entity_id, "shield_active", "1")
+    Loci.Commands.set_property(entity_id, "shield_end_tick", tostring(end_tick))
+    if Loci and Loci.Log then
+        Loci.Log.info(string.format("[Combat] Escudo de %d aplicado a %s ate tick %d",
+            amount, tostring(entity_id), end_tick))
+    end
+end
+
+-- Helper para limpar/remover escudo de uma entidade
+function CombatSystem.clear_shield(entity_id)
+    Loci.Commands.set_property(entity_id, "shield", "0")
+    Loci.Commands.set_property(entity_id, "shield_active", "0")
+    Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
 end
 
 -- Calcula a Redução de Dano (%) usando a fórmula Diminishing Returns
@@ -71,16 +95,40 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
         final_damage = final_damage * CombatSystem.CONST.FRAGILITY_MULT
     end
 
+    -- 5.5. Verificar Escudo (absorve dano mitigado/final antes de reduzir o HP)
+    local shield = tonumber(Loci.get_entity_property(target_id, "shield")) or 0
+    local shield_absorbed = 0
+    if shield > 0 and final_damage > 0 then
+        shield_absorbed = math.min(shield, final_damage)
+        final_damage = final_damage - shield_absorbed
+        shield = shield - shield_absorbed
+        Loci.Commands.set_property(target_id, "shield", tostring(shield))
+        
+        if shield <= 0 then
+            shield = 0
+            Loci.Commands.set_property(target_id, "shield", "0")
+            Loci.Commands.set_property(target_id, "shield_active", "0")
+            Loci.Commands.set_property(target_id, "shield_end_tick", "0")
+        end
+        
+        if Loci and Loci.Log then
+            Loci.Log.info(string.format("[Combat] Escudo absorveu %d de dano para %s (Restante no escudo: %d)", 
+                math.floor(shield_absorbed), tostring(target_id), math.floor(shield)))
+        end
+    end
+
     -- 6. Aplicar Dano no HP (mantendo no mínimo 0)
     target_hp = math.max(0, target_hp - final_damage)
     Loci.Commands.set_property(target_id, "hp", tostring(target_hp))
 
-    Loci.Log.info(string.format("[Combat] Dano %d (Mitig: %.1f%%) causado em %s", 
-        math.floor(final_damage), mitigation * 100, tostring(target_id)))
+    if Loci and Loci.Log then
+        Loci.Log.info(string.format("[Combat] Dano %d (Mitig: %.1f%%, Escudo: %d) causado em %s", 
+            math.floor(final_damage), mitigation * 100, math.floor(shield_absorbed), tostring(target_id)))
+    end
 
     -- 7. Checar Morte
     if target_hp == 0 then
-        local RespawnSystem = require("default_arena.respawn_system")
+        local RespawnSystem = require("respawn_system")
         RespawnSystem.mark_dead(target_id)
         
         -- Atualizar KDA
@@ -94,13 +142,14 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
 
         Loci.Log.info("[Combat] " .. tostring(target_id) .. " foi eliminado por " .. tostring(attacker_id))
         
-        local CharacterFactory = require("default_arena.systems.character_factory")
+        local CharacterFactory = require("systems.character_factory")
         CharacterFactory.on_entity_die(target_id)
     end
 
     return {
         success = true,
         damage_dealt = final_damage,
+        shield_absorbed = shield_absorbed,
         was_critical = is_crit,
         lethal = (target_hp == 0)
     }

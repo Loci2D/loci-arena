@@ -4,7 +4,10 @@ set -e
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="$ROOT_DIR/bin"
 TARGET_BIN="$BIN_DIR/loci2d"
-VERSION="$(cat "$ROOT_DIR/.loci2d-version" 2>/dev/null || echo "latest")"
+VERSION="$(cat "$ROOT_DIR/.loci2d-version" 2>/dev/null | tr -d '[:space:]')"
+[ -z "$VERSION" ] && VERSION="latest"
+VERSION_MARKER="$BIN_DIR/loci2d.version"
+INSTALLED_VERSION="$(cat "$VERSION_MARKER" 2>/dev/null | tr -d '[:space:]')"
 FORCE_DOWNLOAD=false
 
 if [ "$1" = "--download" ] || [ "$1" = "-d" ] || [ "$1" = "--force" ]; then
@@ -15,11 +18,15 @@ mkdir -p "$BIN_DIR"
 
 echo "=== Loci Arena - Engine Setup (${VERSION}) ==="
 
-# 1. Check if loci2d binary already exists and works (unless force download)
+# 1. Check if loci2d binary already exists and matches the target version (unless force download)
 if [ "$FORCE_DOWNLOAD" = false ] && [ -f "$TARGET_BIN" ] && [ -x "$TARGET_BIN" ]; then
-    echo "[OK] Found existing loci2d binary at bin/loci2d"
-    echo "Tip: Run './scripts/setup_engine.sh --download' to force downloading the latest GitHub release."
-    exit 0
+    if [ "$INSTALLED_VERSION" = "$VERSION" ]; then
+        echo "[OK] Found existing loci2d binary (${VERSION}) at bin/loci2d"
+        echo "Tip: Run './scripts/setup_engine.sh --download' to force re-downloading the release."
+        exit 0
+    else
+        echo "-> Versao da engine alterada (${INSTALLED_VERSION:-desconhecida} -> ${VERSION}). Atualizando binario..."
+    fi
 fi
 
 # 2. Check local sibling repository (common during local engine development)
@@ -31,12 +38,14 @@ if [ "$FORCE_DOWNLOAD" = false ]; then
         echo "-> Copying loci2d release binary from local repo: $LOCAL_LOCI_RELEASE"
         cp "$LOCAL_LOCI_RELEASE" "$TARGET_BIN"
         chmod +x "$TARGET_BIN"
+        echo "$VERSION" > "$VERSION_MARKER"
         echo "[OK] Engine configured successfully from local build!"
         exit 0
     elif [ -f "$LOCAL_LOCI_DEBUG" ]; then
         echo "-> Copying loci2d debug binary from local repo: $LOCAL_LOCI_DEBUG"
         cp "$LOCAL_LOCI_DEBUG" "$TARGET_BIN"
         chmod +x "$TARGET_BIN"
+        echo "$VERSION" > "$VERSION_MARKER"
         echo "[OK] Engine configured successfully from local debug build!"
         exit 0
     fi
@@ -68,6 +77,7 @@ echo "-> Downloading ${VERSION} (${PATTERN}) from GitHub (Loci2D/loci2d)..."
 if command -v gh >/dev/null 2>&1; then
     if gh release download "$VERSION" --repo Loci2D/loci2d --pattern "$PATTERN" --clobber -O "$TARGET_BIN" 2>/dev/null; then
         chmod +x "$TARGET_BIN"
+        echo "$VERSION" > "$VERSION_MARKER"
         echo "[OK] Downloaded loci2d binary successfully via GitHub CLI!"
         exit 0
     fi
@@ -78,6 +88,7 @@ DOWNLOAD_URL="https://github.com/Loci2D/loci2d/releases/download/${VERSION}/${PA
 if command -v curl >/dev/null 2>&1; then
     if curl -sSL -f "$DOWNLOAD_URL" -o "$TARGET_BIN"; then
         chmod +x "$TARGET_BIN"
+        echo "$VERSION" > "$VERSION_MARKER"
         echo "[OK] Downloaded loci2d binary successfully via curl!"
         exit 0
     fi
