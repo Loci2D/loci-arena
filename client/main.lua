@@ -102,7 +102,8 @@ local function load_character_sprite(character_name)
     if not character_name or character_name == "" then return nil end
     local key = string.lower(character_name)
     if character_sprites[key] ~= nil then
-        return character_sprites[key]
+        local cached = character_sprites[key]
+        return (cached ~= false and cached) or nil
     end
 
     local possible_paths = {
@@ -217,11 +218,12 @@ function love.load(arg)
                 -- Ataques normais variam de ~150 a 300 de dano após mitigação de defesa;
                 -- Golpes com dano >= 350 são críticos reais (multiplicador 2.25x)
                 local is_critical = damage >= 350
+                local hud_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) + 32 -- Inicia acima da cabeça e HUD do modelo escalado
                 table.insert(floating_damage, {
                     value = damage,
                     x = entity.x,
                     y = entity.y,
-                    offset_y = 52, -- Inicia acima da cabeça e HUD do modelo de 32px
+                    offset_y = hud_offset_y,
                     lifetime = 1.0,
                     max_lifetime = 1.0,
                     is_critical = is_critical,
@@ -242,11 +244,12 @@ function love.load(arg)
                     shake_intensity = math.max(shake_intensity, intensity)
                 end
 
+                local hud_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) + 32 -- Inicia acima da cabeça e HUD do modelo escalado
                 table.insert(floating_damage, {
                     value = damage,
                     x = entity.x,
                     y = entity.y,
-                    offset_y = 52, -- Inicia acima da cabeça e HUD do modelo de 32px
+                    offset_y = hud_offset_y,
                     lifetime = 1.0,
                     max_lifetime = 1.0,
                     is_critical = false,
@@ -549,7 +552,7 @@ function love.draw()
         local progress = fx.lifetime / fx.max_lifetime
         local inv_prog = 1.0 - progress
         local fx_start_x = fx.x * VISUAL_SCALE
-        local fx_start_y = (fx.y * VISUAL_SCALE) - 16 -- Origem no centro do corpo do modelo de 32px
+        local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
 
         if fx.ability_id == 1 then
             -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro
@@ -649,7 +652,7 @@ function love.draw()
                 local aim_dx, aim_dy = virtual_joystick.get_aim_vector(slot)
                 if math.abs(aim_dx) > 0.01 or math.abs(aim_dy) > 0.01 then
                     local player_x = my_entity.x * VISUAL_SCALE
-                    local player_y = (my_entity.y * VISUAL_SCALE) - 16 -- Centro do corpo a partir dos pés do modelo de 32px
+                    local player_y = (my_entity.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Centro do corpo a partir dos pés do modelo escalado
                     local aim_length = SKILL_RANGES[slot] or 200
                     local end_x = player_x + aim_dx * aim_length
                     local end_y = player_y + aim_dy * aim_length
