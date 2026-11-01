@@ -98,6 +98,11 @@ local function init_placeholders()
     placeholder_canvases["dead"] = create_character_placeholder(0.35, 0.35, 0.38, 0.5, 0.5, 0.5)
 end
 
+local DIRECTIONS_8 = {
+    "east", "south-east", "south", "south-west",
+    "west", "north-west", "north", "north-east"
+}
+
 local function load_character_sprite(character_name)
     if not character_name or character_name == "" then return nil end
     local key = string.lower(character_name)
@@ -106,33 +111,73 @@ local function load_character_sprite(character_name)
         return (cached ~= false and cached) or nil
     end
 
-    local possible_paths = {
-        "assets/sprites/" .. key .. ".png",
-        "assets/sprites/" .. character_name .. ".png",
-        "client/assets/sprites/" .. key .. ".png"
-    }
+    local found_info = nil
 
-    local found_img = nil
-    for _, path in ipairs(possible_paths) do
-        if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(path) then
-            local ok_img, img = pcall(love.graphics.newImage, path)
-            if ok_img and img then
-                img:setFilter("nearest", "nearest")
-                local w = img:getWidth()
-                local h = img:getHeight()
-                print(string.format("[Client] Loaded character sprite '%s' (%dx%d) for '%s'", path, w, h, character_name))
-                found_img = {
-                    image = img,
-                    width = w,
-                    height = h
+    -- 1. Tenta carregar pasta com conjunto de 8 direções do Pixelab (ex: assets/sprites/arya/south.png)
+    local dir_folder_candidates = {
+        "assets/sprites/" .. key,
+        "client/assets/sprites/" .. key
+    }
+    for _, folder in ipairs(dir_folder_candidates) do
+        if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(folder .. "/south.png") then
+            local rot_images = {}
+            local loaded_any = false
+            for _, dir in ipairs(DIRECTIONS_8) do
+                local p = folder .. "/" .. dir .. ".png"
+                if love.filesystem.getInfo(p) then
+                    local ok, img = pcall(love.graphics.newImage, p)
+                    if ok and img then
+                        img:setFilter("nearest", "nearest")
+                        rot_images[dir] = img
+                        loaded_any = true
+                    end
+                end
+            end
+            if loaded_any then
+                local def_img = rot_images["south"] or rot_images["east"]
+                found_info = {
+                    has_rotations = true,
+                    rotations = rot_images,
+                    image = def_img,
+                    width = def_img and def_img:getWidth() or SPRITE_BASE_SIZE,
+                    height = def_img and def_img:getHeight() or SPRITE_BASE_SIZE
                 }
+                print(string.format("[Client] Loaded 8-direction sprite set for '%s' from %s/", character_name, folder))
                 break
             end
         end
     end
 
-    character_sprites[key] = found_img or false
-    return found_img
+    -- 2. Fallback: carregar PNG único (ex: assets/sprites/arya.png)
+    if not found_info then
+        local possible_paths = {
+            "assets/sprites/" .. key .. ".png",
+            "assets/sprites/" .. character_name .. ".png",
+            "client/assets/sprites/" .. key .. ".png"
+        }
+
+        for _, path in ipairs(possible_paths) do
+            if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(path) then
+                local ok_img, img = pcall(love.graphics.newImage, path)
+                if ok_img and img then
+                    img:setFilter("nearest", "nearest")
+                    local w = img:getWidth()
+                    local h = img:getHeight()
+                    print(string.format("[Client] Loaded character sprite '%s' (%dx%d) for '%s'", path, w, h, character_name))
+                    found_info = {
+                        has_rotations = false,
+                        image = img,
+                        width = w,
+                        height = h
+                    }
+                    break
+                end
+            end
+        end
+    end
+
+    character_sprites[key] = found_info or false
+    return found_info
 end
 
 -- Screen shake state
@@ -373,22 +418,17 @@ function love.update(dt)
         cam_y = my_entity.y * VISUAL_SCALE
     end
 
-    -- Update procedural animation for all entities
+    -- Update visual orientation and direction for all entities
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
         local is_moving = false
-        local facing_dir = 0
-        
-        -- Detect movement from velocity
-        if ent.vx and ent.vy then
-            local speed = math.sqrt(ent.vx * ent.vx + ent.vy * ent.vy)
-            if speed > 0.1 then
-                is_moving = true
-                facing_dir = ent.vx > 0 and 1 or (ent.vx < 0 and -1) or 0
-            end
+        local vx = ent.vx or 0
+        local vy = ent.vy or 0
+        local speed = math.sqrt(vx * vx + vy * vy)
+        if speed > 0.05 then
+            is_moving = true
         end
-        
-        procedural_anim.update_walk(dt, ent.id, is_moving, facing_dir)
+        procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
     end
 
     -- Update rejection message timer
@@ -831,11 +871,12 @@ function draw_entity(ent, is_me)
     local sprite_w = (sprite_info and sprite_info.width) or SPRITE_BASE_SIZE
     local sprite_h = (sprite_info and sprite_info.height) or SPRITE_BASE_SIZE
 
-    -- Escala de renderização: SPRITE_SCALE pixels por pixel do sprite (32px * 4 = 128px na tela)
+    -- Escala de renderização: SPRITE_SCALE pixels por pixel do sprite (32px * 2 = 64px na tela)
     local scale = SPRITE_SCALE
 
-    -- Animação procedural
+    -- Estado visual e de orientação da entidade (8 direções)
     local anim_state = procedural_anim.get_state(ent.id)
+    local ent_dir = anim_state.direction or "south"
 
     -- Sombra dos pés proporcional ao modelo de 32px ancorada na base (px, py)
     local shadow_radius_x = 13 * scale
@@ -848,24 +889,31 @@ function draw_entity(ent, is_me)
     local oy = sprite_h
 
     local draw_x = px
-    local draw_y = py + anim_state.bob_offset * scale
-    local scale_x = scale * anim_state.squash_x * anim_state.facing
-    local scale_y = scale * anim_state.squash_y
+    local draw_y = py -- Posição sólida e alinhada à grade de pixels (sem bobbing procedural)
 
     if sprite_info then
-        -- Renderizar sprite PNG (32x32 com filtro nearest/nearest)
+        -- Seleciona a imagem correta: rotação 8-way do Pixelab ou imagem padrão
+        local img_to_draw = (sprite_info.has_rotations and sprite_info.rotations[ent_dir]) or sprite_info.image
+
         if is_dead then
             love.graphics.setColor(0.5, 0.5, 0.5, 0.75)
         else
             love.graphics.setColor(1, 1, 1, 1)
         end
+
+        -- Para imagem única sem rotações, espelha via facing; para 8 direções do Pixelab, desenha direto sem distorção
+        local scale_x = scale
+        if not sprite_info.has_rotations then
+            scale_x = scale * (anim_state.facing or 1)
+        end
+
         love.graphics.draw(
-            sprite_info.image,
+            img_to_draw,
             draw_x,
             draw_y,
-            anim_state.tilt_angle,
+            0, -- Sem rotação/tilt (preserva nitidez e grade de pixels)
             scale_x,
-            scale_y,
+            scale,
             ox, oy
         )
     else
@@ -877,9 +925,9 @@ function draw_entity(ent, is_me)
             ph,
             draw_x,
             draw_y,
-            anim_state.tilt_angle,
-            scale_x,
-            scale_y,
+            0, -- Sem rotação/tilt
+            scale * (anim_state.facing or 1),
+            scale,
             ox, oy
         )
     end

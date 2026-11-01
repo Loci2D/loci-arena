@@ -1,86 +1,89 @@
--- Procedural Animation System
--- Estilo "fantoche/South Park" - caminhada com rotação/balanço calibrada para sprites 32x32
+-- Character Direction and Visual State System
+-- Gerencia orientação e seleção de direção (8-way) para sprites do Pixelab sem deformações procedurais
 
-local WALK_CONFIG = {
-    step_frequency  = 13,      -- Ritmo dos passos ao caminhar
-    max_tilt_deg    = 5.5,     -- Inclinação lateral da troca de peso dos pés (graus)
-    bob_pixels      = 3.0,     -- Elevação vertical do passo em pixels nativos (calibrado para 32x32)
-    stop_smoothness = 12,      -- Velocidade do retorno à posição neutra ao parar
-    squash_amount   = 0.045,   -- Compressão no solo a cada passada (squash & stretch proporcional a 32px)
+local DIRECTIONS_8 = {
+    "east",
+    "south-east",
+    "south",
+    "south-west",
+    "west",
+    "north-west",
+    "north",
+    "north-east",
 }
+
+local function calc_direction_8way(dx, dy, fallback_dir)
+    if not dx or not dy or (dx == 0 and dy == 0) then
+        return fallback_dir or "south"
+    end
+    local angle = math.atan2(dy, dx)
+    if angle < 0 then
+        angle = angle + 2 * math.pi
+    end
+    local index = math.floor(((angle + math.pi / 8) % (2 * math.pi)) / (math.pi / 4))
+    return DIRECTIONS_8[index + 1] or fallback_dir or "south"
+end
 
 local ProceduralAnim = {}
 
--- Estado de animação por entidade
+-- Estado visual por entidade
 local anim_states = {}
 
--- Obter ou criar estado de animação para uma entidade
+-- Obter ou criar estado para uma entidade
 function ProceduralAnim.get_state(entity_id)
     if not anim_states[entity_id] then
         anim_states[entity_id] = {
-            walk_timer = 0,
+            direction = "south",
+            facing = 1,
+            is_moving = false,
+            -- Campos mantidos neutros para total compatibilidade retroativa
             tilt_angle = 0,
-            target_tilt = 0,
             bob_offset = 0,
             squash_x = 1,
-            squash_y = 1,
-            facing = 1,
-            last_moving = false
+            squash_y = 1
         }
     end
     return anim_states[entity_id]
 end
 
--- Limpar estado de animação de uma entidade
+-- Limpar estado de uma entidade
 function ProceduralAnim.clear_state(entity_id)
     anim_states[entity_id] = nil
 end
 
--- Atualizar animação de caminhada
-function ProceduralAnim.update_walk(dt, entity_id, is_moving, facing_dir)
+-- Atualizar orientação de caminhada (8 direções)
+-- Suporta tanto (dt, id, is_moving, vx, vy) quanto a chamada legada (dt, id, is_moving, facing_dir)
+function ProceduralAnim.update_walk(dt, entity_id, is_moving, arg1, arg2)
     local state = ProceduralAnim.get_state(entity_id)
-    
-    -- Atualiza facing se fornecido
-    if facing_dir ~= 0 then
-        state.facing = facing_dir
-    end
-    
-    if is_moving then
-        state.walk_timer = state.walk_timer + dt
-        local cycle = state.walk_timer * WALK_CONFIG.step_frequency
-        local max_rad = math.rad(WALK_CONFIG.max_tilt_deg)
-        
-        -- Rotação lateral (til) baseada no facing
-        state.target_tilt = math.sin(cycle) * max_rad * state.facing
-        
-        -- Elevação vertical (bob)
-        state.bob_offset = -math.abs(math.sin(cycle)) * WALK_CONFIG.bob_pixels
-        
-        -- Squash & stretch suave
-        local squash = math.sin(cycle * 2) * WALK_CONFIG.squash_amount
-        state.squash_x = 1 + squash
-        state.squash_y = 1 - squash
-        
-        state.last_moving = true
-    else
-        -- Parado: desaceleração suave de volta à posição neutra
-        state.target_tilt = 0
-        local stop_t = math.min(1, WALK_CONFIG.stop_smoothness * dt)
-        state.bob_offset = state.bob_offset + (0 - state.bob_offset) * stop_t
-        state.squash_x = state.squash_x + (1 - state.squash_x) * stop_t
-        state.squash_y = state.squash_y + (1 - state.squash_y) * stop_t
-        
-        -- Zera timer se parado por um tempo
-        if state.last_moving then
-            state.walk_timer = 0
-            state.last_moving = false
+    state.is_moving = is_moving or false
+
+    if type(arg1) == "number" and type(arg2) == "number" then
+        -- Chamada com vetor de velocidade (vx, vy)
+        local vx, vy = arg1, arg2
+        if is_moving and (math.abs(vx) > 0.05 or math.abs(vy) > 0.05) then
+            state.direction = calc_direction_8way(vx, vy, state.direction)
+            if vx > 0.05 then
+                state.facing = 1
+            elseif vx < -0.05 then
+                state.facing = -1
+            end
+        end
+    elseif type(arg1) == "number" and arg1 ~= 0 then
+        -- Chamada legada passando facing_dir (-1 ou 1)
+        state.facing = arg1
+        if arg1 > 0 then
+            state.direction = "east"
+        else
+            state.direction = "west"
         end
     end
-    
-    -- Interpolação suave do ângulo de rotação (Lerp protegido contra dt spikes)
-    local tilt_t = math.min(1, 16 * dt)
-    state.tilt_angle = state.tilt_angle + (state.target_tilt - state.tilt_angle) * tilt_t
-    
+
+    -- Deformações de bobbing, tilt e squash neutralizadas para manter fidelidade estrita ao pixel art
+    state.tilt_angle = 0
+    state.bob_offset = 0
+    state.squash_x = 1
+    state.squash_y = 1
+
     return state
 end
 
