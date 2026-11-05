@@ -38,7 +38,12 @@ local floating_damage = {}
 local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
-local _arya_sprite = nil
+
+-- Cache de sprites por personagem
+local character_sprites = {}
+
+-- Estado local para troca de personagem (não depende do servidor)
+local current_char_index = 0  -- 0=arya, 1=default, 2=mage, 3=warrior
 
 -- Screen shake state
 local shake_duration = 0
@@ -86,36 +91,19 @@ function love.load(arg)
 
     connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
 
-    -- Load Arya sprite (prefer PNG if available, fallback to embedded hex data)
-    local loaded_from_file = false
-    if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo("assets/sprites/arya.png") then
-        local ok_img, img = pcall(love.graphics.newImage, "assets/sprites/arya.png")
-        if ok_img and img then
-            _arya_sprite = img
-            loaded_from_file = true
-        end
-    end
-
-    if not loaded_from_file then
-        local arya_sprite_data = require("assets.sprites.arya")
-        local data = love.image.newImageData(16, 16)
-        for y = 0, 15 do
-            for x = 0, 15 do
-                local val = arya_sprite_data[y + 1][x + 1]
-                if val then
-                    local r = math.floor(val / 0x1000000) % 256 / 255
-                    local g = math.floor(val / 0x10000) % 256 / 255
-                    local b = math.floor(val / 0x100) % 256 / 255
-                    local a = (val % 256) / 255
-                    data:setPixel(x, y, r, g, b, a)
-                else
-                    data:setPixel(x, y, 0, 0, 0, 0)
-                end
+    -- Carregar sprites dos personagens disponíveis
+    local character_list = { "arya", "default", "mage", "warrior" }
+    for _, char_name in ipairs(character_list) do
+        local sprite_path = "assets/sprites/" .. char_name .. ".png"
+        if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(sprite_path) then
+            local ok_img, img = pcall(love.graphics.newImage, sprite_path)
+            if ok_img and img then
+                img:setFilter("nearest", "nearest")
+                character_sprites[char_name] = img
+                print("[Client] Loaded sprite for " .. char_name)
             end
         end
-        _arya_sprite = love.graphics.newImage(data)
     end
-    _arya_sprite:setFilter("nearest", "nearest")
 
     -- Event hooks
     loci.on_entity_spawned = function(entity)
@@ -398,6 +386,18 @@ function love.keypressed(key)
         cast_ability_at_mouse(3)
     elseif key == "4" or key == "r" then
         cast_ability_at_mouse(4)
+    elseif key == "k" then
+        -- Troca de personagem provisória (cicla: arya -> default -> mage -> warrior -> arya)
+        if connection_status:find("Connected") then
+            local char_cycle = { "arya", "default", "mage", "warrior" }
+            current_char_index = (current_char_index + 1) % #char_cycle
+            local next_char = char_cycle[current_char_index + 1]
+            print("[Client] Trocando personagem para " .. next_char .. " (índice: " .. current_char_index .. ")")
+            -- Envia índice do personagem (0=arya, 1=default, 2=mage, 3=warrior)
+            loci.send_action(999, current_char_index, 0)
+        else
+            print("[Client] Não conectado - não é possível trocar personagem")
+        end
     end
 end
 
@@ -752,22 +752,30 @@ function draw_entity(ent, is_me)
                           (ent.properties and (ent.properties["shield_active"] == "1" or ent.properties["shield_active"] == 1))
     local shield_value = tonumber(ent.shield or (ent.properties and ent.properties["shield"])) or 0
 
-    local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
-    local is_arya = (char_name == "Arya")
-    if is_arya then
-        -- Render Arya with procedural animation
+    local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or "arya"
+    local char_name_lower = string.lower(char_name or "")
+
+    -- Obter sprite do personagem (ou usar placeholder se não encontrado)
+    local sprite = character_sprites[char_name_lower]
+    if not sprite then
+        -- Usar sprite do Arya como fallback
+        sprite = character_sprites["arya"]
+    end
+
+    if sprite then
+        -- Render com sprite carregado
         local anim_state = procedural_anim.get_state(ent.id)
-        
+
         -- Shadow ellipse at feet
         local shadow_radius_x = (16 / 2) * VISUAL_SCALE
         local shadow_radius_y = 3.5 * VISUAL_SCALE
         love.graphics.setColor(0, 0, 0, 0.4)
         love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
-        
+
         -- Pivot at feet (base of sprite)
         local ox = 16 / 2
         local oy = 16
-        
+
         -- Draw sprite with animation (tint acinzentado se morta)
         if is_dead then
             love.graphics.setColor(0.5, 0.5, 0.5, 0.75)
@@ -775,7 +783,7 @@ function draw_entity(ent, is_me)
             love.graphics.setColor(1, 1, 1, 1)
         end
         love.graphics.draw(
-            _arya_sprite,
+            sprite,
             px,
             py + anim_state.bob_offset * VISUAL_SCALE,
             anim_state.tilt_angle,
