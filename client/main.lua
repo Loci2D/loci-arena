@@ -502,13 +502,13 @@ function love.keypressed(key)
         end
     elseif key == "tab" then
         kda_ui.show()
-    elseif key == "space" or key == "1" then
+    elseif key == "space" then
         cast_ability_at_mouse(1)
-    elseif key == "2" or key == "q" then
+    elseif key == "q" then
         cast_ability_at_mouse(2)
-    elseif key == "3" or key == "e" then
+    elseif key == "e" then
         cast_ability_at_mouse(3)
-    elseif key == "4" or key == "r" then
+    elseif key == "r" then
         cast_ability_at_mouse(4)
     elseif key == "k" then
         -- Troca de personagem provisória (cicla: arya -> default -> mage -> warrior -> arya)
@@ -1034,7 +1034,7 @@ function draw_hud(sw, sh, my_entity)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Mover | Espaço/1: Ataque | 2/Q: Fúria | 3/E: Dash | 4/R: Stun | K: Trocar | T: Touch UI | C: Ficha", 20, sh - 28)
+    love.graphics.print("WASD: Mover | Espaço: Ataque | Q: Fúria | E: Dash | R: Stun | K: Trocar | T: Touch UI | C: Ficha", 20, sh - 28)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
