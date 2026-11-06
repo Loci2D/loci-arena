@@ -512,13 +512,28 @@ function love.keypressed(key)
         cast_ability_at_mouse(4)
     elseif key == "k" then
         -- Troca de personagem provisória (cicla: arya -> default -> mage -> warrior -> arya)
+        local me = loci.get_my_entity()
+        local is_dead = me and (me.is_dead or (me.properties and me.properties["is_dead"] == "true"))
+        if is_dead then
+            print("[Client] Não é possível trocar de personagem enquanto estiver morto")
+            return
+        end
+
         if connection_status:find("Connected") then
             local char_cycle = { "arya", "default", "mage", "warrior" }
-            current_char_index = (current_char_index + 1) % #char_cycle
-            local next_char = char_cycle[current_char_index + 1]
-            print("[Client] Trocando personagem para " .. next_char .. " (índice: " .. current_char_index .. ")")
+            local cur_name = string.lower(me and (me.character_name or (me.properties and me.properties["character_name"])) or "arya")
+            local cur_idx = 0
+            for idx, name in ipairs(char_cycle) do
+                if name == cur_name then
+                    cur_idx = idx - 1
+                    break
+                end
+            end
+            local next_idx = (cur_idx + 1) % #char_cycle
+            local next_char = char_cycle[next_idx + 1]
+            print(string.format("[Client] Trocando personagem para %s (índice: %d)", next_char, next_idx))
             -- Envia índice do personagem (0=arya, 1=default, 2=mage, 3=warrior)
-            loci.send_action(999, current_char_index, 0)
+            loci.send_action(999, next_idx, 0)
         else
             print("[Client] Não conectado - não é possível trocar personagem")
         end
@@ -1019,7 +1034,7 @@ function draw_hud(sw, sh, my_entity)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Mover | Espaço/1: Ataque | 2/Q: Fúria | 3/E: Dash | 4/R: Stun | T: Touch UI | C: Ficha", 20, sh - 28)
+    love.graphics.print("WASD: Mover | Espaço/1: Ataque | 2/Q: Fúria | 3/E: Dash | 4/R: Stun | K: Trocar | T: Touch UI | C: Ficha", 20, sh - 28)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
