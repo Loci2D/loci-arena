@@ -157,7 +157,7 @@ function CharacterFactory.create_character(entity_id, character_name)
     CombatSystem.init_entity(entity_id, max_hp, phys_def, mag_def)
 
     -- 2. Define propriedades de controle e gameplay
-    Loci.Commands.set_property(entity_id, "character_name", char_data.name or character_name)
+    Loci.Commands.set_property(entity_id, "character_name", string.lower(char_data.name or character_name))
     Loci.Commands.set_property(entity_id, "role", char_data.role or "fighter")
     Loci.Commands.set_property(entity_id, "mana", tostring(mana))
     Loci.Commands.set_property(entity_id, "max_mana", tostring(max_mana))
@@ -180,8 +180,9 @@ function CharacterFactory.create_character(entity_id, character_name)
     entity_cooldowns[entity_id] = {}
 
     if Loci and Loci.Log then
+        local display_name = string.lower(char_data.name or character_name)
         Loci.Log.info(string.format("[CharacterFactory] Entidade %s configurada como '%s' (HP: %d, Mana: %d)",
-            tostring(entity_id), char_data.name or character_name, max_hp, mana))
+            tostring(entity_id), display_name, max_hp, mana))
     end
 
     -- Registrar como entidade ativa para regeneração
