@@ -39,11 +39,146 @@ local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
 
--- Cache de sprites por personagem
+-- Sprites e texturas de personagens (padrão 32x32px)
+local SPRITE_BASE_SIZE = 32
+-- 🔍 ZOOM DO PERSONAGEM: ajuste SPRITE_SCALE para controlar o tamanho visual na tela.
+--   1 = 32px  (tamanho nativo do sprite, compacto)
+--   2 = 64px  (atual — bom equilíbrio visual para arena)
+--   4 = 128px (equivalente ao sprite 16x16 antigo multiplicado por 8)
+local SPRITE_SCALE = 2
 local character_sprites = {}
+local placeholder_canvases = {}
 
--- Estado local para troca de personagem (não depende do servidor)
-local current_char_index = 0  -- 0=arya, 1=default, 2=mage, 3=warrior
+local function create_character_placeholder(r, g, b, accent_r, accent_g, accent_b)
+    local canvas = love.graphics.newCanvas(SPRITE_BASE_SIZE, SPRITE_BASE_SIZE)
+    love.graphics.setCanvas(canvas)
+    love.graphics.clear(0, 0, 0, 0)
+
+    -- Corpo estilizado de 32x32 com proporção e silhueta para arena:
+    -- Borda externa escura para contraste contra o chão da arena
+    love.graphics.setColor(0.08, 0.08, 0.1, 0.95)
+    love.graphics.rectangle("fill", 5, 4, 22, 27, 4, 4)
+
+    -- Preenchimento principal do corpo
+    love.graphics.setColor(r, g, b, 1)
+    love.graphics.rectangle("fill", 6, 5, 20, 25, 3, 3)
+
+    -- Detalhe de iluminação no topo da cabeça
+    love.graphics.setColor(math.min(1, r * 1.3), math.min(1, g * 1.3), math.min(1, b * 1.3), 0.7)
+    love.graphics.rectangle("fill", 8, 6, 16, 4, 2, 2)
+
+    -- Indicador de frente / Facing (olhos / visor voltado para a direita)
+    -- Quando facing = 1, olha para a direita. Quando facing = -1, é espelhado no eixo X via escala negativa e pivô ox=16.
+    love.graphics.setColor(0.05, 0.05, 0.05, 0.95)
+    love.graphics.rectangle("fill", 15, 10, 9, 6, 1, 1)
+
+    -- Visor / Brilho do olho
+    love.graphics.setColor(accent_r, accent_g, accent_b, 1)
+    love.graphics.rectangle("fill", 17, 11, 6, 4)
+    love.graphics.setColor(1, 1, 1, 0.9)
+    love.graphics.rectangle("fill", 20, 11, 2, 2)
+
+    -- Detalhe da cintura / cinto
+    love.graphics.setColor(0.12, 0.12, 0.16, 0.85)
+    love.graphics.rectangle("fill", 7, 21, 18, 2)
+
+    -- Pés / Botas na base (y=27 a 31)
+    love.graphics.setColor(0.15, 0.15, 0.2, 1)
+    love.graphics.rectangle("fill", 7, 27, 7, 4, 1, 1)
+    love.graphics.rectangle("fill", 17, 27, 8, 4, 1, 1)
+
+    love.graphics.setCanvas()
+    canvas:setFilter("nearest", "nearest")
+    return canvas
+end
+
+local function init_placeholders()
+    placeholder_canvases["me"] = create_character_placeholder(0.2, 0.6, 0.95, 0.3, 0.9, 1.0)
+    placeholder_canvases["enemy"] = create_character_placeholder(0.9, 0.3, 0.25, 1.0, 0.85, 0.2)
+    placeholder_canvases["dead"] = create_character_placeholder(0.35, 0.35, 0.38, 0.5, 0.5, 0.5)
+end
+
+local DIRECTIONS_8 = {
+    "east", "south-east", "south", "south-west",
+    "west", "north-west", "north", "north-east"
+}
+
+local function load_character_sprite(character_name)
+    if not character_name or character_name == "" then return nil end
+    local key = string.lower(character_name)
+    if character_sprites[key] ~= nil then
+        local cached = character_sprites[key]
+        return (cached ~= false and cached) or nil
+    end
+
+    local found_info = nil
+
+    -- 1. Tenta carregar pasta com conjunto de 8 direções do Pixelab (ex: assets/sprites/arya/south.png)
+    local dir_folder_candidates = {
+        "assets/sprites/" .. key,
+        "client/assets/sprites/" .. key
+    }
+    for _, folder in ipairs(dir_folder_candidates) do
+        if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(folder .. "/south.png") then
+            local rot_images = {}
+            local loaded_any = false
+            for _, dir in ipairs(DIRECTIONS_8) do
+                local p = folder .. "/" .. dir .. ".png"
+                if love.filesystem.getInfo(p) then
+                    local ok, img = pcall(love.graphics.newImage, p)
+                    if ok and img then
+                        img:setFilter("nearest", "nearest")
+                        rot_images[dir] = img
+                        loaded_any = true
+                    end
+                end
+            end
+            if loaded_any then
+                local def_img = rot_images["south"] or rot_images["east"]
+                found_info = {
+                    has_rotations = true,
+                    rotations = rot_images,
+                    image = def_img,
+                    width = def_img and def_img:getWidth() or SPRITE_BASE_SIZE,
+                    height = def_img and def_img:getHeight() or SPRITE_BASE_SIZE
+                }
+                print(string.format("[Client] Loaded 8-direction sprite set for '%s' from %s/", character_name, folder))
+                break
+            end
+        end
+    end
+
+    -- 2. Fallback: carregar PNG único (ex: assets/sprites/arya.png)
+    if not found_info then
+        local possible_paths = {
+            "assets/sprites/" .. key .. ".png",
+            "assets/sprites/" .. character_name .. ".png",
+            "client/assets/sprites/" .. key .. ".png"
+        }
+
+        for _, path in ipairs(possible_paths) do
+            if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(path) then
+                local ok_img, img = pcall(love.graphics.newImage, path)
+                if ok_img and img then
+                    img:setFilter("nearest", "nearest")
+                    local w = img:getWidth()
+                    local h = img:getHeight()
+                    print(string.format("[Client] Loaded character sprite '%s' (%dx%d) for '%s'", path, w, h, character_name))
+                    found_info = {
+                        has_rotations = false,
+                        image = img,
+                        width = w,
+                        height = h
+                    }
+                    break
+                end
+            end
+        end
+    end
+
+    character_sprites[key] = found_info or false
+    return found_info
+end
 
 -- Screen shake state
 local shake_duration = 0
@@ -91,19 +226,11 @@ function love.load(arg)
 
     connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
 
-    -- Carregar sprites dos personagens disponíveis
-    local character_list = { "arya", "default", "mage", "warrior" }
-    for _, char_name in ipairs(character_list) do
-        local sprite_path = "assets/sprites/" .. char_name .. ".png"
-        if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(sprite_path) then
-            local ok_img, img = pcall(love.graphics.newImage, sprite_path)
-            if ok_img and img then
-                img:setFilter("nearest", "nearest")
-                character_sprites[char_name] = img
-                print("[Client] Loaded sprite for " .. char_name)
-            end
-        end
-    end
+    -- Inicializar placeholders padronizados de 32x32px
+    init_placeholders()
+
+    -- Pré-carregar sprites disponíveis em assets/sprites/ (padrão 32x32px)
+    load_character_sprite("arya")
 
     -- Event hooks
     loci.on_entity_spawned = function(entity)
@@ -136,11 +263,12 @@ function love.load(arg)
                 -- Ataques normais variam de ~150 a 300 de dano após mitigação de defesa;
                 -- Golpes com dano >= 350 são críticos reais (multiplicador 2.25x)
                 local is_critical = damage >= 350
+                local hud_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) + 32 -- Inicia acima da cabeça e HUD do modelo escalado
                 table.insert(floating_damage, {
                     value = damage,
                     x = entity.x,
                     y = entity.y,
-                    offset_y = 35, -- Inicia acima da cabeça do personagem
+                    offset_y = hud_offset_y,
                     lifetime = 1.0,
                     max_lifetime = 1.0,
                     is_critical = is_critical,
@@ -161,11 +289,12 @@ function love.load(arg)
                     shake_intensity = math.max(shake_intensity, intensity)
                 end
 
+                local hud_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) + 32 -- Inicia acima da cabeça e HUD do modelo escalado
                 table.insert(floating_damage, {
                     value = damage,
                     x = entity.x,
                     y = entity.y,
-                    offset_y = 35,
+                    offset_y = hud_offset_y,
                     lifetime = 1.0,
                     max_lifetime = 1.0,
                     is_critical = false,
@@ -289,22 +418,17 @@ function love.update(dt)
         cam_y = my_entity.y * VISUAL_SCALE
     end
 
-    -- Update procedural animation for all entities
+    -- Update visual orientation and direction for all entities
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
         local is_moving = false
-        local facing_dir = 0
-        
-        -- Detect movement from velocity
-        if ent.vx and ent.vy then
-            local speed = math.sqrt(ent.vx * ent.vx + ent.vy * ent.vy)
-            if speed > 0.1 then
-                is_moving = true
-                facing_dir = ent.vx > 0 and 1 or (ent.vx < 0 and -1) or 0
-            end
+        local vx = ent.vx or 0
+        local vy = ent.vy or 0
+        local speed = math.sqrt(vx * vx + vy * vy)
+        if speed > 0.05 then
+            is_moving = true
         end
-        
-        procedural_anim.update_walk(dt, ent.id, is_moving, facing_dir)
+        procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
     end
 
     -- Update rejection message timer
@@ -480,7 +604,7 @@ function love.draw()
         local progress = fx.lifetime / fx.max_lifetime
         local inv_prog = 1.0 - progress
         local fx_start_x = fx.x * VISUAL_SCALE
-        local fx_start_y = fx.y * VISUAL_SCALE
+        local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
 
         if fx.ability_id == 1 then
             -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro
@@ -580,7 +704,7 @@ function love.draw()
                 local aim_dx, aim_dy = virtual_joystick.get_aim_vector(slot)
                 if math.abs(aim_dx) > 0.01 or math.abs(aim_dy) > 0.01 then
                     local player_x = my_entity.x * VISUAL_SCALE
-                    local player_y = my_entity.y * VISUAL_SCALE
+                    local player_y = (my_entity.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Centro do corpo a partir dos pés do modelo escalado
                     local aim_length = SKILL_RANGES[slot] or 200
                     local end_x = player_x + aim_dx * aim_length
                     local end_y = player_y + aim_dy * aim_length
@@ -752,100 +876,90 @@ function draw_entity(ent, is_me)
                           (ent.properties and (ent.properties["shield_active"] == "1" or ent.properties["shield_active"] == 1))
     local shield_value = tonumber(ent.shield or (ent.properties and ent.properties["shield"])) or 0
 
-    local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or "arya"
-    local char_name_lower = string.lower(char_name or "")
+    local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
+    local sprite_info = load_character_sprite(char_name)
 
-    -- Obter sprite do personagem (ou usar placeholder se não encontrado)
-    local sprite = character_sprites[char_name_lower]
-    if not sprite then
-        -- Usar sprite do Arya como fallback
-        sprite = character_sprites["arya"]
-    end
+    -- Dimensões do sprite / modelo (padrão 32x32px)
+    local sprite_w = (sprite_info and sprite_info.width) or SPRITE_BASE_SIZE
+    local sprite_h = (sprite_info and sprite_info.height) or SPRITE_BASE_SIZE
 
-    if sprite then
-        -- Render com sprite carregado
-        local anim_state = procedural_anim.get_state(ent.id)
+    -- Escala de renderização: SPRITE_SCALE pixels por pixel do sprite (32px * 2 = 64px na tela)
+    local scale = SPRITE_SCALE
 
-        -- Shadow ellipse at feet
-        local shadow_radius_x = (16 / 2) * VISUAL_SCALE
-        local shadow_radius_y = 3.5 * VISUAL_SCALE
-        love.graphics.setColor(0, 0, 0, 0.4)
-        love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+    -- Estado visual e de orientação da entidade (8 direções)
+    local anim_state = procedural_anim.get_state(ent.id)
+    local ent_dir = anim_state.direction or "south"
 
-        -- Pivot at feet (base of sprite)
-        local ox = 16 / 2
-        local oy = 16
+    -- Sombra dos pés proporcional ao modelo de 32px ancorada na base (px, py)
+    local shadow_radius_x = 13 * scale
+    local shadow_radius_y = 4.5 * scale
+    love.graphics.setColor(0, 0, 0, 0.4)
+    love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
 
-        -- Draw sprite with animation (tint acinzentado se morta)
+    -- Pivô nos pés (base central inferior: ox = 16, oy = 32 para modelos 32x32)
+    local ox = sprite_w / 2
+    local oy = sprite_h
+
+    local draw_x = px
+    local draw_y = py -- Posição sólida e alinhada à grade de pixels (sem bobbing procedural)
+
+    if sprite_info then
+        -- Seleciona a imagem correta: rotação 8-way do Pixelab ou imagem padrão
+        local img_to_draw = (sprite_info.has_rotations and sprite_info.rotations[ent_dir]) or sprite_info.image
         if is_dead then
             love.graphics.setColor(0.5, 0.5, 0.5, 0.75)
         else
             love.graphics.setColor(1, 1, 1, 1)
         end
+
+        -- Para imagem única sem rotações, espelha via facing; para 8 direções do Pixelab, desenha direto sem distorção
+        local scale_x = scale
+        if not sprite_info.has_rotations then
+            scale_x = scale * (anim_state.facing or 1)
+        end
+
         love.graphics.draw(
-            sprite,
-            px,
-            py + anim_state.bob_offset * VISUAL_SCALE,
-            anim_state.tilt_angle,
-            VISUAL_SCALE * anim_state.squash_x * anim_state.facing,
-            VISUAL_SCALE * anim_state.squash_y,
+            img_to_draw,
+            draw_x,
+            draw_y,
+            0, -- Sem rotação/tilt (preserva nitidez e grade de pixels)
+            scale_x,
+            scale,
             ox, oy
         )
-        
-        -- Se morta, desenhar X sobre o centro do corpo
-        if is_dead then
-            local cy = py - (16 / 2) * VISUAL_SCALE
-            local cross_size = radius
-            love.graphics.setColor(1, 0, 0, 0.8)
-            love.graphics.setLineWidth(3)
-            love.graphics.line(px - cross_size, cy - cross_size, px + cross_size, cy + cross_size)
-            love.graphics.line(px + cross_size, cy - cross_size, px - cross_size, cy + cross_size)
-        end
     else
-        -- Non-Arya entities - apply procedural animation too
-        local anim_state = procedural_anim.get_state(ent.id)
-        
-        -- Shadow ellipse at feet (base of circle)
-        local shadow_radius_x = radius
-        local shadow_radius_y = 0.4 * radius
-        love.graphics.setColor(0, 0, 0, 0.4)
-        love.graphics.ellipse("fill", px, py + radius, shadow_radius_x, shadow_radius_y)
-        
-        if is_me then
-            if is_dead then
-                love.graphics.setColor(0.3, 0.3, 0.3, 1)  -- Cinza escuro
-            else
-                love.graphics.setColor(0.2, 0.6, 1.0, 1)
-            end
-        else
-            if is_dead then
-                love.graphics.setColor(0.4, 0.2, 0.2, 1)  -- Vermelho escuro
-            else
-                love.graphics.setColor(0.9, 0.3, 0.3, 1)
-            end
-        end
-
-        love.graphics.circle("fill", px, py + anim_state.bob_offset * VISUAL_SCALE, radius)
-        love.graphics.setColor(1, 1, 1, 0.85)
-        love.graphics.setLineWidth(2)
-        love.graphics.circle("line", px, py + anim_state.bob_offset * VISUAL_SCALE, radius)
-
-        -- Se morto, desenhar X sobre o jogador
-        if is_dead then
-            love.graphics.setColor(1, 0, 0, 0.8)
-            love.graphics.setLineWidth(3)
-            love.graphics.line(px - radius/2, py - radius/2, px + radius/2, py + radius/2)
-            love.graphics.line(px + radius/2, py - radius/2, px - radius/2, py + radius/2)
-        end
+        -- Renderizar placeholder padronizado de 32x32 com indicador de facing
+        local ph = is_dead and placeholder_canvases["dead"] or 
+                   (is_me and placeholder_canvases["me"] or placeholder_canvases["enemy"])
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.draw(
+            ph,
+            draw_x,
+            draw_y,
+            0, -- Sem rotação/tilt
+            scale * (anim_state.facing or 1),
+            scale,
+            ox, oy
+        )
     end
 
-    -- HP Bar
+    -- Se morto, desenhar X de morte centrado no corpo
+    if is_dead then
+        local cy = py - (sprite_h / 2) * scale
+        local cross_size = 12 * scale
+        love.graphics.setColor(1, 0, 0, 0.85)
+        love.graphics.setLineWidth(3)
+        love.graphics.line(px - cross_size, cy - cross_size, px + cross_size, cy + cross_size)
+        love.graphics.line(px + cross_size, cy - cross_size, px - cross_size, cy + cross_size)
+    end
+
+    -- Barra de HP posicionada acima da cabeça do modelo de 32px (top_y = py - sprite_height * scale)
     local hp = tonumber(ent.hp or (ent.properties and ent.properties["hp"]) or 100) or 100
     local max_hp = tonumber(ent.max_hp or (ent.properties and ent.properties["max_hp"]) or 100) or 100
     local bar_w = 44
     local bar_h = 5
     local bar_x = px - bar_w / 2
-    local top_y = is_arya and (py - 16 * VISUAL_SCALE) or (py - radius)
+    local top_y = py - (sprite_h * scale)
     local bar_y = top_y - 14
 
     love.graphics.setColor(0, 0, 0, 0.7)
@@ -873,14 +987,14 @@ function draw_entity(ent, is_me)
     end
     local font = love.graphics.getFont()
     local tw = font:getWidth(label)
-    local label_y = is_arya and (bar_y - 14) or (py - 7)
+    local label_y = bar_y - 14
     love.graphics.print(label, px - tw / 2, label_y)
 
     -- Status effects (Stun / Desarme)
     local stunned_until = tonumber(ent.stunned_until or (ent.properties and ent.properties["stunned_until"])) or 0
     local disarmed_until = tonumber(ent.disarmed_until or (ent.properties and ent.properties["disarmed_until"])) or 0
     if not is_dead then
-        local status_y = is_arya and (label_y - 14) or (bar_y - 12)
+        local status_y = label_y - 14
         if stunned_until > 0 then
             love.graphics.setColor(1.0, 0.9, 0.2, 0.95)
             local txt = "* STUNNED *"
