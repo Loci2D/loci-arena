@@ -1008,7 +1008,7 @@ function draw_hud(sw, sh, my_entity)
     love.graphics.print(connection_status, 20, 34)
 
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Mover | Espaço/1: Ataque | 2/Q: Fúria | 3/E: Dash | 4/R: Stun | T: Touch UI | C: Ficha", 20, sh - 28)
+    love.graphics.print("WASD: Mover | Espaço: Ataque | Q: Fúria | E: Dash | R: Stun | T: Touch UI | C: Ficha", 20, sh - 28)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
