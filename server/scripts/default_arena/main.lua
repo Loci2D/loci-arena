@@ -265,7 +265,28 @@ end
 
 function on_action(entity_id, ability_id, aim_x, aim_y)
     Loci.Log.info("[Arena] Action from entity " .. tostring(entity_id) .. " -> Ability: " .. tostring(ability_id))
-    
+
+    -- Ability ID 999: Troca de personagem provisória
+    if ability_id == 999 then
+        if RespawnSystem and RespawnSystem.is_dead and RespawnSystem.is_dead(entity_id) then
+            return false, "Não é possível trocar de personagem enquanto estiver morto."
+        end
+
+        local char_index = math.floor(aim_x) or 0
+        local char_cycle = { "arya", "default", "mage", "warrior" }
+        local new_character_name = char_cycle[char_index + 1] or "arya"
+
+        local current_char = Loci.get_entity_property(entity_id, "character_name") or "unknown"
+        Loci.Log.info("[Arena] Trocando personagem de " .. current_char .. " para " .. new_character_name)
+
+        -- Recria o personagem com os novos dados
+        CharacterFactory.on_entity_remove(entity_id) -- Limpa estado antigo
+        CharacterFactory.create_character(entity_id, new_character_name)
+
+        Loci.Log.info("[Arena] Personagem trocado para " .. new_character_name)
+        return true
+    end
+
     if RespawnSystem.is_dead(entity_id) then
         return false, "Você está morto"
     end

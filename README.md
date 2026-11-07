@@ -74,7 +74,14 @@ Em outro terminal (ou múltiplos para testar mais de um jogador):
 
 ## Controles Padrão
 - **WASD / Setas**: Movimentação
-- **Espaço / Clique**: Ação / Habilidade primária
+- **Espaço**: Ataque básico (Slash)
+- **Q**: Habilidade 2 (Fúria)
+- **E**: Habilidade 3 (Whirlwind Dash)
+- **R**: Habilidade 4 (Blade Throw / Stun)
+- **K**: Trocar de personagem (modo teste: Arya -> Default -> Mage -> Warrior)
+- **F1 / T**: Alternar controles virtuais touch
+- **C**: Exibir ficha de atributos
+- **TAB**: Exibir placar KDA
 - **F3**: Alternar painel de depuração (Ping, FPS, Ticks, Entidades)
 
 ---
