@@ -5,6 +5,16 @@
 -- Movement speed in units per tick.
 -- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
 local SPEED = 3.0
+
+-- Limites seguros da arena para o centro do colisor circular do jogador (raio 2.0).
+-- A engine já clampa a posição, mas calculamos a velocidade de caminhada já projetada
+-- para evitar "empurrar" a barreira e permitir deslize tangencial correto.
+local ARENA_MIN = -500.0
+local ARENA_MAX = 500.0
+local PLAYER_COLLIDER_RADIUS = 2.0
+local ARENA_SAFE_MIN = ARENA_MIN + PLAYER_COLLIDER_RADIUS
+local ARENA_SAFE_MAX = ARENA_MAX - PLAYER_COLLIDER_RADIUS
+
 -- Rastreamento de jogadores conectados e contagem de times ativos
 local connected_players = {} -- [entity_id] = { team = "1" ou "2" }
 local team_counts = { ["1"] = 0, ["2"] = 0 }
@@ -30,6 +40,44 @@ local function get_coords(pos)
         return pos.x, pos.y
     end
     return 0, 0
+end
+
+local function get_current_xy(entity_id)
+    local pos = Loci.get_entity_position(entity_id)
+    if not pos then return nil, nil end
+    return get_coords(pos)
+end
+
+local function compute_walk_velocity(entity_id, dir_x, dir_y, speed)
+    local x, y = get_current_xy(entity_id)
+    if not x then return 0, 0 end
+
+    local vx = (dir_x or 0) * speed
+    local vy = (dir_y or 0) * speed
+
+    if vx > 0 and x + vx > ARENA_SAFE_MAX then
+        vx = math.max(0, ARENA_SAFE_MAX - x)
+    elseif vx < 0 and x + vx < ARENA_SAFE_MIN then
+        vx = math.min(0, ARENA_SAFE_MIN - x)
+    end
+
+    if vy > 0 and y + vy > ARENA_SAFE_MAX then
+        vy = math.max(0, ARENA_SAFE_MAX - y)
+    elseif vy < 0 and y + vy < ARENA_SAFE_MIN then
+        vy = math.min(0, ARENA_SAFE_MIN - y)
+    end
+
+    return vx, vy
+end
+
+local function clamp_arena_xy(x, y)
+    return math.max(ARENA_SAFE_MIN, math.min(ARENA_SAFE_MAX, x)),
+           math.max(ARENA_SAFE_MIN, math.min(ARENA_SAFE_MAX, y))
+end
+
+local function set_position_clamped(entity_id, x, y)
+    local cx, cy = clamp_arena_xy(x, y)
+    Loci.Commands.set_position(entity_id, { x = cx, y = cy })
 end
 
 -- Importa os sistemas modulares da arena (via VFS nativo do Loci2D)
@@ -144,10 +192,8 @@ function on_tick(current_tick)
                         -- Se já está em contato bloqueado com outro jogador, mantém 100% estático (sem jitter)
                         Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
                     else
-                        Loci.Commands.set_velocity(entity_id, {
-                            x = intent.dir_x * intent.speed,
-                            y = intent.dir_y * intent.speed
-                        })
+                        local vx, vy = compute_walk_velocity(entity_id, intent.dir_x, intent.dir_y, intent.speed)
+                        Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
                     end
                 end
             end
@@ -255,11 +301,9 @@ function on_move_intent(entity_id, dir_x, dir_y)
         return true
     end
 
-    -- Set server authoritative velocity (displacement per tick)
-    Loci.Commands.set_velocity(entity_id, {
-        x = dir_x * move_speed,
-        y = dir_y * move_speed
-    })
+    -- Set server authoritative velocity (displacement per tick) já limitada pela barreira da arena
+    local vx, vy = compute_walk_velocity(entity_id, dir_x, dir_y, move_speed)
+    Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
     return true
 end
 
@@ -369,7 +413,7 @@ function on_collision(entity_a, entity_b)
         end
 
         -- Trava B estritamente na sua posição anterior sem sofrer empurrão espúrio
-        Loci.Commands.set_position(entity_b, { x = prev_b.x, y = prev_b.y })
+        set_position_clamped(entity_b, prev_b.x, prev_b.y)
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
 
         local target_x = cur_a_x
@@ -413,7 +457,7 @@ function on_collision(entity_a, entity_b)
         end
 
         -- Bate e para: trava posição no contato e zera velocidade
-        Loci.Commands.set_position(entity_a, { x = target_x, y = target_y })
+        set_position_clamped(entity_a, target_x, target_y)
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
 
     -- Caso 2: Jogador B está se movendo e Jogador A está parado
@@ -431,7 +475,7 @@ function on_collision(entity_a, entity_b)
             end
         end
 
-        Loci.Commands.set_position(entity_a, { x = prev_a.x, y = prev_a.y })
+        set_position_clamped(entity_a, prev_a.x, prev_a.y)
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
 
         local target_x = cur_b_x
@@ -469,7 +513,7 @@ function on_collision(entity_a, entity_b)
             end
         end
 
-        Loci.Commands.set_position(entity_b, { x = target_x, y = target_y })
+        set_position_clamped(entity_b, target_x, target_y)
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
 
     -- Caso 3: Ambos estão se movendo (colisão mútua / de frente)
@@ -480,8 +524,8 @@ function on_collision(entity_a, entity_b)
         local mid_x = (prev_a.x + prev_b.x) * 0.5
         local mid_y = (prev_a.y + prev_b.y) * 0.5
 
-        Loci.Commands.set_position(entity_a, { x = mid_x + nx * (MIN_DIST * 0.5), y = mid_y + ny * (MIN_DIST * 0.5) })
-        Loci.Commands.set_position(entity_b, { x = mid_x - nx * (MIN_DIST * 0.5), y = mid_y - ny * (MIN_DIST * 0.5) })
+        set_position_clamped(entity_a, mid_x + nx * (MIN_DIST * 0.5), mid_y + ny * (MIN_DIST * 0.5))
+        set_position_clamped(entity_b, mid_x - nx * (MIN_DIST * 0.5), mid_y - ny * (MIN_DIST * 0.5))
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
 
@@ -493,8 +537,8 @@ function on_collision(entity_a, entity_b)
         local mid_x = (prev_a.x + prev_b.x) * 0.5
         local mid_y = (prev_a.y + prev_b.y) * 0.5
 
-        Loci.Commands.set_position(entity_a, { x = mid_x + nx * (MIN_DIST * 0.5), y = mid_y + ny * (MIN_DIST * 0.5) })
-        Loci.Commands.set_position(entity_b, { x = mid_x - nx * (MIN_DIST * 0.5), y = mid_y - ny * (MIN_DIST * 0.5) })
+        set_position_clamped(entity_a, mid_x + nx * (MIN_DIST * 0.5), mid_y + ny * (MIN_DIST * 0.5))
+        set_position_clamped(entity_b, mid_x - nx * (MIN_DIST * 0.5), mid_y - ny * (MIN_DIST * 0.5))
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
     end

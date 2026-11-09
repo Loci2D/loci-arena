@@ -195,6 +195,25 @@ local ARENA_MIN = -500
 local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 
+-- A engine clampa o centro do colisor circular (raio 2.0) dentro de [-500, +500].
+-- A predição local do cliente precisa respeitar o mesmo limite seguro para não
+-- desenhar o próprio jogador além da barreira enquanto a tecla fica pressionada.
+local PLAYER_COLLIDER_RADIUS = 2.0
+local PREDICTED_SAFE_MIN_X = ARENA_MIN + PLAYER_COLLIDER_RADIUS
+local PREDICTED_SAFE_MAX_X = ARENA_MAX - PLAYER_COLLIDER_RADIUS
+local PREDICTED_SAFE_MIN_Y = ARENA_MIN + PLAYER_COLLIDER_RADIUS
+local PREDICTED_SAFE_MAX_Y = ARENA_MAX - PLAYER_COLLIDER_RADIUS
+
+local function clamp_local_prediction(ent)
+    if not ent then return end
+    if ent.x then
+        ent.x = math.max(PREDICTED_SAFE_MIN_X, math.min(PREDICTED_SAFE_MAX_X, ent.x))
+    end
+    if ent.y then
+        ent.y = math.max(PREDICTED_SAFE_MIN_Y, math.min(PREDICTED_SAFE_MAX_Y, ent.y))
+    end
+end
+
 function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
@@ -357,6 +376,7 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
+        clamp_local_prediction(my_entity)
         update_movement()
 
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
