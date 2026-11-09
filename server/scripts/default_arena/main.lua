@@ -272,11 +272,20 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
             return false, "Não é possível trocar de personagem enquanto estiver morto."
         end
 
-        local char_index = math.floor(aim_x) or 0
         local char_cycle = { "arya", "default", "mage", "warrior" }
-        local new_character_name = char_cycle[char_index + 1] or "arya"
+        local current_char = string.lower(Loci.get_entity_property(entity_id, "character_name") or "unknown")
 
-        local current_char = Loci.get_entity_property(entity_id, "character_name") or "unknown"
+        -- Encontra o índice atual e calcula o próximo
+        local current_idx = 0
+        for idx, name in ipairs(char_cycle) do
+            if name == current_char then
+                current_idx = idx - 1
+                break
+            end
+        end
+        local next_idx = (current_idx + 1) % #char_cycle
+        local new_character_name = char_cycle[next_idx + 1]
+
         Loci.Log.info("[Arena] Trocando personagem de " .. current_char .. " para " .. new_character_name)
 
         -- Recria o personagem com os novos dados

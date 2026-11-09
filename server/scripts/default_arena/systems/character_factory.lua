@@ -220,7 +220,7 @@ function CharacterFactory.on_entity_die(dead_entity_id)
             local char_name = Loci.get_entity_property(entity_id, "character_name")
             
             -- Passiva da Arya: Protetora Tática / Adrenalina
-            if char_name == "Arya" and team == dead_team then
+            if string.lower(char_name or "") == "arya" and team == dead_team then
                 -- 1 segundo de paralisia = 30 ticks
                 Loci.Commands.set_property(entity_id, "paralyzed_until", tostring(current_tick + 30))
                 -- Ativa a Fúria

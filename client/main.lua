@@ -38,6 +38,7 @@ local floating_damage = {}
 local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
+local current_char_index = 0  -- Estado local para troca de personagem (0=arya, 1=default, 2=mage, 3=warrior)
 
 -- Sprites e texturas de personagens (padrão 32x32px)
 local SPRITE_BASE_SIZE = 32
@@ -305,6 +306,7 @@ function love.load(arg)
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
+        local character_name = entity and entity:get("character_name", "default") or "default"
         local lifetime = 0.35
         if ability_id == 3 then
             lifetime = 0.45 -- Whirlwind Dash
@@ -318,6 +320,7 @@ function love.load(arg)
             dir_x = dir_x,
             dir_y = dir_y,
             ability_id = ability_id,
+            character_name = character_name,
             lifetime = lifetime,
             max_lifetime = lifetime
         })
@@ -520,20 +523,9 @@ function love.keypressed(key)
         end
 
         if connection_status:find("Connected") then
-            local char_cycle = { "arya", "default", "mage", "warrior" }
-            local cur_name = string.lower(me and (me.character_name or (me.properties and me.properties["character_name"])) or "arya")
-            local cur_idx = 0
-            for idx, name in ipairs(char_cycle) do
-                if name == cur_name then
-                    cur_idx = idx - 1
-                    break
-                end
-            end
-            local next_idx = (cur_idx + 1) % #char_cycle
-            local next_char = char_cycle[next_idx + 1]
-            print(string.format("[Client] Trocando personagem para %s (índice: %d)", next_char, next_idx))
-            -- Envia índice do personagem (0=arya, 1=default, 2=mage, 3=warrior)
-            loci.send_action(999, next_idx, 0)
+            print("[Client] Solicitando troca de personagem...")
+            -- Servidor cicla automaticamente sem precisar do índice
+            loci.send_action(999, 0, 0)
         else
             print("[Client] Não conectado - não é possível trocar personagem")
         end
@@ -621,8 +613,32 @@ function love.draw()
         local fx_start_x = fx.x * VISUAL_SCALE
         local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
 
-        if fx.ability_id == 1 then
-            -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro
+        -- Mapeamento de VFX por personagem e ability_id
+        local char_name = fx.character_name or "default"
+
+        if fx.ability_id == 1 and char_name == "mage" then
+            -- Skill 1 (Fireball): Bola de fogo viajando
+            local max_dist = 200
+            local travel_dist = max_dist * math.min(1.0, inv_prog * 2.0)
+            local fireball_x = fx_start_x + fx.dir_x * travel_dist
+            local fireball_y = fx_start_y + fx.dir_y * travel_dist
+            local radius = 30 * (0.8 + 0.5 * inv_prog)
+
+            -- Núcleo da bola de fogo
+            love.graphics.setColor(1.0, 0.6, 0.1, progress * 0.9)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius)
+            love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.7)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
+            love.graphics.setColor(1.0, 1.0, 0.8, progress * 0.5)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
+
+            -- Rastro de fogo
+            love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.3)
+            love.graphics.setLineWidth(3)
+            love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
+
+        elseif fx.ability_id == 1 then
+            -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro (Arya/Default)
             local angle = math.atan2(fx.dir_y, fx.dir_x)
             local radius = 45 * (0.8 + 0.4 * inv_prog)
             love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
