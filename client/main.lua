@@ -31,6 +31,7 @@ local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
 
 -- UI & State variables
 local connection_status = "Connecting..."
+local is_connection_lost = false
 local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
@@ -327,6 +328,82 @@ function love.load(arg)
         rejection_msg = reason
         rejection_timer = 2.5
     end
+
+    -- Callbacks de Resiliência de Conexão (ADR 0002)
+    loci.on_connection_lost = function(reason)
+        print("[Client] Conexão instável ou perdida: " .. tostring(reason))
+        is_connection_lost = true
+    end
+
+    loci.on_reconnected = function(entity_id)
+        print("[Client] Reconexão estabelecida com sucesso! Entity ID: " .. tostring(entity_id))
+        is_connection_lost = false
+    end
+
+    -- Handler de Predição do Cliente com Limites da Arena [-500, 500]
+    loci.set_prediction_handler(function(entity, dx, dy, dt)
+        -- Suporte flexível a assinaturas: (entity, dt) ou (entity, dx, dy, dt)
+        if dt == nil and type(dx) == "number" and dy == nil then
+            dt = dx
+            dx = loci._active_move_dx or 0
+            dy = loci._active_move_dy or 0
+        end
+        dt = dt or 0.016
+        dx = dx or loci._active_move_dx or 0
+        dy = dy or loci._active_move_dy or 0
+
+        local now = love.timer.getTime()
+        local cur_tick = loci._last_state_tick or 0
+
+        -- Status de Controle (CC): Interrompe predição se morto, stunned ou paralyzed
+        local is_dead = entity.is_dead or (entity.get and entity:get("is_dead"))
+        if is_dead == true or is_dead == "true" or is_dead == 1 or is_dead == "1" then
+            entity.vx = 0
+            entity.vy = 0
+            return
+        end
+
+        local stunned_until = tonumber(entity.stunned_until or (entity.get and entity:get("stunned_until"))) or 0
+        local paralyzed_until = tonumber(entity.paralyzed_until or (entity.get and entity:get("paralyzed_until"))) or 0
+        if (stunned_until > 0 and (cur_tick < stunned_until or now < stunned_until)) or
+           (paralyzed_until > 0 and (cur_tick < paralyzed_until or now < paralyzed_until)) then
+            entity.vx = 0
+            entity.vy = 0
+            return
+        end
+
+        local tick_rate = loci.get_server_tick_rate and loci.get_server_tick_rate() or 30
+        local dashing_until = tonumber(entity.dashing_until or (entity.get and entity:get("dashing_until"))) or 0
+
+        -- Processamento de dash (ex: whirlwind_dash) respeitando velocidade do servidor
+        if dashing_until > 0 and (cur_tick < dashing_until or now < dashing_until) then
+            local vx_sec = (entity.vx or 0) * tick_rate
+            local vy_sec = (entity.vy or 0) * tick_rate
+            entity.x = entity.x + vx_sec * dt
+            entity.y = entity.y + vy_sec * dt
+        else
+            -- Predição cinemática de movimento
+            local len = math.sqrt(dx * dx + dy * dy)
+            if len > 0 then
+                local ndx = dx / len
+                local ndy = dy / len
+                local move_speed = tonumber(entity.move_speed or (entity.get and entity:get("move_speed")) or (loci.netcode and loci.netcode.default_move_speed) or 3.0) or 3.0
+                local speed_sec = move_speed * tick_rate
+
+                entity.x = entity.x + ndx * speed_sec * dt
+                entity.y = entity.y + ndy * speed_sec * dt
+                entity.vx = ndx * move_speed
+                entity.vy = ndy * move_speed
+            else
+                entity.vx = 0
+                entity.vy = 0
+            end
+        end
+
+        -- Clamping rigoroso nos limites da arena [-500, 500]
+        entity.x = math.max(ARENA_MIN, math.min(ARENA_MAX, entity.x))
+        entity.y = math.max(ARENA_MIN, math.min(ARENA_MAX, entity.y))
+    end)
 end
 
 local last_sent_dx, last_sent_dy = 0, 0
@@ -357,6 +434,10 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
+        -- Clamping defensivo pós-reconciliação para garantir limites da arena em qualquer frame
+        my_entity.x = math.max(ARENA_MIN, math.min(ARENA_MAX, my_entity.x))
+        my_entity.y = math.max(ARENA_MIN, math.min(ARENA_MAX, my_entity.y))
+
         update_movement()
 
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
@@ -493,6 +574,32 @@ end
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
+    elseif key == "f4" then
+        local csv_func = loci.export_telemetry_csv or loci.export_network_stats_csv
+        if csv_func then
+            local path = csv_func()
+            print("[Client] Telemetria exportada via F4: " .. tostring(path))
+        end
+    elseif key == "f5" then
+        -- Alternar latência simulada de rede (0ms -> 50ms -> 100ms -> 0ms)
+        local cur = (loci.netcode and loci.netcode.simulate_latency) or 0
+        local next_lat = (cur == 0 and 0.050) or (cur == 0.050 and 0.100) or 0
+        if loci.simulate_latency then
+            loci.simulate_latency(next_lat)
+        elseif loci.netcode then
+            loci.netcode.simulate_latency = next_lat
+        end
+        print(string.format("[Client] Latência simulada ajustada para: %d ms", math.floor(next_lat * 1000)))
+    elseif key == "f6" then
+        -- Alternar perda de pacotes simulada (0% -> 10% -> 25% -> 0%)
+        local cur = (loci.netcode and loci.netcode.simulate_packet_loss) or 0
+        local next_loss = (cur == 0 and 0.10) or (cur == 0.10 and 0.25) or 0
+        if loci.simulate_packet_loss then
+            loci.simulate_packet_loss(next_loss)
+        elseif loci.netcode then
+            loci.netcode.simulate_packet_loss = next_loss
+        end
+        print(string.format("[Client] Perda simulada ajustada para: %d%%", math.floor(next_loss * 100)))
     elseif key == "c" then
         show_character_sheet = not show_character_sheet
     elseif key == "t" or key == "f1" then
@@ -833,6 +940,20 @@ function love.draw()
         virtual_joystick.draw()
     end
 
+    -- 6. Banner de Perda de Conexão / Reconexão (ADR 0002)
+    if is_connection_lost then
+        local banner_w = 340
+        local banner_h = 36
+        local bx = (sw - banner_w) / 2
+        local by = 16
+        love.graphics.setColor(0.85, 0.15, 0.15, 0.92)
+        love.graphics.rectangle("fill", bx, by, banner_w, banner_h, 6, 6)
+        love.graphics.setColor(0.95, 0.35, 0.35, 0.95)
+        love.graphics.rectangle("line", bx, by, banner_w, banner_h, 6, 6)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.printf("Conexão instável / Reconectando...", 0, by + 9, sw, "center")
+    end
+
     push:finish()
 end
 
@@ -1043,22 +1164,54 @@ function draw_hud(sw, sh, my_entity)
 end
 
 function draw_debug(sw, sh)
-    love.graphics.setColor(0, 0, 0, 0.75)
-    love.graphics.rectangle("fill", sw - 240, 10, 230, 140, 6, 6)
+    local box_w = 250
+    local box_h = 240
+    love.graphics.setColor(0, 0, 0, 0.80)
+    love.graphics.rectangle("fill", sw - (box_w + 10), 10, box_w, box_h, 6, 6)
+    love.graphics.setColor(0.2, 0.8, 0.4, 0.85)
+    love.graphics.rectangle("line", sw - (box_w + 10), 10, box_w, box_h, 6, 6)
 
     local ent_count = #loci.get_entities()
     local me = loci.get_my_entity()
-    local tick_rate = loci.get_server_tick_rate and loci.get_server_tick_rate() or 30
+    
+    -- Métricas de Telemetria do SDK (Card #70)
+    local telem = (loci.get_telemetry and loci.get_telemetry()) or {}
+    local ping = telem.ping or (loci.get_ping and loci.get_ping()) or 0
+    local jitter = telem.jitter or (loci.get_jitter and loci.get_jitter()) or 0
+    local loss = telem.packet_loss or (loci.get_packet_loss and loci.get_packet_loss()) or 0
+    local tick_hz = telem.tick_rate or (loci.get_tick_hz and loci.get_tick_hz()) or (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30
+
+    local lx = sw - (box_w - 5)
+    local cur_y = 20
 
     love.graphics.setColor(0.4, 1.0, 0.5, 1)
-    love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), sw - 225, 20)
-    love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), sw - 225, 40)
-    love.graphics.print(string.format("Entities: %d", ent_count), sw - 225, 60)
-    love.graphics.print(string.format("Tick Rate: %d Hz", tick_rate), sw - 225, 80)
+    love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Entities: %d", ent_count), lx, cur_y); cur_y = cur_y + 18
     if me then
-        love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 100)
+        love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), lx, cur_y); cur_y = cur_y + 18
     end
-    love.graphics.print(string.format("Touch UI: %s [T]", show_touch_controls and "ON" or "OFF"), sw - 225, 120)
+
+    -- Seção de Telemetria de Rede (RFC 3550 & ADR 0002)
+    cur_y = cur_y + 4
+    love.graphics.setColor(0.3, 0.85, 1.0, 1)
+    love.graphics.print(string.format("Ping: %d ms", math.floor(ping)), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Jitter: %.1f ms", jitter), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Loss: %.1f%%", loss), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Tick Rate: %.1f Hz", tick_hz), lx, cur_y); cur_y = cur_y + 18
+
+    -- Atalhos de Diagnóstico
+    cur_y = cur_y + 4
+    love.graphics.setColor(0.85, 0.85, 0.4, 1)
+    local sim_lat = (loci.netcode and loci.netcode.simulate_latency) or 0
+    local sim_loss = (loci.netcode and loci.netcode.simulate_packet_loss) or 0
+    if sim_lat > 0 or sim_loss > 0 then
+        love.graphics.print(string.format("Sim: %dms / %d%% loss", math.floor(sim_lat * 1000), math.floor(sim_loss * 100)), lx, cur_y); cur_y = cur_y + 18
+    else
+        love.graphics.print("Sim: OFF [F5:Lat F6:Loss]", lx, cur_y); cur_y = cur_y + 18
+    end
+    love.graphics.setColor(0.7, 0.7, 0.7, 1)
+    love.graphics.print("Export CSV: [F4]", lx, cur_y)
 end
 
 function draw_character_sheet(sw, sh, my_entity)
@@ -1179,5 +1332,9 @@ end
 
 function love.quit()
     print("[Client] Closing connection...")
+    if loci.quit then
+        loci.quit()
+    end
     loci.disconnect("Client exiting")
+    return false
 end
