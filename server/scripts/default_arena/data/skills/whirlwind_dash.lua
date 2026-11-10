@@ -1,6 +1,7 @@
 -- Whirlwind Dash Skill Data (Habilidade 3 da Arya)
 -- Investida rápida na direção da mira, girando a espada em 360º e causando dano físico em área.
 local CombatSystem = require("core.combat_system")
+local ArenaBounds = require("core.arena_bounds")
 
 local function get_coords(pos)
     if not pos then return 0, 0 end
@@ -37,6 +38,7 @@ return {
 
         local pos = Loci.get_entity_position(entity_id)
         local caster_x, caster_y = get_coords(pos)
+        caster_x, caster_y = ArenaBounds.clamp_xy(caster_x, caster_y)
 
         -- Impulso de deslocamento (Dash físico sincronizado com o alcance da habilidade)
         local CharacterFactory = require("systems.character_factory")
@@ -44,23 +46,23 @@ return {
         local dash_duration_ticks = 4 -- ~0.13s a 30Hz para uma investida rápida
         Loci.Commands.set_property(entity_id, "dashing_until", tostring(current_tick + dash_duration_ticks))
 
-        local dash_speed = skill_data.range / dash_duration_ticks -- Desloca exatamente os 20.0 unidades de alcance (160px na tela)
+        local dash_speed = skill_data.dash_speed or (skill_data.range / dash_duration_ticks) -- Desloca exatamente os 20.0 unidades de alcance (160px na tela)
+        local proj_vx, proj_vy = ArenaBounds.project_velocity(caster_x, caster_y, aim_x * dash_speed, aim_y * dash_speed)
         Loci.Commands.set_velocity(entity_id, {
-            x = aim_x * dash_speed,
-            y = aim_y * dash_speed
+            x = proj_vx,
+            y = proj_vy
         })
 
         local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
         local hit_ids = {}
         local hit_set = {}
 
-        -- Amostra ao longo de todo o percurso da investida, iniciando em d = 0 (corpo a corpo em 360º)
-        -- até o alcance final da investida, garantindo que inimigos colados no jogador não sejam errados.
+        -- Amostra ao longo de todo o percurso da investida dentro da arena, iniciando em d = 0 (corpo a corpo em 360º)
+        -- até o alcance final da investida, garantindo coerência com o deslocamento real nas bordas.
         local step = math.max(1.0, skill_data.aoe_radius * 0.6)
         local d = 0
         while d < skill_data.range do
-            local sample_x = caster_x + aim_x * d
-            local sample_y = caster_y + aim_y * d
+            local sample_x, sample_y = ArenaBounds.clamp_xy(caster_x + aim_x * d, caster_y + aim_y * d)
             local nearby = Loci.get_entities_in_radius({ x = sample_x, y = sample_y }, skill_data.aoe_radius)
             if nearby then
                 for _, target_id in ipairs(nearby) do
@@ -73,9 +75,8 @@ return {
             d = d + step
         end
 
-        -- Ponto final do percurso da investida
-        local final_x = caster_x + aim_x * skill_data.range
-        local final_y = caster_y + aim_y * skill_data.range
+        -- Ponto final do percurso da investida (clampado aos limites da arena)
+        local final_x, final_y = ArenaBounds.clamp_xy(caster_x + aim_x * skill_data.range, caster_y + aim_y * skill_data.range)
         local final_nearby = Loci.get_entities_in_radius({ x = final_x, y = final_y }, skill_data.aoe_radius)
         if final_nearby then
             for _, target_id in ipairs(final_nearby) do

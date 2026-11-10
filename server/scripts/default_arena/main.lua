@@ -6,14 +6,8 @@
 -- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
 local SPEED = 3.0
 
--- Limites seguros da arena para o centro do colisor circular do jogador (raio 2.0).
--- A engine já clampa a posição, mas calculamos a velocidade de caminhada já projetada
--- para evitar "empurrar" a barreira e permitir deslize tangencial correto.
-local ARENA_MIN = -500.0
-local ARENA_MAX = 500.0
-local PLAYER_COLLIDER_RADIUS = 2.0
-local ARENA_SAFE_MIN = ARENA_MIN + PLAYER_COLLIDER_RADIUS
-local ARENA_SAFE_MAX = ARENA_MAX - PLAYER_COLLIDER_RADIUS
+-- Limites seguros da arena e projeção de velocidade nas bordas (via VFS nativo do Loci2D)
+local ArenaBounds = require("core.arena_bounds")
 
 -- Rastreamento de jogadores conectados e contagem de times ativos
 local connected_players = {} -- [entity_id] = { team = "1" ou "2" }
@@ -48,35 +42,27 @@ local function get_current_xy(entity_id)
     return get_coords(pos)
 end
 
-local function compute_walk_velocity(entity_id, dir_x, dir_y, speed)
+local function compute_walk_velocity(entity_id, dir_x, dir_y, speed, use_post_step)
     local x, y = get_current_xy(entity_id)
     if not x then return 0, 0 end
 
-    local vx = (dir_x or 0) * speed
-    local vy = (dir_y or 0) * speed
-
-    if vx > 0 and x + vx > ARENA_SAFE_MAX then
-        vx = math.max(0, ARENA_SAFE_MAX - x)
-    elseif vx < 0 and x + vx < ARENA_SAFE_MIN then
-        vx = math.min(0, ARENA_SAFE_MIN - x)
+    if use_post_step then
+        x, y = ArenaBounds.predict_post_step_xy(entity_id, x, y)
     end
 
-    if vy > 0 and y + vy > ARENA_SAFE_MAX then
-        vy = math.max(0, ARENA_SAFE_MAX - y)
-    elseif vy < 0 and y + vy < ARENA_SAFE_MIN then
-        vy = math.min(0, ARENA_SAFE_MIN - y)
-    end
+    local effective_speed = speed or SPEED
+    local vx = (dir_x or 0) * effective_speed
+    local vy = (dir_y or 0) * effective_speed
 
-    return vx, vy
+    return ArenaBounds.project_velocity(x, y, vx, vy)
 end
 
 local function clamp_arena_xy(x, y)
-    return math.max(ARENA_SAFE_MIN, math.min(ARENA_SAFE_MAX, x)),
-           math.max(ARENA_SAFE_MIN, math.min(ARENA_SAFE_MAX, y))
+    return ArenaBounds.clamp_xy(x, y)
 end
 
 local function set_position_clamped(entity_id, x, y)
-    local cx, cy = clamp_arena_xy(x, y)
+    local cx, cy = ArenaBounds.clamp_xy(x, y)
     Loci.Commands.set_position(entity_id, { x = cx, y = cy })
 end
 
@@ -165,12 +151,24 @@ function on_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
 
     -- 1. Salva posições antes da integração de física do tick (apenas para vivos)
+    --    e projeta dash ativo para impedir avanço contínuo contra a borda após atingi-la.
     for entity_id, _ in safe_pairs(connected_players) do
         if is_player_alive(entity_id) then
             local pos = Loci.get_entity_position(entity_id)
             if pos then
                 local px, py = get_coords(pos)
                 last_tick_positions[entity_id] = { x = px, y = py }
+
+                if is_entity_dashing(entity_id) then
+                    local cur_vx, cur_vy = ArenaBounds.get_current_velocity(entity_id)
+                    if cur_vx ~= 0 or cur_vy ~= 0 then
+                        local post_x, post_y = ArenaBounds.predict_post_step_xy(entity_id, px, py, cur_vx, cur_vy)
+                        local proj_vx, proj_vy = ArenaBounds.project_velocity(post_x, post_y, cur_vx, cur_vy)
+                        if math.abs(proj_vx - cur_vx) > 1e-6 or math.abs(proj_vy - cur_vy) > 1e-6 then
+                            Loci.Commands.set_velocity(entity_id, { x = proj_vx, y = proj_vy })
+                        end
+                    end
+                end
             end
         else
             last_tick_positions[entity_id] = nil
@@ -192,7 +190,7 @@ function on_tick(current_tick)
                         -- Se já está em contato bloqueado com outro jogador, mantém 100% estático (sem jitter)
                         Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
                     else
-                        local vx, vy = compute_walk_velocity(entity_id, intent.dir_x, intent.dir_y, intent.speed)
+                        local vx, vy = compute_walk_velocity(entity_id, intent.dir_x, intent.dir_y, intent.speed, true)
                         Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
                     end
                 end
@@ -302,7 +300,7 @@ function on_move_intent(entity_id, dir_x, dir_y)
     end
 
     -- Set server authoritative velocity (displacement per tick) já limitada pela barreira da arena
-    local vx, vy = compute_walk_velocity(entity_id, dir_x, dir_y, move_speed)
+    local vx, vy = compute_walk_velocity(entity_id, dir_x, dir_y, move_speed, false)
     Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
     return true
 end

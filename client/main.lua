@@ -204,14 +204,91 @@ local PREDICTED_SAFE_MAX_X = ARENA_MAX - PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MIN_Y = ARENA_MIN + PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MAX_Y = ARENA_MAX - PLAYER_COLLIDER_RADIUS
 
-local function clamp_local_prediction(ent)
-    if not ent then return end
+local function clamp_arena_coords(x, y)
+    local cx = math.max(PREDICTED_SAFE_MIN_X, math.min(PREDICTED_SAFE_MAX_X, x or 0))
+    local cy = math.max(PREDICTED_SAFE_MIN_Y, math.min(PREDICTED_SAFE_MAX_Y, y or 0))
+    return cx, cy
+end
+
+local function clamp_entity_to_arena(ent, clear_recon_error)
+    if not ent then return false, false end
+
+    local clamped_x = false
+    local clamped_y = false
+
     if ent.x then
-        ent.x = math.max(PREDICTED_SAFE_MIN_X, math.min(PREDICTED_SAFE_MAX_X, ent.x))
+        if ent.x > PREDICTED_SAFE_MAX_X then
+            ent.x = PREDICTED_SAFE_MAX_X
+            clamped_x = true
+        elseif ent.x < PREDICTED_SAFE_MIN_X then
+            ent.x = PREDICTED_SAFE_MIN_X
+            clamped_x = true
+        end
     end
+
     if ent.y then
-        ent.y = math.max(PREDICTED_SAFE_MIN_Y, math.min(PREDICTED_SAFE_MAX_Y, ent.y))
+        if ent.y > PREDICTED_SAFE_MAX_Y then
+            ent.y = PREDICTED_SAFE_MAX_Y
+            clamped_y = true
+        elseif ent.y < PREDICTED_SAFE_MIN_Y then
+            ent.y = PREDICTED_SAFE_MIN_Y
+            clamped_y = true
+        end
     end
+
+    -- Zera apenas a componente de velocidade que tenta atravessar o limite em contato
+    if ent.x and ent.vx then
+        if (ent.x >= PREDICTED_SAFE_MAX_X and ent.vx > 0) or (ent.x <= PREDICTED_SAFE_MIN_X and ent.vx < 0) then
+            ent.vx = 0
+        end
+    end
+    if ent.y and ent.vy then
+        if (ent.y >= PREDICTED_SAFE_MAX_Y and ent.vy > 0) or (ent.y <= PREDICTED_SAFE_MIN_Y and ent.vy < 0) then
+            ent.vy = 0
+        end
+    end
+
+    -- Evita "efeito mola" quando a predição local (ex.: dash) excede o limite antes da reconciliação
+    if clear_recon_error then
+        if clamped_x then
+            ent._error_x = 0
+        end
+        if clamped_y then
+            ent._error_y = 0
+        end
+    end
+
+    return clamped_x, clamped_y
+end
+
+local function predict_local_movement(ent, dx, dy, dt)
+    if not ent then return end
+
+    local in_dx = dx or 0
+    local in_dy = dy or 0
+    local len = math.sqrt(in_dx * in_dx + in_dy * in_dy)
+
+    if len > 0 then
+        local ndx = in_dx / len
+        local ndy = in_dy / len
+        local default_speed = (loci.netcode and loci.netcode.default_move_speed) or 3.0
+        local raw_speed = (ent.get and (ent:get("move_speed") or ent:get("speed")))
+            or (ent.properties and (ent.properties.move_speed or ent.properties.speed))
+            or default_speed
+        local move_speed = tonumber(raw_speed) or 3.0
+        local tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0
+        local speed_sec = move_speed * tick_rate
+
+        ent.x = (ent.x or 0) + ndx * speed_sec * dt
+        ent.y = (ent.y or 0) + ndy * speed_sec * dt
+        ent.vx = ndx * move_speed
+        ent.vy = ndy * move_speed
+    else
+        ent.vx = 0
+        ent.vy = 0
+    end
+
+    clamp_entity_to_arena(ent, true)
 end
 
 function love.load(arg)
@@ -250,6 +327,11 @@ function love.load(arg)
 
     -- Pré-carregar sprites disponíveis em assets/sprites/ (padrão 32x32px)
     load_character_sprite("arya")
+
+    -- Registrar predição local com clamp nos limites da arena antes da reconciliação
+    if loci.set_prediction_handler then
+        loci.set_prediction_handler(predict_local_movement)
+    end
 
     -- Event hooks
     loci.on_entity_spawned = function(entity)
@@ -376,7 +458,7 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
-        clamp_local_prediction(my_entity)
+        clamp_entity_to_arena(my_entity, true)
         update_movement()
 
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
@@ -438,9 +520,12 @@ function love.update(dt)
         cam_y = my_entity.y * VISUAL_SCALE
     end
 
-    -- Update visual orientation and direction for all entities
+    -- Clamp visual de todas as entidades (cobrindo também extrapolação de remotas em jitter)
+    -- e atualização de orientação/animação
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
+        local is_local = my_entity and (ent.id == my_entity.id)
+        clamp_entity_to_arena(ent, is_local)
         local is_moving = false
         local vx = ent.vx or 0
         local vy = ent.vy or 0
@@ -666,9 +751,13 @@ function love.draw()
 
         elseif fx.ability_id == 3 then
             -- Skill 3 (Whirlwind Dash): Círculo 360º de corte giratório dourado com lâminas
-            local dash_dist = 160 * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades * VISUAL_SCALE)
-            local curr_x = fx_start_x + fx.dir_x * dash_dist
-            local curr_y = fx_start_y + fx.dir_y * dash_dist
+            local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
+            local dash_world_dist = (160 / VISUAL_SCALE) * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades no mundo)
+            local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
+            local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
+            local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
+            local curr_x = clamped_wx * VISUAL_SCALE
+            local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
             local r = 65 * (0.7 + 0.5 * inv_prog)
             local spin_angle = inv_prog * math.pi * 5
             love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
