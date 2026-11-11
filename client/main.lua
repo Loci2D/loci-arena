@@ -16,6 +16,7 @@ local push = require("src.push")
 local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
+local MovementSync = require("src.movement_sync")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -31,6 +32,8 @@ local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
 
 -- UI & State variables
 local connection_status = "Connecting..."
+local connected_status_label = ""
+local movement_sync = MovementSync.new()
 local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
@@ -364,7 +367,8 @@ function love.load(arg)
         return
     end
 
-    connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
+    connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
+    connection_status = connected_status_label
 
     -- Inicializar placeholders padronizados de 32x32px
     init_placeholders()
@@ -474,13 +478,23 @@ function love.load(arg)
         rejection_msg = reason
         rejection_timer = 2.5
     end
+
+    loci.on_connection_lost = function(reason)
+        connection_status = "Reconnecting (" .. tostring(reason or "timeout") .. ")..."
+        movement_sync:on_connection_lost()
+    end
+
+    loci.on_reconnected = function(entity_id)
+        if connected_status_label ~= "" then
+            connection_status = connected_status_label
+        end
+        movement_sync:on_reconnected()
+    end
 end
 
-local last_sent_dx, last_sent_dy = 0, 0
-
-local function update_movement()
+local function read_move_input()
     local dx, dy = 0, 0
-    
+
     -- Prioridade: joystick virtual (se ativo e visível) > teclado
     if show_touch_controls and virtual_joystick.is_move_active() then
         dx, dy = virtual_joystick.get_move_vector()
@@ -491,11 +505,14 @@ local function update_movement()
         if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
     end
 
-    if dx ~= last_sent_dx or dy ~= last_sent_dy then
-        last_sent_dx = dx
-        last_sent_dy = dy
-        loci.send_move(dx, dy)
-    end
+    return dx, dy
+end
+
+local function update_movement(my_entity)
+    local dx, dy = read_move_input()
+    local cur_tick = tonumber(loci._last_state_tick) or 0
+    local now = (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
+    movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
 end
 
 function love.update(dt)
@@ -504,7 +521,10 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
-        update_movement()
+        if connected_status_label ~= "" and connection_status:find("^Reconnecting") then
+            connection_status = connected_status_label
+        end
+        update_movement(my_entity)
 
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
         local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
@@ -559,6 +579,8 @@ function love.update(dt)
                 virtual_joystick.pop_release_events()
             end
         end
+    else
+        movement_sync:on_entity_missing()
     end
 
     -- Passagem única de clamp por frame (cobre dash local — cujo ramo no SDK ignora
@@ -695,6 +717,7 @@ function love.keypressed(key)
             print(string.format("[Client] Trocando personagem para %s (índice: %d)", next_char, next_idx))
             -- Envia índice do personagem (0=arya, 1=default, 2=mage, 3=warrior)
             loci.send_action(999, next_idx, 0)
+            movement_sync:mark_needs_resync()
         else
             print("[Client] Não conectado - não é possível trocar personagem")
         end
