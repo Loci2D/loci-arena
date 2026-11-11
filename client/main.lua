@@ -2,7 +2,12 @@
 -- Entrypoint for the game client connecting to the authoritative loci2d server.
 
 package.path = package.path .. ";./loci2d/?.lua;./loci2d/lib/?.lua;./client/loci2d/?.lua;./client/loci2d/lib/?.lua;./src/?.lua;./client/src/?.lua;./?.lua;./lib/?.lua"
-package.cpath = package.cpath .. ";./loci2d/lib/?.so;./loci2d/?.so;./client/loci2d/lib/?.so;./client/loci2d/?.so;./?.so;./lib/?.so"
+local is_windows = package.config:sub(1, 1) == "\\"
+if is_windows then
+    package.cpath = package.cpath .. ";./loci2d/lib/?.dll;./loci2d/?.dll;./client/loci2d/lib/?.dll;./client/loci2d/?.dll;./?.dll;./lib/?.dll"
+else
+    package.cpath = package.cpath .. ";./loci2d/lib/?.so;./loci2d/?.so;./client/loci2d/lib/?.so;./client/loci2d/?.so;./?.so;./lib/?.so;./loci2d/lib/?.dylib;./client/loci2d/lib/?.dylib"
+end
 
 local ok, loci = pcall(require, "loci_client")
 if not ok then
@@ -16,7 +21,6 @@ local push = require("src.push")
 local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
-local MovementSync = require("src.movement_sync")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -32,8 +36,6 @@ local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
 
 -- UI & State variables
 local connection_status = "Connecting..."
-local connected_status_label = ""
-local movement_sync = MovementSync.new()
 local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
@@ -227,8 +229,7 @@ function love.load(arg)
         return
     end
 
-    connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
-    connection_status = connected_status_label
+    connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
 
     -- Inicializar placeholders padronizados de 32x32px
     init_placeholders()
@@ -331,23 +332,13 @@ function love.load(arg)
         rejection_msg = reason
         rejection_timer = 2.5
     end
-
-    loci.on_connection_lost = function(reason)
-        connection_status = "Reconnecting (" .. tostring(reason or "timeout") .. ")..."
-        movement_sync:on_connection_lost()
-    end
-
-    loci.on_reconnected = function(entity_id)
-        if connected_status_label ~= "" then
-            connection_status = connected_status_label
-        end
-        movement_sync:on_reconnected()
-    end
 end
 
-local function read_move_input()
-    local dx, dy = 0, 0
+local last_sent_dx, last_sent_dy = 0, 0
 
+local function update_movement()
+    local dx, dy = 0, 0
+    
     -- Prioridade: joystick virtual (se ativo e visível) > teclado
     if show_touch_controls and virtual_joystick.is_move_active() then
         dx, dy = virtual_joystick.get_move_vector()
@@ -358,14 +349,11 @@ local function read_move_input()
         if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
     end
 
-    return dx, dy
-end
-
-local function update_movement(my_entity)
-    local dx, dy = read_move_input()
-    local cur_tick = tonumber(loci._last_state_tick) or 0
-    local now = (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
-    movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
+    if dx ~= last_sent_dx or dy ~= last_sent_dy then
+        last_sent_dx = dx
+        last_sent_dy = dy
+        loci.send_move(dx, dy)
+    end
 end
 
 function love.update(dt)
@@ -374,10 +362,7 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
-        if connected_status_label ~= "" and connection_status:find("^Reconnecting") then
-            connection_status = connected_status_label
-        end
-        update_movement(my_entity)
+        update_movement()
 
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
         local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
@@ -436,8 +421,6 @@ function love.update(dt)
         -- Direct camera binding eliminates lag jitter between camera and player
         cam_x = my_entity.x * VISUAL_SCALE
         cam_y = my_entity.y * VISUAL_SCALE
-    else
-        movement_sync:on_entity_missing()
     end
 
     -- Update visual orientation and direction for all entities
@@ -556,7 +539,6 @@ function love.keypressed(key)
             print(string.format("[Client] Trocando personagem para %s (índice: %d)", next_char, next_idx))
             -- Envia índice do personagem (0=arya, 1=default, 2=mage, 3=warrior)
             loci.send_action(999, next_idx, 0)
-            movement_sync:mark_needs_resync()
         else
             print("[Client] Não conectado - não é possível trocar personagem")
         end
@@ -931,8 +913,52 @@ function draw_entity(ent, is_me)
     -- Sombra dos pés proporcional ao modelo de 32px ancorada na base (px, py)
     local shadow_radius_x = 13 * scale
     local shadow_radius_y = 4.5 * scale
-    love.graphics.setColor(0, 0, 0, 0.4)
+
+    -- Identificação de time ("1" ou "2")
+    local team = tostring(ent.team or (ent.properties and ent.properties["team"]) or "1")
+
+    -- 1. Sombra base escura para ancoragem e profundidade física no chão da arena
+    love.graphics.setColor(0, 0, 0, is_dead and 0.20 or 0.35)
     love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+
+    -- 2. Preenchimento translúcido e borda/anel da cor do time (Azul = Time 1, Vermelho = Time 2)
+    if team == "1" then
+        -- Time 1: Azul
+        if is_dead then
+            love.graphics.setColor(0.2, 0.5, 0.85, 0.18)
+            love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+            love.graphics.setColor(0.35, 0.65, 0.95, 0.35)
+        else
+            love.graphics.setColor(0.15, 0.55, 1.0, 0.40)
+            love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+            love.graphics.setColor(0.35, 0.75, 1.0, 0.85)
+        end
+        love.graphics.setLineWidth(1.5)
+        love.graphics.ellipse("line", px, py, shadow_radius_x, shadow_radius_y)
+        love.graphics.setLineWidth(1)
+    elseif team == "2" then
+        -- Time 2: Vermelho
+        if is_dead then
+            love.graphics.setColor(0.85, 0.25, 0.25, 0.18)
+            love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+            love.graphics.setColor(0.95, 0.35, 0.35, 0.35)
+        else
+            love.graphics.setColor(1.0, 0.22, 0.22, 0.40)
+            love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+            love.graphics.setColor(1.0, 0.45, 0.45, 0.85)
+        end
+        love.graphics.setLineWidth(1.5)
+        love.graphics.ellipse("line", px, py, shadow_radius_x, shadow_radius_y)
+        love.graphics.setLineWidth(1)
+    else
+        -- Fallback neutro se time não for 1 nem 2
+        love.graphics.setColor(0.5, 0.5, 0.5, is_dead and 0.15 or 0.30)
+        love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+        love.graphics.setColor(0.7, 0.7, 0.7, is_dead and 0.25 or 0.60)
+        love.graphics.setLineWidth(1.5)
+        love.graphics.ellipse("line", px, py, shadow_radius_x, shadow_radius_y)
+        love.graphics.setLineWidth(1)
+    end
 
     -- Pivô nos pés (base central inferior: ox = 16, oy = 32 para modelos 32x32)
     local ox = sprite_w / 2
