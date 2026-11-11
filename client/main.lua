@@ -40,6 +40,10 @@ local show_character_sheet = false
 local show_touch_controls = true
 local current_char_index = 0  -- Estado local para troca de personagem (0=arya, 1=default, 2=mage, 3=warrior)
 
+-- HUD Fonts (criadas uma vez)
+local font_hud_small = nil
+local font_hud_normal = nil
+
 -- Sprites e texturas de personagens (padrão 32x32px)
 local SPRITE_BASE_SIZE = 32
 -- 🔍 ZOOM DO PERSONAGEM: ajuste SPRITE_SCALE para controlar o tamanho visual na tela.
@@ -199,12 +203,16 @@ local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
-    
+
     push:setupScreen(GAME_WIDTH, GAME_HEIGHT, 1280, 720, {
         fullscreen = false,
         resizable = true,
         pixelperfect = false
     })
+
+    -- Inicializar fontes do HUD
+    font_hud_small = love.graphics.newFont(14)
+    font_hud_normal = love.graphics.newFont(18)
 
     -- Inicializar posições dos controles virtuais para a resolução do jogo
     virtual_joystick.update_with_game_dimensions(GAME_WIDTH, GAME_HEIGHT)
@@ -582,6 +590,143 @@ function love.mousereleased(x, y, button, istouch, presses)
     end
 end
 
+-- ============================================================================
+-- HUD Functions
+-- ============================================================================
+
+-- Desenha barra de HP/Mana/Escudo fixa
+local function draw_combat_hud(my_entity)
+    if not my_entity then return end
+
+    local hp = tonumber(my_entity:get("hp", 100)) or 100
+    local max_hp = tonumber(my_entity:get("max_hp", 100)) or 100
+    local mana = tonumber(my_entity:get("mana", 100)) or 100
+    local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
+    local shield = tonumber(my_entity:get("shield", 0)) or 0
+
+    local bar_width = 200
+    local bar_height = 12
+    local x = 20
+    local y = 20
+
+    -- Barra de HP
+    local hp_pct = math.max(0, math.min(1, max_hp > 0 and (hp / max_hp) or 0))
+    love.graphics.setColor(0.2, 0.1, 0.1, 0.8)
+    love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+    love.graphics.setColor(0.85, 0.2, 0.2, 1)
+    love.graphics.rectangle("fill", x, y, bar_width * hp_pct, bar_height)
+    love.graphics.setColor(1, 1, 1, 0.8)
+    love.graphics.setFont(font_hud_small)
+    love.graphics.print(string.format("HP: %d/%d", hp, max_hp), x + 5, y + 10)
+
+    -- Barra de Escudo (se houver)
+    if shield > 0 then
+        y = y + 15
+        love.graphics.setColor(0.1, 0.1, 0.2, 0.8)
+        love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+        love.graphics.setColor(0.4, 0.4, 0.9, 1)
+        love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+        love.graphics.setColor(1, 1, 1, 0.8)
+        love.graphics.print(string.format("Escudo: %d", shield), x + 5, y + 10)
+        y = y + 15
+    else
+        y = y + 15
+    end
+
+    -- Barra de Mana
+    local mana_pct = math.max(0, math.min(1, max_mana > 0 and (mana / max_mana) or 0))
+    love.graphics.setColor(0.1, 0.1, 0.2, 0.8)
+    love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+    love.graphics.setColor(0.2, 0.4, 0.9, 1)
+    love.graphics.rectangle("fill", x, y, bar_width * mana_pct, bar_height)
+    love.graphics.setColor(1, 1, 1, 0.8)
+    love.graphics.print(string.format("Mana: %d/%d", mana, max_mana), x + 5, y + 10)
+
+    -- Status de conexão e controles
+    local sw, sh = GAME_WIDTH, GAME_HEIGHT
+    love.graphics.setColor(0, 0, 0, 0.55)
+    love.graphics.rectangle("fill", 10, sh - 60, 400, 50, 6, 6)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print("Loci Arena", 20, sh - 50)
+    love.graphics.setColor(0.7, 0.7, 0.85, 1)
+    love.graphics.print(connection_status, 20, sh - 35)
+    love.graphics.setColor(1, 1, 1, 0.7)
+    love.graphics.print("WASD: Mover | TAB: Placar | K: Trocar | C: Ficha", 20, sh - 20)
+
+    if rejection_timer > 0 then
+        love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
+        love.graphics.printf(rejection_msg, 0, sh - 80, sw, "center")
+    end
+end
+
+-- Desenha hotbar de habilidades
+local function draw_hotbar(my_entity)
+    if not my_entity then return end
+
+    local slot_width = 50
+    local slot_height = 50
+    local padding = 10
+    local start_x = 20
+    local start_y = 100
+
+    local skills = {
+        { key = "Space", label = "1" },
+        { key = "Q", label = "2" },
+        { key = "E", label = "3" },
+        { key = "R", label = "4" }
+    }
+
+    -- Verificar estados de CC
+    local stunned_until = tonumber(my_entity:get("stunned_until", 0)) or 0
+    local paralyzed_until = tonumber(my_entity:get("paralyzed_until", 0)) or 0
+    local disarmed_until = tonumber(my_entity:get("disarmed_until", 0)) or 0
+    local current_tick = loci.get_server_tick_rate and os.clock() * loci.get_server_tick_rate() or 0
+    local is_cc = current_tick < stunned_until or current_tick < paralyzed_until or current_tick < disarmed_until
+
+    local fury_active = my_entity:get("fury_active") == "true"
+
+    for i, skill in ipairs(skills) do
+        local x = start_x + (i - 1) * (slot_width + padding)
+        local y = start_y
+
+        -- Fundo do slot
+        if is_cc then
+            love.graphics.setColor(0.5, 0.2, 0.2, 0.8)  -- Vermelho se CC
+        elseif fury_active then
+            love.graphics.setColor(0.8, 0.4, 0.1, 0.8)  -- Laranja se Fúria
+        else
+            love.graphics.setColor(0.15, 0.15, 0.2, 0.8)  -- Normal
+        end
+        love.graphics.rectangle("fill", x, y, slot_width, slot_height, 4)
+
+        -- Borda
+        love.graphics.setColor(0.4, 0.4, 0.5, 0.6)
+        love.graphics.setLineWidth(2)
+        love.graphics.rectangle("line", x, y, slot_width, slot_height, 4)
+
+        -- Número do slot
+        love.graphics.setColor(1, 1, 1, 0.9)
+        love.graphics.setFont(font_hud_normal)
+        love.graphics.print(skill.label, x + slot_width / 2 - 5, y + slot_height / 2 - 5)
+
+        -- Tecla
+        love.graphics.setFont(font_hud_small)
+        love.graphics.print(skill.key, x + 5, y + slot_height - 15)
+    end
+end
+
+-- Desenha contador de respawn
+local function draw_respawn_timer()
+    local sw, sh = GAME_WIDTH, GAME_HEIGHT
+    local x = sw / 2
+    local y = sh / 2
+
+    love.graphics.setColor(0.8, 0.2, 0.2, 1)
+    love.graphics.setFont(font_hud_normal)
+    love.graphics.print("YOU DIED", x - 40, y - 20)
+    love.graphics.print("Respawning in...", x - 50, y + 10)
+end
+
 function love.draw()
     push:start()
 
@@ -829,9 +974,16 @@ function love.draw()
     love.graphics.pop()
 
     -- 2. HUD & UI Layer
-    draw_hud(sw, sh, my_entity)
+    draw_combat_hud(my_entity)
+    draw_hotbar(my_entity)
 
-    -- 3. KDA UI
+    -- 3. Respawn Timer (se morto)
+    local is_dead = my_entity and (my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true"))
+    if is_dead then
+        draw_respawn_timer()
+    end
+
+    -- 4. KDA UI
     kda_ui.draw(entities, my_entity)
 
     -- 4. Debug Overlay
@@ -1041,21 +1193,7 @@ function draw_entity(ent, is_me)
 end
 
 function draw_hud(sw, sh, my_entity)
-    love.graphics.setColor(0, 0, 0, 0.55)
-    love.graphics.rectangle("fill", 10, 10, 360, 55, 6, 6)
-
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print("Loci Arena", 20, 16)
-    love.graphics.setColor(0.7, 0.7, 0.85, 1)
-    love.graphics.print(connection_status, 20, 34)
-
-    love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Mover | Espaço: Ataque | Q: Fúria | E: Dash | R: Stun | K: Trocar | T: Touch UI | C: Ficha", 20, sh - 28)
-
-    if rejection_timer > 0 then
-        love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
-        love.graphics.printf(rejection_msg, 0, 80, sw, "center")
-    end
+    -- HUD antiga removida - substituída por draw_combat_hud e draw_hotbar
 end
 
 function draw_debug(sw, sh)
