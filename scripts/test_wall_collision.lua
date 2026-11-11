@@ -446,6 +446,44 @@ do
     print("  OK Player-vs-player collision near boundary preserves separation & bounds")
 end
 
+-- Test E2: on_move_intent updates player_intents during active dash (pre-existing bug fix)
+do
+    -- Case 1: Holding East -> dash -> release keys mid-dash -> must stop cleanly once dash ends
+    local h1 = create_server_harness()
+    local p1 = h1.spawn_player(1, 0.0, 0.0, 3.2)
+    h1.move_intent(1, 1, 0) -- start walking +X
+    h1.step_tick()
+    assert(h1.action_intent(1, 3, 1, 0)) -- start whirlwind_dash (4 ticks: until tick 5)
+    h1.step_tick() -- tick 2 (mid-dash)
+    assert(h1.move_intent(1, 0, 0)) -- player releases WASD during dash!
+    assert_near(p1.vx, 5.0, 1e-5, "Dash velocity stays active mid-dash after key release")
+
+    -- Advance past dash end (ticks 3..8)
+    for _ = 1, 6 do
+        h1.step_tick()
+    end
+    local x_after_dash = p1.x
+    assert_near(p1.vx, 0.0, 1e-6, "Player stops cleanly after dash when keys released mid-dash")
+    h1.step_tick()
+    h1.step_tick()
+    assert_near(p1.x, x_after_dash, 1e-6, "Player must not keep drifting after dash ends")
+
+    -- Case 2: Holding East -> dash -> switch to West (-1, 0) mid-dash -> walks West after dash ends
+    local h2 = create_server_harness()
+    local p2 = h2.spawn_player(1, 0.0, 0.0, 3.2)
+    h2.move_intent(1, 1, 0)
+    h2.step_tick()
+    assert(h2.action_intent(1, 3, 1, 0))
+    h2.step_tick() -- tick 2 (mid-dash)
+    assert(h2.move_intent(1, -1, 0)) -- switch intent to -X mid-dash
+    assert_near(p2.vx, 5.0, 1e-5, "Dash continues forward until duration expires")
+    for _ = 1, 5 do
+        h2.step_tick()
+    end
+    assert(p2.vx < -3.0, "Post-dash velocity switches to updated West intent instead of stale East intent")
+    print("  OK on_move_intent updates intent mid-dash (stop & redirect after dash ends)")
+end
+
 -- ============================================================================
 -- CLIENT NETCODE & MAIN.LUA INTEGRATION HARNESS
 -- ============================================================================
@@ -555,16 +593,25 @@ local function create_client_harness()
     _G.on_player_leave = nil
     _G.Loci = nil
 
-    package.path = "./client/?.lua;./client/loci2d/?.lua;./client/loci2d/lib/?.lua;" .. original_path
-    package.cpath = "./client/loci2d/lib/?.so;" .. original_cpath
+    local sdk_dir = os.getenv("LOCI_SDK_DIR") or "./client/loci2d"
+    package.path = "./client/?.lua;" .. sdk_dir .. "/?.lua;" .. sdk_dir .. "/lib/?.lua;./client/loci2d/?.lua;./client/loci2d/lib/?.lua;" .. original_path
+    package.cpath = sdk_dir .. "/lib/?.so;./client/loci2d/lib/?.so;" .. original_cpath
 
     dofile("client/main.lua")
     love.load()
 
     local loci = require("loci_client")
-    local schema_mod = require("loci.network.schema")
+    local ok_schema, schema_mod = pcall(require, "loci.network.schema")
     loci._player_name = "LocalHero"
     loci._mock_time = mock_time
+
+    local function get_pb()
+        if ok_schema and schema_mod and schema_mod.get_pb then
+            return schema_mod.get_pb()
+        end
+        local ok_pb, pb_mod = pcall(require, "pb")
+        return ok_pb and pb_mod or nil
+    end
 
     local function to_bits(v)
         return math.floor(v * 65536 + 0.5)
@@ -602,7 +649,7 @@ local function create_client_harness()
     end
 
     local function enqueue_udp_snapshot(tick, ts_ms, ents)
-        local pb = schema_mod.get_pb()
+        local pb = get_pb()
         assert(pb, "pb must be loaded")
         local bytes = pb.encode("loci2d.ServerPacket", {
             sequence_id = tick,
@@ -781,6 +828,142 @@ do
     end
     assert(found_sw, "Expected SW whirlwind_dash circle VFX draw call")
     print("  OK whirlwind_dash VFX coordinates clamped inside safe bounds")
+end
+
+-- Client Test F5: Inward reconciliation error preserved while pushing against wall (review item 1)
+do
+    -- +X wall (498) with server at 460 while client holds key D into the wall
+    local c1 = create_client_harness()
+    c1.push_snapshot(10, 1000, {
+        { id = 1, name = "LocalHero", x = 498.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "3.0" } }
+    })
+    local me1 = c1.loci.get_my_entity()
+    c1.keys_down["d"] = true
+
+    local dt = 1 / 60
+    for frame = 1, 120 do
+        if frame % 2 == 0 then
+            c1.enqueue_udp_snapshot(10 + math.floor(frame / 2), 1000 + math.floor(frame * 1000 / 60), {
+                { id = 1, name = "LocalHero", x = 460.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "3.0" } }
+            })
+        end
+        c1.advance_time(dt)
+        love.update(dt)
+        assert_bounds(me1.x, me1.y, "Inward reconciliation at +498 wall")
+    end
+    assert(me1.x < 475.0, string.format("Client must pull inward from 498 even while holding D, got %.2f", me1.x))
+
+    -- Releasing key D converges all the way to authoritative 460
+    c1.keys_down["d"] = nil
+    for frame = 121, 160 do
+        if frame % 2 == 0 then
+            c1.enqueue_udp_snapshot(10 + math.floor(frame / 2), 1000 + math.floor(frame * 1000 / 60), {
+                { id = 1, name = "LocalHero", x = 460.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "3.0" } }
+            })
+        end
+        c1.advance_time(dt)
+        love.update(dt)
+    end
+    assert_near(me1.x, 460.0, 2.01, "Converges within reconciliation_threshold (2.0) of authoritative 460 after releasing key")
+
+    -- Symmetric check on -X wall (-498) with server at -460 while holding A
+    local c2 = create_client_harness()
+    c2.push_snapshot(10, 1000, {
+        { id = 1, name = "LocalHero", x = -498.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "3.0" } }
+    })
+    local me2 = c2.loci.get_my_entity()
+    c2.keys_down["a"] = true
+    for frame = 1, 120 do
+        if frame % 2 == 0 then
+            c2.enqueue_udp_snapshot(10 + math.floor(frame / 2), 1000 + math.floor(frame * 1000 / 60), {
+                { id = 1, name = "LocalHero", x = -460.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "3.0" } }
+            })
+        end
+        c2.advance_time(dt)
+        love.update(dt)
+        assert_bounds(me2.x, me2.y, "Inward reconciliation at -498 wall")
+    end
+    assert(me2.x > -475.0, string.format("Client must pull inward from -498 while holding A, got %.2f", me2.x))
+
+    -- Residual outward error at wall is blocked so decay_error never pushes outside bounds
+    local c3 = create_client_harness()
+    c3.push_snapshot(10, 1000, {
+        { id = 1, name = "LocalHero", x = 496.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "3.0" } }
+    })
+    local me3 = c3.loci.get_my_entity()
+    c3.keys_down["d"] = true
+    c3.advance_time(0.016)
+    love.update(0.016) -- update_movement sends move(1, 0) -> _active_move_dx = 1
+    me3._error_x = 12.0 -- residual outward error while pushing into +498 wall
+    c3.advance_time(0.050)
+    love.update(0.050)
+    assert_near(me3.x, 498.0, 1e-4, "Outward residual error blocked at +498 wall")
+    assert_near(me3._error_x or 0, 0.0, 1e-4, "Outward error clamped to 0 at +498")
+    print("  OK Inward reconciliation error preserved while blocking outward overshoot at walls")
+end
+
+-- Client Test F6: Dash overshoot compensated when server keeps player inward (e.g. knockback/body-block)
+do
+    local c = create_client_harness()
+    c.push_snapshot(20, 2000, {
+        {
+            id = 1, name = "LocalHero", x = 494.0, y = 0.0, vx = 22.0, vy = 0,
+            props = { move_speed = "3.2", dashing_until = "25" }
+        }
+    })
+    local me = c.loci.get_my_entity()
+    me.vx = 22.0
+    me.vy = 0
+
+    -- Client dash predicts 494 -> 527; server keeps player at 480 (err = -47)
+    -- Clamp moves 527 -> 498 (shift = -29), compensating _error_x to -18
+    c.enqueue_udp_snapshot(21, 2050, {
+        {
+            id = 1, name = "LocalHero", x = 480.0, y = 0.0, vx = 0, vy = 0,
+            props = { move_speed = "3.2", dashing_until = "25" }
+        }
+    })
+    c.advance_time(0.050)
+    love.update(0.050)
+
+    assert_near(me.x, 498.0, 1e-4, "Dash clamped to 498 on overshoot frame")
+    assert_near(me._error_x, -18.0, 1e-3, "Post-update clamp preserves remaining -18 error toward server=480")
+
+    local dt = 1 / 60
+    for frame = 1, 30 do
+        if frame % 2 == 0 then
+            c.enqueue_udp_snapshot(21 + math.floor(frame / 2), 2050 + math.floor(frame * 1000 / 60), {
+                {
+                    id = 1, name = "LocalHero", x = 480.0, y = 0.0, vx = 0, vy = 0,
+                    props = { move_speed = "3.2", dashing_until = "25" }
+                }
+            })
+        end
+        c.advance_time(dt)
+        love.update(dt)
+        assert(me.x >= 479.8 and me.x <= 498.0 + 1e-4,
+            string.format("Dash+knockback should converge toward 480 without overshooting inward, got %.3f", me.x))
+    end
+    assert_near(me.x, 480.0, 2.01, "Dash overshoot + inward server position settles within reconciliation_threshold of 480")
+    print("  OK Dash overshoot compensation settles smoothly to inward server position")
+end
+
+-- Client Test F7: Entity clamp filter clamps player entities only, sparing non-player entities
+do
+    local c = create_client_harness()
+    c.push_snapshot(1, 100, {
+        { id = 1, name = "LocalHero", x = 0.0, y = 0.0, vx = 0, vy = 0 },
+        { id = 2, name = "EnemyPlayer", x = 505.0, y = 0.0, vx = 0, vy = 0 },
+        { id = 3, name = "ThrownBlade", x = 505.0, y = 0.0, vx = 0, vy = 0, props = { entity_type = "projectile" } },
+        { id = 4, name = "blade_projectile", x = -505.0, y = 0.0, vx = 0, vy = 0 }
+    })
+    c.advance_time(0.016)
+    love.update(0.016)
+
+    assert_near(c.loci.entities[2].x, 498.0, 1e-4, "Player entity clamped to +498")
+    assert_near(c.loci.entities[3].x, 505.0, 1e-4, "Projectile entity_type skipped by player clamp")
+    assert_near(c.loci.entities[4].x, -505.0, 1e-4, "Projectile blueprint skipped by player clamp")
+    print("  OK Client clamp filter applies to players while sparing projectiles")
 end
 
 print("=== [4/4] All automated wall collision tests PASSED ===")

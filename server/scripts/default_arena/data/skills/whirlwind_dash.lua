@@ -22,6 +22,8 @@ return {
     mana_cost = 25,
     cooldown = 180, -- 6 segundos a 30Hz
     range = 160 / VISUAL_SCALE,     -- 20.0 unidades no mundo (160px na tela)
+    dash_duration_ticks = 4,        -- ~0.13s a 30Hz para uma investida rápida
+    dash_speed = (160 / VISUAL_SCALE) / 4, -- 5.0 unidades/tick (desloca 20.0 unidades em 4 ticks)
     damage = 450,
     damage_type = CombatSystem.DamageType.PHYSICAL,
     aoe_radius = 65 / VISUAL_SCALE, -- 8.125 unidades no mundo (65px na tela)
@@ -43,7 +45,7 @@ return {
         -- Impulso de deslocamento (Dash físico sincronizado com o alcance da habilidade)
         local CharacterFactory = require("systems.character_factory")
         local current_tick = CharacterFactory.get_current_tick()
-        local dash_duration_ticks = 4 -- ~0.13s a 30Hz para uma investida rápida
+        local dash_duration_ticks = skill_data.dash_duration_ticks or 4
         Loci.Commands.set_property(entity_id, "dashing_until", tostring(current_tick + dash_duration_ticks))
 
         local dash_speed = skill_data.dash_speed or (skill_data.range / dash_duration_ticks) -- Desloca exatamente os 20.0 unidades de alcance (160px na tela)

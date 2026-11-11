@@ -210,9 +210,26 @@ local function clamp_arena_coords(x, y)
     return cx, cy
 end
 
-local function clamp_entity_to_arena(ent, clear_recon_error)
+local function should_clamp_entity(ent)
+    if not ent then return false end
+    local ent_type = (ent.get and ent:get("entity_type"))
+        or (ent.properties and ent.properties["entity_type"])
+    if ent_type ~= nil then
+        local t = string.lower(tostring(ent_type))
+        return t == "player" or t == "hero" or t == "character"
+    end
+    local bp = type(ent.blueprint) == "string" and string.lower(ent.blueprint) or ""
+    if bp:find("projectile", 1, true) or bp:find("bullet", 1, true) or bp:find("fx", 1, true) then
+        return false
+    end
+    return true
+end
+
+local function clamp_entity_to_arena(ent, clamp_recon_error, compensate_overshoot)
     if not ent then return false, false end
 
+    local old_x = ent.x
+    local old_y = ent.y
     local clamped_x = false
     local clamped_y = false
 
@@ -248,13 +265,30 @@ local function clamp_entity_to_arena(ent, clear_recon_error)
         end
     end
 
-    -- Evita "efeito mola" quando a predição local (ex.: dash) excede o limite antes da reconciliação
-    if clear_recon_error then
-        if clamped_x then
-            ent._error_x = 0
+    -- Ajusta o erro de reconciliação sem descartar correções que apontam para dentro da arena
+    -- (ex.: knockback/body-block enquanto o jogador segura tecla contra a parede):
+    -- 1) Pós-loci.update (dash / fallback): desconta o overshoot já absorvido pelo clamp
+    --    para eliminar o "efeito mola" sem apagar divergências reais para dentro.
+    -- 2) Sempre: limita _error ao intervalo válido [SAFE_MIN - x, SAFE_MAX - x] para
+    --    bloquear erro residual para fora e preservar correções para dentro.
+    if clamp_recon_error then
+        if ent.x and ent._error_x and ent._error_x ~= 0 then
+            local err_x = ent._error_x
+            if compensate_overshoot and clamped_x then
+                err_x = err_x - (ent.x - old_x)
+            end
+            err_x = math.max(PREDICTED_SAFE_MIN_X - ent.x,
+                math.min(PREDICTED_SAFE_MAX_X - ent.x, err_x))
+            ent._error_x = (math.abs(err_x) < 1e-6) and 0 or err_x
         end
-        if clamped_y then
-            ent._error_y = 0
+        if ent.y and ent._error_y and ent._error_y ~= 0 then
+            local err_y = ent._error_y
+            if compensate_overshoot and clamped_y then
+                err_y = err_y - (ent.y - old_y)
+            end
+            err_y = math.max(PREDICTED_SAFE_MIN_Y - ent.y,
+                math.min(PREDICTED_SAFE_MAX_Y - ent.y, err_y))
+            ent._error_y = (math.abs(err_y) < 1e-6) and 0 or err_y
         end
     end
 
@@ -288,7 +322,8 @@ local function predict_local_movement(ent, dx, dy, dt)
         ent.vy = 0
     end
 
-    clamp_entity_to_arena(ent, true)
+    -- Roda antes de decay_error e poll_network: preserva erro corretivo para dentro e bloqueia erro para fora
+    clamp_entity_to_arena(ent, true, false)
 end
 
 function love.load(arg)
@@ -328,7 +363,9 @@ function love.load(arg)
     -- Pré-carregar sprites disponíveis em assets/sprites/ (padrão 32x32px)
     load_character_sprite("arya")
 
-    -- Registrar predição local com clamp nos limites da arena antes da reconciliação
+    -- Registrar predição local com clamp nos limites da arena antes da reconciliação.
+    -- Nota: durante dash ativo (`dashing_until`), o SDK desvia para o ramo próprio e não chama
+    -- `_prediction_handler`; por isso o clamp pós-`loci.update` em `love.update` cobre o dash.
     if loci.set_prediction_handler then
         loci.set_prediction_handler(predict_local_movement)
     end
@@ -458,7 +495,6 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
-        clamp_entity_to_arena(my_entity, true)
         update_movement()
 
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
@@ -514,18 +550,20 @@ function love.update(dt)
                 virtual_joystick.pop_release_events()
             end
         end
-        
-        -- Direct camera binding eliminates lag jitter between camera and player
-        cam_x = my_entity.x * VISUAL_SCALE
-        cam_y = my_entity.y * VISUAL_SCALE
     end
 
-    -- Clamp visual de todas as entidades (cobrindo também extrapolação de remotas em jitter)
-    -- e atualização de orientação/animação
+    -- Passagem única de clamp por frame (cobre dash local — cujo ramo no SDK ignora
+    -- _prediction_handler — além de extrapolação de remotas em jitter) + animação e câmera.
+    local clamped_my_entity = false
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
         local is_local = my_entity and (ent.id == my_entity.id)
-        clamp_entity_to_arena(ent, is_local)
+        if is_local then
+            clamped_my_entity = true
+        end
+        if should_clamp_entity(ent) then
+            clamp_entity_to_arena(ent, is_local, is_local)
+        end
         local is_moving = false
         local vx = ent.vx or 0
         local vy = ent.vy or 0
@@ -534,6 +572,15 @@ function love.update(dt)
             is_moving = true
         end
         procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
+    end
+
+    if my_entity then
+        if not clamped_my_entity and should_clamp_entity(my_entity) then
+            clamp_entity_to_arena(my_entity, true, true)
+        end
+        -- Direct camera binding eliminates lag jitter between camera and player
+        cam_x = my_entity.x * VISUAL_SCALE
+        cam_y = my_entity.y * VISUAL_SCALE
     end
 
     -- Update rejection message timer

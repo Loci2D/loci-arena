@@ -8,6 +8,10 @@ local SPEED = 3.0
 
 -- Limites seguros da arena e projeção de velocidade nas bordas (via VFS nativo do Loci2D)
 local ArenaBounds = require("core.arena_bounds")
+local PLAYER_DIAMETER = (ArenaBounds.PLAYER_COLLIDER_RADIUS or 2.0) * 2.0
+local MIN_BLOCK_DIST = PLAYER_DIAMETER + 0.15
+local MIN_BLOCK_DIST_SQ = MIN_BLOCK_DIST * MIN_BLOCK_DIST
+local MIN_COLLISION_DIST = PLAYER_DIAMETER + 0.05
 
 -- Rastreamento de jogadores conectados e contagem de times ativos
 local connected_players = {} -- [entity_id] = { team = "1" ou "2" }
@@ -57,10 +61,6 @@ local function compute_walk_velocity(entity_id, dir_x, dir_y, speed, use_post_st
     return ArenaBounds.project_velocity(x, y, vx, vy)
 end
 
-local function clamp_arena_xy(x, y)
-    return ArenaBounds.clamp_xy(x, y)
-end
-
 local function set_position_clamped(entity_id, x, y)
     local cx, cy = ArenaBounds.clamp_xy(x, y)
     Loci.Commands.set_position(entity_id, { x = cx, y = cy })
@@ -107,9 +107,6 @@ local function is_blocked_by_player(entity_id, dir_x, dir_y)
         if not my_pos_ud then return false end
         my_x, my_y = get_coords(my_pos_ud)
     end
-
-    -- Distância máxima de contato: 4.15 (raios 2.0 + 2.0 + margem)
-    local MIN_BLOCK_DIST_SQ = 4.15 * 4.15
 
     for other_id, _ in safe_pairs(connected_players) do
         if other_id ~= entity_id and is_player_alive(other_id) and not is_entity_dashing(other_id) then
@@ -262,12 +259,6 @@ function on_move_intent(entity_id, dir_x, dir_y)
         return false, "Personagem atordoado (Stun)."
     end
 
-    local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
-    if CharacterFactory.get_current_tick() < dashing_until then
-        -- Durante o dash ativo, mantém a velocidade do impulso sem ser cancelada pelos comandos de caminhada
-        return true
-    end
-
     -- Normalize movement vector so diagonal movement doesn't provide a speed boost
     local raw_dir_x, raw_dir_y = dir_x, dir_y
     local len = math.sqrt(dir_x * dir_x + dir_y * dir_y)
@@ -291,6 +282,13 @@ function on_move_intent(entity_id, dir_x, dir_y)
             raw_y = raw_dir_y,
             speed = move_speed
         }
+    end
+
+    local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
+    if CharacterFactory.get_current_tick() < dashing_until then
+        -- Durante o dash ativo, mantém a velocidade física do impulso sem cancelá-la;
+        -- player_intents já foi atualizado acima para refletir soltura/troca de tecla no fim do dash.
+        return true
     end
 
     -- Se já estiver bloqueado por outro jogador nessa direção, trava estático imediatamente
@@ -392,8 +390,8 @@ function on_collision(entity_a, entity_b)
     local moving_a = intent_a and (intent_a.dir_x ~= 0 or intent_a.dir_y ~= 0)
     local moving_b = intent_b and (intent_b.dir_x ~= 0 or intent_b.dir_y ~= 0)
 
-    -- Raio dos personagens da arena (2.0 cada) + folga de 0.05 para garantir separação estática
-    local MIN_DIST = 4.05
+    -- Raio dos personagens da arena derivado de ArenaBounds.PLAYER_COLLIDER_RADIUS + folga de 0.05
+    local MIN_DIST = MIN_COLLISION_DIST
 
     -- Vetor relativo de B para A (onde A está em relação a B)
     local rel_x = cur_a_x - cur_b_x
