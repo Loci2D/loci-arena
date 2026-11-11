@@ -198,6 +198,9 @@ local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 -- A engine clampa o centro do colisor circular (raio 2.0) dentro de [-500, +500].
 -- A predição local do cliente precisa respeitar o mesmo limite seguro para não
 -- desenhar o próprio jogador além da barreira enquanto a tecla fica pressionada.
+-- Espelha intencionalmente `server/scripts/default_arena/core/arena_bounds.lua`
+-- porque o cliente Love2D e o VFS sandbox do servidor não compartilham módulos Lua;
+-- manter sincronizado se o mapa ou o raio do colisor mudarem.
 local PLAYER_COLLIDER_RADIUS = 2.0
 local PREDICTED_SAFE_MIN_X = ARENA_MIN + PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MAX_X = ARENA_MAX - PLAYER_COLLIDER_RADIUS
@@ -295,6 +298,12 @@ local function clamp_entity_to_arena(ent, clamp_recon_error, compensate_overshoo
     return clamped_x, clamped_y
 end
 
+-- Replica propositalmente a cinemática padrão de caminhada do `sdk-love2d`
+-- (`move_speed * tick_rate * dt`) via `_prediction_handler` em vez de depender só
+-- do clamp pós-`loci.update`. Isso aplica `clamp_entity_to_arena` *antes* de `decay_error`
+-- e `reconcile_position`, evitando que passos maiores (FPS baixo ou buff de velocidade)
+-- ultrapassem ±498 e distorçam a reconciliação contra a parede. Se o SDK passar a expor
+-- um hook de pós-predição/clamp antes da reconciliação, esta cópia pode ser removida.
 local function predict_local_movement(ent, dx, dy, dt)
     if not ent then return end
 
