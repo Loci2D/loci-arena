@@ -16,7 +16,6 @@ local push = require("src.push")
 local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
-local MovementSync = require("src.movement_sync")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -32,8 +31,6 @@ local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
 
 -- UI & State variables
 local connection_status = "Connecting..."
-local connected_status_label = ""
-local movement_sync = MovementSync.new()
 local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
@@ -41,6 +38,11 @@ local floating_damage = {}
 local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
+local current_char_index = 0  -- Estado local para troca de personagem (0=arya, 1=default, 2=mage, 3=warrior)
+
+-- HUD Fonts (criadas uma vez)
+local font_hud_small = nil
+local font_hud_normal = nil
 
 -- Sprites e texturas de personagens (padrão 32x32px)
 local SPRITE_BASE_SIZE = 32
@@ -198,15 +200,88 @@ local ARENA_MIN = -500
 local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 
+-- Rastreamento local de CC e cooldowns (baseado em tempo do cliente)
+local cc_states = {
+    stunned = { active = false, start_time = 0, duration = 0 },
+    disarmed = { active = false, start_time = 0, duration = 0 },
+    paralyzed = { active = false, start_time = 0, duration = 0 }
+}
+
+local cooldown_slots = {
+    [1] = { active = false, start_time = 0, duration = 0 },
+    [2] = { active = false, start_time = 0, duration = 0 },
+    [3] = { active = false, start_time = 0, duration = 0 },
+    [4] = { active = false, start_time = 0, duration = 0 }
+}
+
+-- Taxa de tick do servidor (para converter ticks em segundos)
+local SERVER_TICK_RATE = 30  -- 30 Hz
+
+-- Sistema de áudio
+local sounds = {}
+local audio_enabled = true
+
+-- Gerar som placeholder simples (beep) se arquivo não existir
+local function generate_placeholder_sound(frequency, duration)
+    local sample_rate = 44100
+    local samples = sample_rate * duration
+    local sound_data = love.sound.newSoundData(samples, sample_rate, 16, 1)
+    
+    for i = 0, samples - 1 do
+        local t = i / sample_rate
+        local sample = math.sin(2 * math.pi * frequency * t)
+        
+        -- Envelope para evitar clique
+        local envelope = 1.0
+        if t < 0.01 then
+            envelope = t / 0.01
+        elseif t > duration - 0.01 then
+            envelope = (duration - t) / 0.01
+        end
+        
+        sound_data:setSample(i, sample * envelope * 0.3)
+    end
+    
+    return love.audio.newSource(sound_data, "static")
+end
+
+-- Carregar som com fallback para placeholder
+local function load_sound(filename, placeholder_freq, placeholder_duration)
+    local filepath = "assets/audio/" .. filename
+    local success, source = pcall(love.audio.newSource, filepath, "static")
+    
+    if success then
+        return source
+    else
+        print("[Audio] Arquivo não encontrado: " .. filename .. ", usando placeholder")
+        return generate_placeholder_sound(placeholder_freq, placeholder_duration)
+    end
+end
+
+-- Reproduzir som com clone para permitir sobreposição
+local function play_sound(sound_name)
+    if not audio_enabled then return end
+    
+    local sound = sounds[sound_name]
+    if sound then
+        local clone = sound:clone()
+        clone:play()
+    end
+end
+
 function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
-    
+
     push:setupScreen(GAME_WIDTH, GAME_HEIGHT, 1280, 720, {
         fullscreen = false,
         resizable = true,
         pixelperfect = false
     })
+
+    -- Inicializar fontes do HUD
+    font_hud_small = love.graphics.newFont(14)
+    font_hud_normal = love.graphics.newFont(18)
 
     -- Inicializar posições dos controles virtuais para a resolução do jogo
     virtual_joystick.update_with_game_dimensions(GAME_WIDTH, GAME_HEIGHT)
@@ -227,14 +302,26 @@ function love.load(arg)
         return
     end
 
-    connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
-    connection_status = connected_status_label
+    connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
 
     -- Inicializar placeholders padronizados de 32x32px
     init_placeholders()
 
     -- Pré-carregar sprites disponíveis em assets/sprites/ (padrão 32x32px)
     load_character_sprite("arya")
+
+    -- Carregar efeitos sonoros (SFX)
+    print("[Audio] Carregando efeitos sonoros...")
+    sounds.slash = load_sound("slash.wav", 400, 0.1)
+    sounds.fury_reward = load_sound("fury_reward.wav", 600, 0.2)
+    sounds.whirlwind_dash = load_sound("whirlwind_dash.wav", 500, 0.3)
+    sounds.blade_throw = load_sound("blade_throw.wav", 300, 0.4)
+    sounds.fireball = load_sound("fireball.wav", 200, 0.5)
+    sounds.hit = load_sound("hit.wav", 200, 0.1)
+    sounds.critical = load_sound("critical.wav", 300, 0.15)
+    sounds.shield_hit = load_sound("shield_hit.wav", 250, 0.1)
+    sounds.death = load_sound("death.wav", 150, 0.5)
+    print("[Audio] Efeitos sonoros carregados com sucesso")
 
     -- Event hooks
     loci.on_entity_spawned = function(entity)
@@ -254,6 +341,14 @@ function love.load(arg)
             local damage = old_hp - new_hp
 
             if damage > 0 then
+                -- Reproduzir som de acerto ou crítico
+                local is_critical = damage >= 350
+                if is_critical then
+                    play_sound("critical")
+                else
+                    play_sound("hit")
+                end
+
                 -- 1. Screen shake apenas para dano significativo no jogador local
                 local my_entity = loci.get_my_entity()
                 if my_entity and entity.id == my_entity.id and damage > 50 then
@@ -285,6 +380,8 @@ function love.load(arg)
             local damage = old_shield - new_shield
 
             if damage > 0 then
+                play_sound("shield_hit")
+
                 local my_entity = loci.get_my_entity()
                 if my_entity and entity.id == my_entity.id and damage > 50 then
                     shake_total_duration = 0.2
@@ -305,15 +402,122 @@ function love.load(arg)
                     is_shield = true
                 })
             end
+        elseif key == "stunned_until" then
+            -- Detectar quando stun é aplicado ou removido (para o jogador local)
+            local my_entity = loci.get_my_entity()
+            if my_entity and entity.id == my_entity.id then
+                local new_stunned_until = tonumber(new_val) or 0
+                if new_stunned_until > 0 then
+                    -- Stun aplicado - assumir duração de 2 segundos (60 ticks a 30 Hz)
+                    cc_states.stunned.active = true
+                    cc_states.stunned.start_time = os.clock()
+                    cc_states.stunned.duration = 2.0  -- 60 ticks / 30 Hz = 2 segundos
+                else
+                    -- Stun removido - limpar estado
+                    cc_states.stunned.active = false
+                end
+            end
+        elseif key == "disarmed_until" then
+            -- Detectar quando desarme é aplicado ou removido (para o jogador local)
+            local my_entity = loci.get_my_entity()
+            if my_entity and entity.id == my_entity.id then
+                local new_disarmed_until = tonumber(new_val) or 0
+                if new_disarmed_until > 0 then
+                    -- Desarme aplicado - assumir duração de 2 segundos (60 ticks a 30 Hz)
+                    cc_states.disarmed.active = true
+                    cc_states.disarmed.start_time = os.clock()
+                    cc_states.disarmed.duration = 2.0  -- 60 ticks / 30 Hz = 2 segundos
+                else
+                    -- Desarme removido - limpar estado
+                    cc_states.disarmed.active = false
+                end
+            end
+        elseif key == "paralyzed_until" then
+            -- Detectar quando paralisia é aplicada ou removida (para o jogador local)
+            local my_entity = loci.get_my_entity()
+            if my_entity and entity.id == my_entity.id then
+                local new_paralyzed_until = tonumber(new_val) or 0
+                if new_paralyzed_until > 0 then
+                    -- Paralisia aplicada - assumir duração de 2 segundos
+                    cc_states.paralyzed.active = true
+                    cc_states.paralyzed.start_time = os.clock()
+                    cc_states.paralyzed.duration = 2.0
+                else
+                    -- Paralisia removida - limpar estado
+                    cc_states.paralyzed.active = false
+                end
+            end
+        elseif key == "is_dead" then
+            -- Detectar quando jogador morre
+            local my_entity = loci.get_my_entity()
+            if my_entity and entity.id == my_entity.id and new_val == "true" then
+                play_sound("death")
+            end
         end
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
+        -- Mapear habilidade por nome (lido de skills_list)
+        local skill_name = nil
+        local my_entity = loci.get_my_entity()
+        if my_entity and my_entity.properties then
+            local skills_list = my_entity.properties.skills_list or ""
+            local idx = 1
+            for skill in string.gmatch(skills_list, "[^,]+") do
+                if idx == ability_id then
+                    skill_name = skill
+                    break
+                end
+                idx = idx + 1
+            end
+        end
+
+        -- Mapear nome da habilidade para som
+        local sound_map = {
+            slash = "slash",
+            fury_reward = "fury_reward",
+            whirlwind_dash = "whirlwind_dash",
+            blade_throw = "blade_throw",
+            fireball = "fireball"
+        }
+
+        if skill_name and sound_map[skill_name] then
+            play_sound(sound_map[skill_name])
+        end
+
+        local character_name = entity and entity:get("character_name", "default") or "default"
         local lifetime = 0.35
         if ability_id == 3 then
             lifetime = 0.45 -- Whirlwind Dash
         elseif ability_id == 4 then
             lifetime = 0.60 -- Blade Throw
+        end
+
+        -- Rastrear cooldown para o jogador local
+        local my_entity = loci.get_my_entity()
+        if my_entity and entity.id == my_entity.id then
+            -- Mapear ability_id para slot (baseado na configuração do personagem)
+            -- Space=1, Q=2, E=3, R=4
+            local slot = ability_id  -- Assumindo que ability_id 1-4 correspondem aos slots
+            if slot >= 1 and slot <= 4 then
+                -- Duração do cooldown em segundos (estimada baseada no servidor)
+                local cooldown_duration = 0
+                if slot == 1 then
+                    cooldown_duration = 1.0  -- Slash: ~30 ticks
+                elseif slot == 2 then
+                    cooldown_duration = 0.5  -- Fury Reward: ~15 ticks
+                elseif slot == 3 then
+                    cooldown_duration = 3.0  -- Whirlwind Dash: ~90 ticks
+                elseif slot == 4 then
+                    cooldown_duration = 14.0 -- Blade Throw: ~420 ticks
+                end
+
+                if cooldown_duration > 0 then
+                    cooldown_slots[slot].active = true
+                    cooldown_slots[slot].start_time = os.clock()
+                    cooldown_slots[slot].duration = cooldown_duration
+                end
+            end
         end
 
         table.insert(visual_fx, {
@@ -322,6 +526,7 @@ function love.load(arg)
             dir_x = dir_x,
             dir_y = dir_y,
             ability_id = ability_id,
+            character_name = character_name,
             lifetime = lifetime,
             max_lifetime = lifetime
         })
@@ -331,23 +536,13 @@ function love.load(arg)
         rejection_msg = reason
         rejection_timer = 2.5
     end
-
-    loci.on_connection_lost = function(reason)
-        connection_status = "Reconnecting (" .. tostring(reason or "timeout") .. ")..."
-        movement_sync:on_connection_lost()
-    end
-
-    loci.on_reconnected = function(entity_id)
-        if connected_status_label ~= "" then
-            connection_status = connected_status_label
-        end
-        movement_sync:on_reconnected()
-    end
 end
 
-local function read_move_input()
-    local dx, dy = 0, 0
+local last_sent_dx, last_sent_dy = 0, 0
 
+local function update_movement()
+    local dx, dy = 0, 0
+    
     -- Prioridade: joystick virtual (se ativo e visível) > teclado
     if show_touch_controls and virtual_joystick.is_move_active() then
         dx, dy = virtual_joystick.get_move_vector()
@@ -358,14 +553,11 @@ local function read_move_input()
         if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
     end
 
-    return dx, dy
-end
-
-local function update_movement(my_entity)
-    local dx, dy = read_move_input()
-    local cur_tick = tonumber(loci._last_state_tick) or 0
-    local now = (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
-    movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
+    if dx ~= last_sent_dx or dy ~= last_sent_dy then
+        last_sent_dx = dx
+        last_sent_dy = dy
+        loci.send_move(dx, dy)
+    end
 end
 
 function love.update(dt)
@@ -374,10 +566,7 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
-        if connected_status_label ~= "" and connection_status:find("^Reconnecting") then
-            connection_status = connected_status_label
-        end
-        update_movement(my_entity)
+        update_movement()
 
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
         local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
@@ -436,8 +625,6 @@ function love.update(dt)
         -- Direct camera binding eliminates lag jitter between camera and player
         cam_x = my_entity.x * VISUAL_SCALE
         cam_y = my_entity.y * VISUAL_SCALE
-    else
-        movement_sync:on_entity_missing()
     end
 
     -- Update visual orientation and direction for all entities
@@ -542,24 +729,16 @@ function love.keypressed(key)
         end
 
         if connection_status:find("Connected") then
-            local char_cycle = { "arya", "default", "mage", "warrior" }
-            local cur_name = string.lower(me and (me.character_name or (me.properties and me.properties["character_name"])) or "arya")
-            local cur_idx = 0
-            for idx, name in ipairs(char_cycle) do
-                if name == cur_name then
-                    cur_idx = idx - 1
-                    break
-                end
-            end
-            local next_idx = (cur_idx + 1) % #char_cycle
-            local next_char = char_cycle[next_idx + 1]
-            print(string.format("[Client] Trocando personagem para %s (índice: %d)", next_char, next_idx))
-            -- Envia índice do personagem (0=arya, 1=default, 2=mage, 3=warrior)
-            loci.send_action(999, next_idx, 0)
-            movement_sync:mark_needs_resync()
+            print("[Client] Solicitando troca de personagem...")
+            -- Servidor cicla automaticamente sem precisar do índice
+            loci.send_action(999, 0, 0)
         else
             print("[Client] Não conectado - não é possível trocar personagem")
         end
+    elseif key == "m" then
+        -- Toggle áudio
+        audio_enabled = not audio_enabled
+        print("[Audio] Áudio " .. (audio_enabled and "ativado" or "desativado"))
     end
 end
 
@@ -613,6 +792,196 @@ function love.mousereleased(x, y, button, istouch, presses)
     end
 end
 
+-- ============================================================================
+-- HUD Functions
+-- ============================================================================
+
+-- Desenha barra de HP/Mana/Escudo fixa
+local function draw_combat_hud(my_entity)
+    if not my_entity then return end
+
+    local hp = tonumber(my_entity:get("hp", 100)) or 100
+    local max_hp = tonumber(my_entity:get("max_hp", 100)) or 100
+    local mana = tonumber(my_entity:get("mana", 100)) or 100
+    local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
+    local shield = tonumber(my_entity:get("shield", 0)) or 0
+
+    local bar_width = 200
+    local bar_height = 12
+    local x = 20
+    local y = 20
+
+    -- Barra de HP
+    local hp_pct = math.max(0, math.min(1, max_hp > 0 and (hp / max_hp) or 0))
+    love.graphics.setColor(0.2, 0.1, 0.1, 0.8)
+    love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+    love.graphics.setColor(0.85, 0.2, 0.2, 1)
+    love.graphics.rectangle("fill", x, y, bar_width * hp_pct, bar_height)
+    love.graphics.setColor(1, 1, 1, 0.8)
+    love.graphics.setFont(font_hud_small)
+    love.graphics.print(string.format("HP: %d/%d", hp, max_hp), x + bar_width + 10, y + 2)
+
+    -- Barra de Escudo (se houver)
+    if shield > 0 then
+        y = y + 15
+        love.graphics.setColor(0.1, 0.1, 0.2, 0.8)
+        love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+        love.graphics.setColor(0.4, 0.4, 0.9, 1)
+        love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+        love.graphics.setColor(1, 1, 1, 0.8)
+        love.graphics.print(string.format("Escudo: %d", shield), x + bar_width + 10, y + 2)
+        y = y + 15
+    else
+        y = y + 15
+    end
+
+    -- Barra de Mana
+    local mana_pct = math.max(0, math.min(1, max_mana > 0 and (mana / max_mana) or 0))
+    love.graphics.setColor(0.1, 0.1, 0.2, 0.8)
+    love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+    love.graphics.setColor(0.2, 0.4, 0.9, 1)
+    love.graphics.rectangle("fill", x, y, bar_width * mana_pct, bar_height)
+    love.graphics.setColor(1, 1, 1, 0.8)
+    love.graphics.print(string.format("Mana: %d/%d", mana, max_mana), x + bar_width + 10, y + 2)
+
+    -- Status de conexão e controles
+    local sw, sh = GAME_WIDTH, GAME_HEIGHT
+    love.graphics.setColor(0, 0, 0, 0.55)
+    love.graphics.rectangle("fill", 10, sh - 60, 400, 50, 6, 6)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print("Loci Arena", 20, sh - 50)
+    love.graphics.setColor(0.7, 0.7, 0.85, 1)
+    love.graphics.print(connection_status, 20, sh - 35)
+    love.graphics.setColor(1, 1, 1, 0.7)
+    love.graphics.print("WASD: Mover | TAB: Placar | K: Trocar | C: Ficha", 20, sh - 20)
+
+    if rejection_timer > 0 then
+        love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
+        love.graphics.printf(rejection_msg, 0, sh - 80, sw, "center")
+    end
+end
+
+-- Desenha hotbar de habilidades
+local function draw_hotbar(my_entity)
+    if not my_entity then
+        return  -- Não desenha se entidade não existe (antes do spawn)
+    end
+
+    local slot_width = 50
+    local slot_height = 50
+    local padding = 10
+    local start_x = 20
+    local start_y = 100
+
+    local skills = {
+        { key = "Space", label = "1", slot = 1 },
+        { key = "Q", label = "2", slot = 2 },
+        { key = "E", label = "3", slot = 3 },
+        { key = "R", label = "4", slot = 4 }
+    }
+
+    local current_time = os.clock()
+
+    -- Atualizar estados de CC baseado em tempo local
+    local is_stunned = false
+    local is_paralyzed = false
+    local is_disarmed = false
+
+    -- Verificar se stunned expirou
+    if cc_states.stunned.active then
+        if current_time - cc_states.stunned.start_time >= cc_states.stunned.duration then
+            cc_states.stunned.active = false
+        else
+            is_stunned = true
+        end
+    end
+
+    -- Verificar se disarmed expirou
+    if cc_states.disarmed.active then
+        if current_time - cc_states.disarmed.start_time >= cc_states.disarmed.duration then
+            cc_states.disarmed.active = false
+        else
+            is_disarmed = true
+        end
+    end
+
+    -- Verificar se paralyzed expirou
+    if cc_states.paralyzed.active then
+        if current_time - cc_states.paralyzed.start_time >= cc_states.paralyzed.duration then
+            cc_states.paralyzed.active = false
+        else
+            is_paralyzed = true
+        end
+    end
+
+    local is_cc = is_stunned or is_paralyzed or is_disarmed
+
+    -- Verificar Fúria (aceita booleano ou string)
+    local fury_value = my_entity:get("fury_active")
+    local fury_active = fury_value == true or fury_value == "true"
+
+    -- Verificar Mana (para feedback visual quando mana < 30%)
+    local mana = tonumber(my_entity:get("mana", 0)) or 0
+    local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
+    local mana_pct = max_mana > 0 and (mana / max_mana) or 0
+    local is_low_mana = mana_pct < 0.3  -- Menos de 30% de mana
+
+    for i, skill in ipairs(skills) do
+        local x = start_x + (i - 1) * (slot_width + padding)
+        local y = start_y
+
+        -- Verificar cooldown do slot usando tempo local
+        local is_on_cooldown = false
+        if cooldown_slots[skill.slot].active then
+            if current_time - cooldown_slots[skill.slot].start_time >= cooldown_slots[skill.slot].duration then
+                cooldown_slots[skill.slot].active = false
+            else
+                is_on_cooldown = true
+            end
+        end
+
+        -- Fundo do slot
+        if is_cc then
+            love.graphics.setColor(0.5, 0.2, 0.2, 0.8)  -- Vermelho se CC
+        elseif is_on_cooldown then
+            love.graphics.setColor(0.3, 0.3, 0.4, 0.8)  -- Cinza se em cooldown
+        elseif fury_active then
+            love.graphics.setColor(0.8, 0.4, 0.1, 0.8)  -- Laranja se Fúria
+        elseif is_low_mana then
+            love.graphics.setColor(0.4, 0.3, 0.3, 0.8)  -- Cinza escuro se pouca mana
+        else
+            love.graphics.setColor(0.15, 0.15, 0.2, 0.8)  -- Normal
+        end
+        love.graphics.rectangle("fill", x, y, slot_width, slot_height, 4)
+
+        -- Borda
+        love.graphics.setColor(0.4, 0.4, 0.5, 0.6)
+        love.graphics.setLineWidth(2)
+        love.graphics.rectangle("line", x, y, slot_width, slot_height, 4)
+
+        -- Número do slot
+        love.graphics.setColor(1, 1, 1, 0.9)
+        love.graphics.setFont(font_hud_normal)
+        love.graphics.print(skill.label, x + slot_width / 2 - 5, y + slot_height / 2 - 5)
+
+        -- Tecla
+        love.graphics.setFont(font_hud_small)
+        love.graphics.print(skill.key, x + 5, y + slot_height - 15)
+    end
+end
+
+-- Desenha contador de respawn
+local function draw_respawn_timer()
+    local sw, sh = GAME_WIDTH, GAME_HEIGHT
+    local x = sw / 2
+    local y = sh / 2
+
+    love.graphics.setColor(0.8, 0.2, 0.2, 1)
+    love.graphics.setFont(font_hud_normal)
+    love.graphics.print("YOU DIED", x - 40, y - 20)
+    love.graphics.print("Respawning in...", x - 50, y + 10)
+end
+
 function love.draw()
     push:start()
 
@@ -644,8 +1013,32 @@ function love.draw()
         local fx_start_x = fx.x * VISUAL_SCALE
         local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
 
-        if fx.ability_id == 1 then
-            -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro
+        -- Mapeamento de VFX por personagem e ability_id
+        local char_name = fx.character_name or "default"
+
+        if fx.ability_id == 1 and char_name == "mage" then
+            -- Skill 1 (Fireball): Bola de fogo viajando
+            local max_dist = 200
+            local travel_dist = max_dist * math.min(1.0, inv_prog * 2.0)
+            local fireball_x = fx_start_x + fx.dir_x * travel_dist
+            local fireball_y = fx_start_y + fx.dir_y * travel_dist
+            local radius = 30 * (0.8 + 0.5 * inv_prog)
+
+            -- Núcleo da bola de fogo
+            love.graphics.setColor(1.0, 0.6, 0.1, progress * 0.9)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius)
+            love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.7)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
+            love.graphics.setColor(1.0, 1.0, 0.8, progress * 0.5)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
+
+            -- Rastro de fogo
+            love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.3)
+            love.graphics.setLineWidth(3)
+            love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
+
+        elseif fx.ability_id == 1 then
+            -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro (Arya/Default)
             local angle = math.atan2(fx.dir_y, fx.dir_x)
             local radius = 45 * (0.8 + 0.4 * inv_prog)
             love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
@@ -836,9 +1229,16 @@ function love.draw()
     love.graphics.pop()
 
     -- 2. HUD & UI Layer
-    draw_hud(sw, sh, my_entity)
+    draw_combat_hud(my_entity)
+    draw_hotbar(my_entity)
 
-    -- 3. KDA UI
+    -- 3. Respawn Timer (se morto)
+    local is_dead = my_entity and (my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true"))
+    if is_dead then
+        draw_respawn_timer()
+    end
+
+    -- 4. KDA UI
     kda_ui.draw(entities, my_entity)
 
     -- 4. Debug Overlay
@@ -1048,21 +1448,7 @@ function draw_entity(ent, is_me)
 end
 
 function draw_hud(sw, sh, my_entity)
-    love.graphics.setColor(0, 0, 0, 0.55)
-    love.graphics.rectangle("fill", 10, 10, 360, 55, 6, 6)
-
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print("Loci Arena", 20, 16)
-    love.graphics.setColor(0.7, 0.7, 0.85, 1)
-    love.graphics.print(connection_status, 20, 34)
-
-    love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Mover | Espaço: Ataque | Q: Fúria | E: Dash | R: Stun | K: Trocar | T: Touch UI | C: Ficha", 20, sh - 28)
-
-    if rejection_timer > 0 then
-        love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
-        love.graphics.printf(rejection_msg, 0, 80, sw, "center")
-    end
+    -- HUD antiga removida - substituída por draw_combat_hud e draw_hotbar
 end
 
 function draw_debug(sw, sh)
