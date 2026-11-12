@@ -16,6 +16,7 @@ local push = require("src.push")
 local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
+local MovementSync = require("src.movement_sync")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -31,6 +32,9 @@ local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
 
 -- UI & State variables
 local connection_status = "Connecting..."
+local connected_status_label = ""
+local is_connection_lost = false
+local movement_sync = MovementSync.new()
 local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
@@ -38,7 +42,6 @@ local floating_damage = {}
 local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
-local current_char_index = 0  -- Estado local para troca de personagem (0=arya, 1=default, 2=mage, 3=warrior)
 
 -- HUD Fonts (criadas uma vez)
 local font_hud_small = nil
@@ -185,6 +188,21 @@ local function load_character_sprite(character_name)
     return found_info
 end
 
+local function get_entity_skill_by_slot(entity, slot_index)
+    if not entity or not slot_index then return nil end
+    local list_str = entity:get("skills_list", "")
+    if not list_str or list_str == "" then return nil end
+
+    local idx = 1
+    for skill in string.gmatch(list_str, "[^,]+") do
+        if idx == slot_index then
+            return string.lower(skill)
+        end
+        idx = idx + 1
+    end
+    return nil
+end
+
 -- Screen shake state
 local shake_duration = 0
 local shake_total_duration = 0.2
@@ -200,22 +218,221 @@ local ARENA_MIN = -500
 local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 
--- Rastreamento local de CC e cooldowns (baseado em tempo do cliente)
-local cc_states = {
-    stunned = { active = false, start_time = 0, duration = 0 },
-    disarmed = { active = false, start_time = 0, duration = 0 },
-    paralyzed = { active = false, start_time = 0, duration = 0 }
+-- A engine clampa o centro do colisor circular (raio 2.0) dentro de [-500, +500].
+-- A predição local do cliente precisa respeitar o mesmo limite seguro para não
+-- desenhar o próprio jogador além da barreira enquanto a tecla fica pressionada.
+-- Espelha intencionalmente `server/scripts/default_arena/core/arena_bounds.lua`
+-- porque o cliente Love2D e o VFS sandbox do servidor não compartilham módulos Lua;
+-- manter sincronizado se o mapa ou o raio do colisor mudarem.
+local PLAYER_COLLIDER_RADIUS = 2.0
+local PREDICTED_SAFE_MIN_X = ARENA_MIN + PLAYER_COLLIDER_RADIUS
+local PREDICTED_SAFE_MAX_X = ARENA_MAX - PLAYER_COLLIDER_RADIUS
+local PREDICTED_SAFE_MIN_Y = ARENA_MIN + PLAYER_COLLIDER_RADIUS
+local PREDICTED_SAFE_MAX_Y = ARENA_MAX - PLAYER_COLLIDER_RADIUS
+
+local function clamp_arena_coords(x, y)
+    local cx = math.max(PREDICTED_SAFE_MIN_X, math.min(PREDICTED_SAFE_MAX_X, x or 0))
+    local cy = math.max(PREDICTED_SAFE_MIN_Y, math.min(PREDICTED_SAFE_MAX_Y, y or 0))
+    return cx, cy
+end
+
+local function should_clamp_entity(ent)
+    if not ent then return false end
+    local ent_type = (ent.get and ent:get("entity_type"))
+        or (ent.properties and ent.properties["entity_type"])
+    if ent_type ~= nil then
+        local t = string.lower(tostring(ent_type))
+        return t == "player" or t == "hero" or t == "character"
+    end
+    local bp = type(ent.blueprint) == "string" and string.lower(ent.blueprint) or ""
+    if bp:find("projectile", 1, true) or bp:find("bullet", 1, true) or bp:find("fx", 1, true) then
+        return false
+    end
+    return true
+end
+
+local function clamp_entity_to_arena(ent, clamp_recon_error, compensate_overshoot)
+    if not ent then return false, false end
+
+    local old_x = ent.x
+    local old_y = ent.y
+    local clamped_x = false
+    local clamped_y = false
+
+    if ent.x then
+        if ent.x > PREDICTED_SAFE_MAX_X then
+            ent.x = PREDICTED_SAFE_MAX_X
+            clamped_x = true
+        elseif ent.x < PREDICTED_SAFE_MIN_X then
+            ent.x = PREDICTED_SAFE_MIN_X
+            clamped_x = true
+        end
+    end
+
+    if ent.y then
+        if ent.y > PREDICTED_SAFE_MAX_Y then
+            ent.y = PREDICTED_SAFE_MAX_Y
+            clamped_y = true
+        elseif ent.y < PREDICTED_SAFE_MIN_Y then
+            ent.y = PREDICTED_SAFE_MIN_Y
+            clamped_y = true
+        end
+    end
+
+    -- Zera apenas a componente de velocidade que tenta atravessar o limite em contato
+    if ent.x and ent.vx then
+        if (ent.x >= PREDICTED_SAFE_MAX_X and ent.vx > 0) or (ent.x <= PREDICTED_SAFE_MIN_X and ent.vx < 0) then
+            ent.vx = 0
+        end
+    end
+    if ent.y and ent.vy then
+        if (ent.y >= PREDICTED_SAFE_MAX_Y and ent.vy > 0) or (ent.y <= PREDICTED_SAFE_MIN_Y and ent.vy < 0) then
+            ent.vy = 0
+        end
+    end
+
+    -- Ajusta o erro de reconciliação sem descartar correções que apontam para dentro da arena
+    -- (ex.: knockback/body-block enquanto o jogador segura tecla contra a parede):
+    -- 1) Pós-loci.update (dash / fallback): desconta o overshoot já absorvido pelo clamp
+    --    para eliminar o "efeito mola" sem apagar divergências reais para dentro.
+    -- 2) Sempre: limita _error ao intervalo válido [SAFE_MIN - x, SAFE_MAX - x] para
+    --    bloquear erro residual para fora e preservar correções para dentro.
+    if clamp_recon_error then
+        if ent.x and ent._error_x and ent._error_x ~= 0 then
+            local err_x = ent._error_x
+            if compensate_overshoot and clamped_x then
+                err_x = err_x - (ent.x - old_x)
+            end
+            err_x = math.max(PREDICTED_SAFE_MIN_X - ent.x,
+                math.min(PREDICTED_SAFE_MAX_X - ent.x, err_x))
+            ent._error_x = (math.abs(err_x) < 1e-6) and 0 or err_x
+        end
+        if ent.y and ent._error_y and ent._error_y ~= 0 then
+            local err_y = ent._error_y
+            if compensate_overshoot and clamped_y then
+                err_y = err_y - (ent.y - old_y)
+            end
+            err_y = math.max(PREDICTED_SAFE_MIN_Y - ent.y,
+                math.min(PREDICTED_SAFE_MAX_Y - ent.y, err_y))
+            ent._error_y = (math.abs(err_y) < 1e-6) and 0 or err_y
+        end
+    end
+
+    return clamped_x, clamped_y
+end
+
+-- Replica propositalmente a cinemática padrão de caminhada do `sdk-love2d`
+-- (`move_speed * tick_rate * dt`) via `_prediction_handler` em vez de depender só
+-- do clamp pós-`loci.update`. Isso aplica `clamp_entity_to_arena` *antes* de `decay_error`
+-- e `reconcile_position`, evitando que passos maiores (FPS baixo ou buff de velocidade)
+-- ultrapassem ±498 e distorçam a reconciliação contra a parede. Se o SDK passar a expor
+-- um hook de pós-predição/clamp antes da reconciliação, esta cópia pode ser removida.
+local function predict_local_movement(ent, dx, dy, dt)
+    if not ent then return end
+
+    local in_dx = dx or 0
+    local in_dy = dy or 0
+    local len = math.sqrt(in_dx * in_dx + in_dy * in_dy)
+
+    if len > 0 then
+        local ndx = in_dx / len
+        local ndy = in_dy / len
+        local default_speed = (loci.netcode and loci.netcode.default_move_speed) or 3.0
+        local raw_speed = (ent.get and (ent:get("move_speed") or ent:get("speed")))
+            or (ent.properties and (ent.properties.move_speed or ent.properties.speed))
+            or default_speed
+        local move_speed = tonumber(raw_speed) or 3.0
+        local tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0
+        local speed_sec = move_speed * tick_rate
+
+        ent.x = (ent.x or 0) + ndx * speed_sec * dt
+        ent.y = (ent.y or 0) + ndy * speed_sec * dt
+        ent.vx = ndx * move_speed
+        ent.vy = ndy * move_speed
+    else
+        ent.vx = 0
+        ent.vy = 0
+    end
+
+    -- Roda antes de decay_error e poll_network: preserva erro corretivo para dentro e bloqueia erro para fora
+    clamp_entity_to_arena(ent, true, false)
+end
+
+-- Metadados de habilidades para HUD/Hotbar (alinhados a server/scripts/default_arena/data/skills/*.lua a 30 Hz)
+local RESPAWN_DURATION_SECONDS = 10.0 -- 300 ticks a 30 Hz (respawn_system.lua)
+
+local SKILL_HUD_META = {
+    slash          = { label = "Slash",    cooldown = 0.5,  mana_cost = 10 },
+    fireball       = { label = "Fireball", cooldown = 1.5,  mana_cost = 35 },
+    fury_reward    = { label = "Fúria",    cooldown = 5.0,  mana_cost = 0  },
+    whirlwind_dash = { label = "Dash",     cooldown = 6.0,  mana_cost = 25 },
+    blade_throw    = { label = "Lâmina",   cooldown = 14.0, mana_cost = 45 },
+    shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 20 },
+}
+
+local HOTBAR_SLOTS = {
+    { slot = 1, key = "Space" },
+    { slot = 2, key = "Q" },
+    { slot = 3, key = "E" },
+    { slot = 4, key = "R" },
 }
 
 local cooldown_slots = {
     [1] = { active = false, start_time = 0, duration = 0 },
     [2] = { active = false, start_time = 0, duration = 0 },
     [3] = { active = false, start_time = 0, duration = 0 },
-    [4] = { active = false, start_time = 0, duration = 0 }
+    [4] = { active = false, start_time = 0, duration = 0 },
 }
 
--- Taxa de tick do servidor (para converter ticks em segundos)
-local SERVER_TICK_RATE = 30  -- 30 Hz
+local respawn_state = { active = false, start_time = 0, duration = RESPAWN_DURATION_SECONDS }
+
+local function get_client_time()
+    return (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
+end
+
+local function reset_cooldown_slots()
+    for slot = 1, 4 do
+        cooldown_slots[slot].active = false
+        cooldown_slots[slot].start_time = 0
+        cooldown_slots[slot].duration = 0
+    end
+end
+
+local function get_entity_prop_number(ent, key)
+    if not ent then return 0 end
+    local raw = (ent.get and ent:get(key)) or ent[key] or (ent.properties and ent.properties[key])
+    return tonumber(raw) or 0
+end
+
+local function get_active_cc(ent)
+    if not ent then return nil, 0 end
+    local cur_tick = tonumber(loci._last_state_tick) or 0
+    local tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0
+    if tick_rate <= 0 then tick_rate = 30.0 end
+
+    local cc_checks = {
+        { key = "stunned_until",   label = "STUN" },
+        { key = "paralyzed_until", label = "PARALISIA" },
+        { key = "disarmed_until",  label = "DESARME" },
+    }
+
+    local active_label = nil
+    local max_remaining = 0
+    for _, cc in ipairs(cc_checks) do
+        local until_tick = get_entity_prop_number(ent, cc.key)
+        if until_tick > cur_tick then
+            local rem = (until_tick - cur_tick) / tick_rate
+            if not active_label then
+                active_label = cc.label
+            end
+            if rem > max_remaining then
+                max_remaining = rem
+            end
+        end
+    end
+
+    return active_label, max_remaining
+end
 
 function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
@@ -250,13 +467,26 @@ function love.load(arg)
         return
     end
 
-    connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
+    is_connection_lost = false
+    connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
+    connection_status = connected_status_label
+
+    if loci.netcode and os.getenv("LOCI_AUTO_EXPORT_CSV") == "1" then
+        loci.netcode.auto_export_csv_on_quit = true
+    end
 
     -- Inicializar placeholders padronizados de 32x32px
     init_placeholders()
 
     -- Pré-carregar sprites disponíveis em assets/sprites/ (padrão 32x32px)
     load_character_sprite("arya")
+
+    -- Registrar predição local com clamp nos limites da arena antes da reconciliação.
+    -- Nota: durante dash ativo (`dashing_until`), o SDK desvia para o ramo próprio e não chama
+    -- `_prediction_handler`; por isso o clamp pós-`loci.update` em `love.update` cobre o dash.
+    if loci.set_prediction_handler then
+        loci.set_prediction_handler(predict_local_movement)
+    end
 
     -- Event hooks
     loci.on_entity_spawned = function(entity)
@@ -327,86 +557,73 @@ function love.load(arg)
                     is_shield = true
                 })
             end
-        elseif key == "stunned_until" then
-            -- Detectar quando stun é aplicado ou removido (para o jogador local)
+        elseif key == "is_dead" then
             local my_entity = loci.get_my_entity()
-            if my_entity and entity.id == my_entity.id then
-                local new_stunned_until = tonumber(new_val) or 0
-                if new_stunned_until > 0 then
-                    -- Stun aplicado - assumir duração de 2 segundos (60 ticks a 30 Hz)
-                    cc_states.stunned.active = true
-                    cc_states.stunned.start_time = os.clock()
-                    cc_states.stunned.duration = 2.0  -- 60 ticks / 30 Hz = 2 segundos
-                else
-                    -- Stun removido - limpar estado
-                    cc_states.stunned.active = false
+            if entity and my_entity and entity.id == my_entity.id then
+                local dead = (new_val == true or new_val == "true")
+                if dead and not respawn_state.active then
+                    respawn_state.active = true
+                    respawn_state.start_time = get_client_time()
+                    respawn_state.duration = RESPAWN_DURATION_SECONDS
+                    reset_cooldown_slots()
+                elseif not dead then
+                    respawn_state.active = false
                 end
             end
-        elseif key == "disarmed_until" then
-            -- Detectar quando desarme é aplicado ou removido (para o jogador local)
+        elseif key == "character_name" then
             local my_entity = loci.get_my_entity()
-            if my_entity and entity.id == my_entity.id then
-                local new_disarmed_until = tonumber(new_val) or 0
-                if new_disarmed_until > 0 then
-                    -- Desarme aplicado - assumir duração de 2 segundos (60 ticks a 30 Hz)
-                    cc_states.disarmed.active = true
-                    cc_states.disarmed.start_time = os.clock()
-                    cc_states.disarmed.duration = 2.0  -- 60 ticks / 30 Hz = 2 segundos
-                else
-                    -- Desarme removido - limpar estado
-                    cc_states.disarmed.active = false
-                end
-            end
-        elseif key == "paralyzed_until" then
-            -- Detectar quando paralisia é aplicada ou removida (para o jogador local)
-            local my_entity = loci.get_my_entity()
-            if my_entity and entity.id == my_entity.id then
-                local new_paralyzed_until = tonumber(new_val) or 0
-                if new_paralyzed_until > 0 then
-                    -- Paralisia aplicada - assumir duração de 2 segundos
-                    cc_states.paralyzed.active = true
-                    cc_states.paralyzed.start_time = os.clock()
-                    cc_states.paralyzed.duration = 2.0
-                else
-                    -- Paralisia removida - limpar estado
-                    cc_states.paralyzed.active = false
-                end
+            if entity and my_entity and entity.id == my_entity.id then
+                reset_cooldown_slots()
             end
         end
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
-        local character_name = entity and entity:get("character_name", "default") or "default"
+        -- Ignora meta-ações (ex: troca de personagem)
+        if ability_id == 999 then
+            return
+        end
+
+        -- Alinha direção padrão (1, 0) com o servidor quando a mira for nula
+        local dx = tonumber(dir_x) or 0
+        local dy = tonumber(dir_y) or 0
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len > 0 then
+            dx = dx / len
+            dy = dy / len
+        else
+            dx, dy = 1, 0
+        end
+
+        local character_name = string.lower(tostring(entity and entity:get("character_name", "default") or "default"))
+        local skill_name = get_entity_skill_by_slot(entity, ability_id)
         local lifetime = 0.35
-        if ability_id == 3 then
+        if skill_name == "fireball" then
+            lifetime = 0.40
+        elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
             lifetime = 0.45 -- Whirlwind Dash
-        elseif ability_id == 4 then
+        elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
             lifetime = 0.60 -- Blade Throw
         end
 
-        -- Rastrear cooldown para o jogador local
+        -- Rastrear cooldown local pelo nome real da skill (ou fallback se skills_list ainda não chegou)
         local my_entity = loci.get_my_entity()
-        if my_entity and entity.id == my_entity.id then
-            -- Mapear ability_id para slot (baseado na configuração do personagem)
-            -- Space=1, Q=2, E=3, R=4
-            local slot = ability_id  -- Assumindo que ability_id 1-4 correspondem aos slots
+        if entity and my_entity and entity.id == my_entity.id then
+            local slot = ability_id
             if slot >= 1 and slot <= 4 then
-                -- Duração do cooldown em segundos (estimada baseada no servidor)
-                local cooldown_duration = 0
-                if slot == 1 then
-                    cooldown_duration = 1.0  -- Slash: ~30 ticks
-                elseif slot == 2 then
-                    cooldown_duration = 0.5  -- Fury Reward: ~15 ticks
-                elseif slot == 3 then
-                    cooldown_duration = 3.0  -- Whirlwind Dash: ~90 ticks
-                elseif slot == 4 then
-                    cooldown_duration = 14.0 -- Blade Throw: ~420 ticks
+                local resolved_skill = skill_name
+                if not resolved_skill then
+                    local raw_list = entity.get and entity:get("skills_list", "") or ""
+                    if raw_list == "" then
+                        local default_slots = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" }
+                        resolved_skill = (slot == 1 and character_name == "mage") and "fireball" or default_slots[slot]
+                    end
                 end
-
-                if cooldown_duration > 0 then
+                local meta = resolved_skill and SKILL_HUD_META[resolved_skill]
+                if meta and meta.cooldown and meta.cooldown > 0 then
                     cooldown_slots[slot].active = true
-                    cooldown_slots[slot].start_time = os.clock()
-                    cooldown_slots[slot].duration = cooldown_duration
+                    cooldown_slots[slot].start_time = get_client_time()
+                    cooldown_slots[slot].duration = meta.cooldown
                 end
             end
         end
@@ -414,9 +631,10 @@ function love.load(arg)
         table.insert(visual_fx, {
             x = entity and entity.x or 0,
             y = entity and entity.y or 0,
-            dir_x = dir_x,
-            dir_y = dir_y,
+            dir_x = dx,
+            dir_y = dy,
             ability_id = ability_id,
+            skill_name = skill_name,
             character_name = character_name,
             lifetime = lifetime,
             max_lifetime = lifetime
@@ -427,13 +645,27 @@ function love.load(arg)
         rejection_msg = reason
         rejection_timer = 2.5
     end
+
+    loci.on_connection_lost = function(reason)
+        print("[Client] Conexão instável ou perdida: " .. tostring(reason))
+        is_connection_lost = true
+        connection_status = "Reconnecting (" .. tostring(reason or "timeout") .. ")..."
+        movement_sync:on_connection_lost()
+    end
+
+    loci.on_reconnected = function(entity_id)
+        print("[Client] Reconexão estabelecida com sucesso! Entity ID: " .. tostring(entity_id))
+        is_connection_lost = false
+        if connected_status_label ~= "" then
+            connection_status = connected_status_label
+        end
+        movement_sync:on_reconnected()
+    end
 end
 
-local last_sent_dx, last_sent_dy = 0, 0
-
-local function update_movement()
+local function read_move_input()
     local dx, dy = 0, 0
-    
+
     -- Prioridade: joystick virtual (se ativo e visível) > teclado
     if show_touch_controls and virtual_joystick.is_move_active() then
         dx, dy = virtual_joystick.get_move_vector()
@@ -444,11 +676,14 @@ local function update_movement()
         if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
     end
 
-    if dx ~= last_sent_dx or dy ~= last_sent_dy then
-        last_sent_dx = dx
-        last_sent_dy = dy
-        loci.send_move(dx, dy)
-    end
+    return dx, dy
+end
+
+local function update_movement(my_entity)
+    local dx, dy = read_move_input()
+    local cur_tick = tonumber(loci._last_state_tick) or 0
+    local now = (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
+    movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
 end
 
 function love.update(dt)
@@ -457,7 +692,13 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
-        update_movement()
+        if is_connection_lost then
+            is_connection_lost = false
+        end
+        if connected_status_label ~= "" and connection_status:find("^Reconnecting") then
+            connection_status = connected_status_label
+        end
+        update_movement(my_entity)
 
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
         local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
@@ -512,15 +753,22 @@ function love.update(dt)
                 virtual_joystick.pop_release_events()
             end
         end
-        
-        -- Direct camera binding eliminates lag jitter between camera and player
-        cam_x = my_entity.x * VISUAL_SCALE
-        cam_y = my_entity.y * VISUAL_SCALE
+    else
+        movement_sync:on_entity_missing()
     end
 
-    -- Update visual orientation and direction for all entities
+    -- Passagem única de clamp por frame (cobre dash local — cujo ramo no SDK ignora
+    -- _prediction_handler — além de extrapolação de remotas em jitter) + animação e câmera.
+    local clamped_my_entity = false
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
+        local is_local = my_entity and (ent.id == my_entity.id)
+        if is_local then
+            clamped_my_entity = true
+        end
+        if should_clamp_entity(ent) then
+            clamp_entity_to_arena(ent, is_local, is_local)
+        end
         local is_moving = false
         local vx = ent.vx or 0
         local vy = ent.vy or 0
@@ -529,6 +777,15 @@ function love.update(dt)
             is_moving = true
         end
         procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
+    end
+
+    if my_entity then
+        if not clamped_my_entity and should_clamp_entity(my_entity) then
+            clamp_entity_to_arena(my_entity, true, true)
+        end
+        -- Direct camera binding eliminates lag jitter between camera and player
+        cam_x = my_entity.x * VISUAL_SCALE
+        cam_y = my_entity.y * VISUAL_SCALE
     end
 
     -- Update rejection message timer
@@ -590,9 +847,45 @@ local function cast_ability_at_mouse(ability_id)
     loci.send_action_at_position(ability_id, aim_x, aim_y)
 end
 
+local LATENCY_PRESETS = { 0, 0.050, 0.100 }
+local PACKET_LOSS_PRESETS = { 0, 0.10, 0.25 }
+
+local function cycle_netcode_preset(field, presets)
+    if not loci.netcode then return 0 end
+    local cur = tonumber(loci.netcode[field]) or 0
+    for i, val in ipairs(presets) do
+        if math.abs(cur - val) < 1e-4 then
+            local next_val = presets[(i % #presets) + 1]
+            loci.netcode[field] = next_val
+            return next_val
+        end
+    end
+    local next_val = presets[2] or 0
+    loci.netcode[field] = next_val
+    return next_val
+end
+
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
+    elseif key == "f4" then
+        if loci.export_network_stats_csv then
+            local path = loci.export_network_stats_csv()
+            if path then
+                print("[Client] Telemetria exportada via F4: " .. tostring(path))
+            else
+                print("[Client] Falha ao exportar telemetria via F4")
+            end
+        end
+    elseif key == "f5" then
+        -- Alternar latência simulada por sentido (0ms -> 50ms -> 100ms -> 0ms)
+        local next_lat = cycle_netcode_preset("simulate_latency", LATENCY_PRESETS)
+        local lat_ms = math.floor(next_lat * 1000 + 0.5)
+        print(string.format("[Client] Latência simulada ajustada para: %d ms/sentido (~+%d ms RTT)", lat_ms, lat_ms * 2))
+    elseif key == "f6" then
+        -- Alternar perda de pacotes simulada (0% -> 10% -> 25% -> 0%)
+        local next_loss = cycle_netcode_preset("simulate_packet_loss", PACKET_LOSS_PRESETS)
+        print(string.format("[Client] Perda simulada ajustada para: %d%%", math.floor(next_loss * 100 + 0.5)))
     elseif key == "c" then
         show_character_sheet = not show_character_sheet
     elseif key == "t" or key == "f1" then
@@ -623,6 +916,7 @@ function love.keypressed(key)
             print("[Client] Solicitando troca de personagem...")
             -- Servidor cicla automaticamente sem precisar do índice
             loci.send_action(999, 0, 0)
+            movement_sync:mark_needs_resync()
         else
             print("[Client] Não conectado - não é possível trocar personagem")
         end
@@ -683,190 +977,222 @@ end
 -- HUD Functions
 -- ============================================================================
 
--- Desenha barra de HP/Mana/Escudo fixa
+-- Desenha barra de HP/Mana/Escudo fixa e status de conexão
 local function draw_combat_hud(my_entity)
-    if not my_entity then return end
-
-    local hp = tonumber(my_entity:get("hp", 100)) or 100
-    local max_hp = tonumber(my_entity:get("max_hp", 100)) or 100
-    local mana = tonumber(my_entity:get("mana", 100)) or 100
-    local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
-    local shield = tonumber(my_entity:get("shield", 0)) or 0
-
-    local bar_width = 200
-    local bar_height = 12
-    local x = 20
-    local y = 20
-
-    -- Barra de HP
-    local hp_pct = math.max(0, math.min(1, max_hp > 0 and (hp / max_hp) or 0))
-    love.graphics.setColor(0.2, 0.1, 0.1, 0.8)
-    love.graphics.rectangle("fill", x, y, bar_width, bar_height)
-    love.graphics.setColor(0.85, 0.2, 0.2, 1)
-    love.graphics.rectangle("fill", x, y, bar_width * hp_pct, bar_height)
-    love.graphics.setColor(1, 1, 1, 0.8)
+    local prev_font = love.graphics.getFont()
     love.graphics.setFont(font_hud_small)
-    love.graphics.print(string.format("HP: %d/%d", hp, max_hp), x + bar_width + 10, y + 2)
 
-    -- Barra de Escudo (se houver)
-    if shield > 0 then
-        y = y + 15
+    local sw, sh = GAME_WIDTH, GAME_HEIGHT
+
+    if my_entity then
+        local hp = tonumber(my_entity:get("hp", 100)) or 100
+        local max_hp = tonumber(my_entity:get("max_hp", 100)) or 100
+        local mana = tonumber(my_entity:get("mana", 100)) or 100
+        local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
+        local shield = tonumber(my_entity:get("shield", 0)) or 0
+
+        local bar_width = 200
+        local bar_height = 12
+        local x = 20
+        local y = 20
+
+        -- Barra de HP
+        local hp_pct = math.max(0, math.min(1, max_hp > 0 and (hp / max_hp) or 0))
+        love.graphics.setColor(0.2, 0.1, 0.1, 0.8)
+        love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+        love.graphics.setColor(0.85, 0.2, 0.2, 1)
+        love.graphics.rectangle("fill", x, y, bar_width * hp_pct, bar_height)
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.print(string.format("HP: %d/%d", hp, max_hp), x + bar_width + 10, y - 1)
+
+        -- Barra de Escudo (se houver)
+        if shield > 0 then
+            y = y + 16
+            local shield_pct = math.max(0.05, math.min(1, max_hp > 0 and (shield / max_hp) or 1))
+            love.graphics.setColor(0.1, 0.1, 0.2, 0.8)
+            love.graphics.rectangle("fill", x, y, bar_width, bar_height)
+            love.graphics.setColor(0.4, 0.6, 0.95, 1)
+            love.graphics.rectangle("fill", x, y, bar_width * shield_pct, bar_height)
+            love.graphics.setColor(1, 1, 1, 0.85)
+            love.graphics.print(string.format("Escudo: %d", shield), x + bar_width + 10, y - 1)
+        end
+
+        -- Barra de Mana
+        y = y + 16
+        local mana_pct = math.max(0, math.min(1, max_mana > 0 and (mana / max_mana) or 0))
         love.graphics.setColor(0.1, 0.1, 0.2, 0.8)
         love.graphics.rectangle("fill", x, y, bar_width, bar_height)
-        love.graphics.setColor(0.4, 0.4, 0.9, 1)
-        love.graphics.rectangle("fill", x, y, bar_width, bar_height)
-        love.graphics.setColor(1, 1, 1, 0.8)
-        love.graphics.print(string.format("Escudo: %d", shield), x + bar_width + 10, y + 2)
-        y = y + 15
-    else
-        y = y + 15
+        love.graphics.setColor(0.2, 0.4, 0.9, 1)
+        love.graphics.rectangle("fill", x, y, bar_width * mana_pct, bar_height)
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.print(string.format("Mana: %d/%d", mana, max_mana), x + bar_width + 10, y - 1)
     end
 
-    -- Barra de Mana
-    local mana_pct = math.max(0, math.min(1, max_mana > 0 and (mana / max_mana) or 0))
-    love.graphics.setColor(0.1, 0.1, 0.2, 0.8)
-    love.graphics.rectangle("fill", x, y, bar_width, bar_height)
-    love.graphics.setColor(0.2, 0.4, 0.9, 1)
-    love.graphics.rectangle("fill", x, y, bar_width * mana_pct, bar_height)
-    love.graphics.setColor(1, 1, 1, 0.8)
-    love.graphics.print(string.format("Mana: %d/%d", mana, max_mana), x + bar_width + 10, y + 2)
-
-    -- Status de conexão e controles
-    local sw, sh = GAME_WIDTH, GAME_HEIGHT
+    -- Status de conexão e controles (sempre visível, mesmo antes do spawn)
     love.graphics.setColor(0, 0, 0, 0.55)
-    love.graphics.rectangle("fill", 10, sh - 60, 400, 50, 6, 6)
+    love.graphics.rectangle("fill", 10, sh - 62, 600, 52, 6, 6)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print("Loci Arena", 20, sh - 50)
+    love.graphics.print("Loci Arena", 20, sh - 55)
     love.graphics.setColor(0.7, 0.7, 0.85, 1)
-    love.graphics.print(connection_status, 20, sh - 35)
-    love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("WASD: Mover | TAB: Placar | K: Trocar | C: Ficha", 20, sh - 20)
+    love.graphics.print(connection_status, 20, sh - 38)
+    love.graphics.setColor(1, 1, 1, 0.75)
+    love.graphics.print("WASD: Mover | Espaço/Q/E/R: Skills | TAB: Placar | K: Trocar | T: Touch UI | C: Ficha", 20, sh - 22)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
-        love.graphics.printf(rejection_msg, 0, sh - 80, sw, "center")
+        love.graphics.printf(rejection_msg, 0, 65, sw, "center")
     end
+
+    if prev_font then
+        love.graphics.setFont(prev_font)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
 end
 
--- Desenha hotbar de habilidades
+-- Desenha hotbar de habilidades com cooldown, custo de mana, fúria e CC reais
 local function draw_hotbar(my_entity)
     if not my_entity then
-        return  -- Não desenha se entidade não existe (antes do spawn)
+        return
     end
 
-    local slot_width = 50
-    local slot_height = 50
+    local prev_font = love.graphics.getFont()
+    local prev_line_width = love.graphics.getLineWidth and love.graphics.getLineWidth() or 1
+
+    local slot_width = 62
+    local slot_height = 54
     local padding = 10
     local start_x = 20
-    local start_y = 100
+    local start_y = 92
 
-    local skills = {
-        { key = "Space", label = "1", slot = 1 },
-        { key = "Q", label = "2", slot = 2 },
-        { key = "E", label = "3", slot = 3 },
-        { key = "R", label = "4", slot = 4 }
-    }
+    local current_time = get_client_time()
+    local cc_label, cc_remaining = get_active_cc(my_entity)
 
-    local current_time = os.clock()
-
-    -- Atualizar estados de CC baseado em tempo local
-    local is_stunned = false
-    local is_paralyzed = false
-    local is_disarmed = false
-
-    -- Verificar se stunned expirou
-    if cc_states.stunned.active then
-        if current_time - cc_states.stunned.start_time >= cc_states.stunned.duration then
-            cc_states.stunned.active = false
-        else
-            is_stunned = true
-        end
+    if cc_label then
+        love.graphics.setFont(font_hud_small)
+        love.graphics.setColor(0.95, 0.3, 0.3, 0.95)
+        love.graphics.print(string.format("CC ATIVO: %s (%.1fs)", cc_label, cc_remaining), start_x, start_y - 18)
     end
 
-    -- Verificar se disarmed expirou
-    if cc_states.disarmed.active then
-        if current_time - cc_states.disarmed.start_time >= cc_states.disarmed.duration then
-            cc_states.disarmed.active = false
-        else
-            is_disarmed = true
-        end
-    end
-
-    -- Verificar se paralyzed expirou
-    if cc_states.paralyzed.active then
-        if current_time - cc_states.paralyzed.start_time >= cc_states.paralyzed.duration then
-            cc_states.paralyzed.active = false
-        else
-            is_paralyzed = true
-        end
-    end
-
-    local is_cc = is_stunned or is_paralyzed or is_disarmed
-
-    -- Verificar Fúria (aceita booleano ou string)
     local fury_value = my_entity:get("fury_active")
     local fury_active = fury_value == true or fury_value == "true"
 
-    -- Verificar Mana (para feedback visual quando mana < 30%)
     local mana = tonumber(my_entity:get("mana", 0)) or 0
-    local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
-    local mana_pct = max_mana > 0 and (mana / max_mana) or 0
-    local is_low_mana = mana_pct < 0.3  -- Menos de 30% de mana
+    local raw_skills_list = my_entity.get and my_entity:get("skills_list", "") or ""
+    local char_name = string.lower(tostring((my_entity.get and my_entity:get("character_name", "default")) or "default"))
 
-    for i, skill in ipairs(skills) do
-        local x = start_x + (i - 1) * (slot_width + padding)
+    for _, entry in ipairs(HOTBAR_SLOTS) do
+        local slot = entry.slot
+        local x = start_x + (slot - 1) * (slot_width + padding)
         local y = start_y
 
-        -- Verificar cooldown do slot usando tempo local
-        local is_on_cooldown = false
-        if cooldown_slots[skill.slot].active then
-            if current_time - cooldown_slots[skill.slot].start_time >= cooldown_slots[skill.slot].duration then
-                cooldown_slots[skill.slot].active = false
-            else
-                is_on_cooldown = true
-            end
+        local skill_name = get_entity_skill_by_slot(my_entity, slot)
+        if not skill_name and raw_skills_list == "" and slot == 1 then
+            skill_name = (char_name == "mage") and "fireball" or "slash"
         end
 
-        -- Fundo do slot
-        if is_cc then
-            love.graphics.setColor(0.5, 0.2, 0.2, 0.8)  -- Vermelho se CC
-        elseif is_on_cooldown then
-            love.graphics.setColor(0.3, 0.3, 0.4, 0.8)  -- Cinza se em cooldown
-        elseif fury_active then
-            love.graphics.setColor(0.8, 0.4, 0.1, 0.8)  -- Laranja se Fúria
-        elseif is_low_mana then
-            love.graphics.setColor(0.4, 0.3, 0.3, 0.8)  -- Cinza escuro se pouca mana
+        if not skill_name then
+            -- Slot não disponível para o herói atual
+            love.graphics.setColor(0.10, 0.10, 0.14, 0.55)
+            love.graphics.rectangle("fill", x, y, slot_width, slot_height, 4)
+            love.graphics.setColor(0.28, 0.28, 0.35, 0.45)
+            love.graphics.setLineWidth(1)
+            love.graphics.rectangle("line", x, y, slot_width, slot_height, 4)
+            love.graphics.setFont(font_hud_small)
+            love.graphics.setColor(0.55, 0.55, 0.65, 0.6)
+            love.graphics.print("-", x + slot_width / 2 - 3, y + 14)
+            love.graphics.print(entry.key, x + 5, y + slot_height - 17)
         else
-            love.graphics.setColor(0.15, 0.15, 0.2, 0.8)  -- Normal
+            local meta = SKILL_HUD_META[skill_name] or { label = skill_name, cooldown = 0, mana_cost = 0 }
+            local cd_remaining = 0
+            if cooldown_slots[slot].active then
+                local rem = cooldown_slots[slot].duration - (current_time - cooldown_slots[slot].start_time)
+                if rem <= 0 then
+                    cooldown_slots[slot].active = false
+                else
+                    cd_remaining = rem
+                end
+            end
+
+            local is_on_cooldown = cd_remaining > 0
+            local no_mana = mana < (meta.mana_cost or 0)
+
+            -- Fundo do slot
+            if cc_label then
+                love.graphics.setColor(0.55, 0.18, 0.18, 0.85)
+            elseif is_on_cooldown then
+                love.graphics.setColor(0.25, 0.25, 0.35, 0.85)
+            elseif no_mana then
+                love.graphics.setColor(0.25, 0.20, 0.28, 0.85)
+            elseif fury_active then
+                love.graphics.setColor(0.80, 0.40, 0.10, 0.85)
+            else
+                love.graphics.setColor(0.15, 0.15, 0.22, 0.85)
+            end
+            love.graphics.rectangle("fill", x, y, slot_width, slot_height, 4)
+
+            -- Borda (destaque dourado enquanto Fúria está ativa)
+            if fury_active then
+                love.graphics.setColor(1.0, 0.65, 0.15, 0.95)
+            elseif cc_label then
+                love.graphics.setColor(0.95, 0.30, 0.30, 0.90)
+            else
+                love.graphics.setColor(0.45, 0.45, 0.55, 0.70)
+            end
+            love.graphics.setLineWidth(2)
+            love.graphics.rectangle("line", x, y, slot_width, slot_height, 4)
+
+            -- Nome da habilidade e estado (cooldown / falta de mana / pronta)
+            love.graphics.setFont(font_hud_small)
+            love.graphics.setColor(1, 1, 1, is_on_cooldown and 0.65 or 0.95)
+            love.graphics.print(meta.label, x + 5, y + 5)
+
+            if is_on_cooldown then
+                love.graphics.setColor(0.95, 0.85, 0.4, 1)
+                love.graphics.print(string.format("%.1fs", cd_remaining), x + 5, y + 20)
+            elseif no_mana then
+                love.graphics.setColor(0.65, 0.75, 1.0, 0.95)
+                love.graphics.print("MANA", x + 5, y + 20)
+            elseif fury_active and skill_name == "fury_reward" then
+                love.graphics.setColor(1.0, 0.95, 0.5, 1)
+                love.graphics.print("PRONTA!", x + 5, y + 20)
+            end
+
+            -- Tecla
+            love.graphics.setColor(0.8, 0.8, 0.9, 0.85)
+            love.graphics.print(entry.key, x + 5, y + slot_height - 17)
         end
-        love.graphics.rectangle("fill", x, y, slot_width, slot_height, 4)
-
-        -- Borda
-        love.graphics.setColor(0.4, 0.4, 0.5, 0.6)
-        love.graphics.setLineWidth(2)
-        love.graphics.rectangle("line", x, y, slot_width, slot_height, 4)
-
-        -- Número do slot
-        love.graphics.setColor(1, 1, 1, 0.9)
-        love.graphics.setFont(font_hud_normal)
-        love.graphics.print(skill.label, x + slot_width / 2 - 5, y + slot_height / 2 - 5)
-
-        -- Tecla
-        love.graphics.setFont(font_hud_small)
-        love.graphics.print(skill.key, x + 5, y + slot_height - 15)
     end
+
+    if prev_font then
+        love.graphics.setFont(prev_font)
+    end
+    love.graphics.setLineWidth(prev_line_width)
+    love.graphics.setColor(1, 1, 1, 1)
 end
 
--- Desenha contador de respawn
+-- Desenha contador regressivo de respawn
 local function draw_respawn_timer()
+    local prev_font = love.graphics.getFont()
     local sw, sh = GAME_WIDTH, GAME_HEIGHT
-    local x = sw / 2
-    local y = sh / 2
+    local box_w, box_h = 260, 76
+    local bx = (sw - box_w) / 2
+    local by = (sh - box_h) / 2
 
-    love.graphics.setColor(0.8, 0.2, 0.2, 1)
+    local remaining = math.max(0, respawn_state.duration - (get_client_time() - respawn_state.start_time))
+
+    love.graphics.setColor(0.05, 0.05, 0.08, 0.85)
+    love.graphics.rectangle("fill", bx, by, box_w, box_h, 8, 8)
+    love.graphics.setColor(0.85, 0.2, 0.2, 1)
     love.graphics.setFont(font_hud_normal)
-    love.graphics.print("YOU DIED", x - 40, y - 20)
-    love.graphics.print("Respawning in...", x - 50, y + 10)
+    love.graphics.printf("YOU DIED", 0, by + 12, sw, "center")
+    love.graphics.setColor(1, 1, 1, 0.95)
+    love.graphics.setFont(font_hud_small)
+    love.graphics.printf(string.format("Respawn em %.1fs", remaining), 0, by + 44, sw, "center")
+
+    if prev_font then
+        love.graphics.setFont(prev_font)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
 end
 
 function love.draw()
@@ -900,32 +1226,60 @@ function love.draw()
         local fx_start_x = fx.x * VISUAL_SCALE
         local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
 
-        -- Mapeamento de VFX por personagem e ability_id
-        local char_name = fx.character_name or "default"
+        -- Mapeamento de VFX desacoplado por skill_name (com fallback por ability_id / character_name)
+        local char_name = string.lower(tostring(fx.character_name or "default"))
+        local skill_name = fx.skill_name
+        if not skill_name then
+            if fx.ability_id == 1 then
+                skill_name = (char_name == "mage") and "fireball" or "slash"
+            elseif fx.ability_id == 2 then
+                skill_name = "fury_reward"
+            elseif fx.ability_id == 3 then
+                skill_name = "whirlwind_dash"
+            elseif fx.ability_id == 4 then
+                skill_name = "blade_throw"
+            end
+        end
 
-        if fx.ability_id == 1 and char_name == "mage" then
-            -- Skill 1 (Fireball): Bola de fogo viajando
-            local max_dist = 200
-            local travel_dist = max_dist * math.min(1.0, inv_prog * 2.0)
+        if skill_name == "fireball" then
+            -- Fireball: projétil até range * 0.7 (210px) seguido de explosão na área real (aoe_radius = 60px)
+            local max_dist = 210
+            local travel_t = math.min(1.0, inv_prog / 0.5)
+            local travel_dist = max_dist * travel_t
             local fireball_x = fx_start_x + fx.dir_x * travel_dist
             local fireball_y = fx_start_y + fx.dir_y * travel_dist
-            local radius = 30 * (0.8 + 0.5 * inv_prog)
 
-            -- Núcleo da bola de fogo
-            love.graphics.setColor(1.0, 0.6, 0.1, progress * 0.9)
-            love.graphics.circle("fill", fireball_x, fireball_y, radius)
-            love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.7)
-            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
-            love.graphics.setColor(1.0, 1.0, 0.8, progress * 0.5)
-            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
+            if inv_prog <= 0.5 then
+                local radius = 18 + 8 * travel_t
+                -- Rastro de fogo
+                love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.4)
+                love.graphics.setLineWidth(3)
+                love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
 
-            -- Rastro de fogo
-            love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.3)
-            love.graphics.setLineWidth(3)
-            love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
+                -- Núcleo da bola de fogo em voo
+                love.graphics.setColor(1.0, 0.55, 0.1, progress * 0.9)
+                love.graphics.circle("fill", fireball_x, fireball_y, radius)
+                love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.75)
+                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
+                love.graphics.setColor(1.0, 1.0, 0.85, progress * 0.6)
+                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
+            else
+                -- Explosão expansiva até o raio real da AoE (60px)
+                local blast_t = (inv_prog - 0.5) / 0.5
+                local blast_alpha = 1.0 - blast_t
+                local blast_r = 20 + 40 * blast_t
 
-        elseif fx.ability_id == 1 then
-            -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro (Arya/Default)
+                love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
+                love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
+                love.graphics.setColor(1.0, 0.75, 0.2, blast_alpha * 0.55)
+                love.graphics.circle("fill", fireball_x, fireball_y, blast_r * 0.55)
+                love.graphics.setColor(1.0, 0.35, 0.05, blast_alpha * 0.9)
+                love.graphics.setLineWidth(3)
+                love.graphics.circle("line", fireball_x, fireball_y, blast_r)
+            end
+
+        elseif skill_name == "slash" then
+            -- Slash: Arco cortante frontal metálico/azul claro
             local angle = math.atan2(fx.dir_y, fx.dir_x)
             local radius = 45 * (0.8 + 0.4 * inv_prog)
             love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
@@ -935,8 +1289,8 @@ function love.draw()
             love.graphics.setLineWidth(8)
             love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
 
-        elseif fx.ability_id == 2 then
-            -- Skill 2 (Fury Reward): Impacto carmesim/fogo com onda de choque
+        elseif skill_name == "fury_reward" then
+            -- Fury Reward: Impacto carmesim/fogo com onda de choque
             local hit_dist = 60 -- (7.5 unidades no mundo * VISUAL_SCALE = 60px na tela)
             local hit_x = fx_start_x + fx.dir_x * hit_dist
             local hit_y = fx_start_y + fx.dir_y * hit_dist
@@ -947,11 +1301,15 @@ function love.draw()
             love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
             love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
 
-        elseif fx.ability_id == 3 then
-            -- Skill 3 (Whirlwind Dash): Círculo 360º de corte giratório dourado com lâminas
-            local dash_dist = 160 * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades * VISUAL_SCALE)
-            local curr_x = fx_start_x + fx.dir_x * dash_dist
-            local curr_y = fx_start_y + fx.dir_y * dash_dist
+        elseif skill_name == "whirlwind_dash" then
+            -- Whirlwind Dash: Círculo 360º de corte giratório dourado com lâminas
+            local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
+            local dash_world_dist = (160 / VISUAL_SCALE) * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades no mundo)
+            local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
+            local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
+            local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
+            local curr_x = clamped_wx * VISUAL_SCALE
+            local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
             local r = 65 * (0.7 + 0.5 * inv_prog)
             local spin_angle = inv_prog * math.pi * 5
             love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
@@ -967,8 +1325,8 @@ function love.draw()
                 )
             end
 
-        elseif fx.ability_id == 4 then
-            -- Skill 4 (Blade Throw): Espada viajando até o alvo + impacto expansivo de Stun
+        elseif skill_name == "blade_throw" then
+            -- Blade Throw: Espada viajando até o alvo + impacto expansivo de Stun
             local max_dist = 260
             local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
             local blade_x = fx_start_x + fx.dir_x * travel_dist
@@ -1120,9 +1478,18 @@ function love.draw()
     draw_hotbar(my_entity)
 
     -- 3. Respawn Timer (se morto)
-    local is_dead = my_entity and (my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true"))
+    local raw_is_dead = my_entity and ((my_entity.get and my_entity:get("is_dead")) or my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"]))
+    local is_dead = raw_is_dead == true or raw_is_dead == "true"
     if is_dead then
+        if not respawn_state.active then
+            respawn_state.active = true
+            respawn_state.start_time = get_client_time()
+            respawn_state.duration = RESPAWN_DURATION_SECONDS
+            reset_cooldown_slots()
+        end
         draw_respawn_timer()
+    else
+        respawn_state.active = false
     end
 
     -- 4. KDA UI
@@ -1141,6 +1508,22 @@ function love.draw()
     -- 5. Virtual Joysticks (quando ativos e visíveis)
     if show_touch_controls then
         virtual_joystick.draw()
+    end
+
+    -- 6. Banner de Perda de Conexão / Reconexão (ADR 0002)
+    if is_connection_lost then
+        local banner_w = 340
+        local banner_h = 36
+        local bx = (sw - banner_w) / 2
+        local by = 16
+        love.graphics.setColor(0.85, 0.15, 0.15, 0.92)
+        love.graphics.rectangle("fill", bx, by, banner_w, banner_h, 6, 6)
+        love.graphics.setColor(0.95, 0.35, 0.35, 0.95)
+        love.graphics.setLineWidth(1.5)
+        love.graphics.rectangle("line", bx, by, banner_w, banner_h, 6, 6)
+        love.graphics.setLineWidth(1)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.printf("Conexão instável / Reconectando...", 0, by + 9, sw, "center")
     end
 
     push:finish()
@@ -1188,6 +1571,39 @@ function draw_arena_grid()
     love.graphics.print("(0, 0)", 6, 6)
 end
 
+local TEAM_SHADOW_COLORS = {
+    ["1"] = {
+        alive = { fill = { 0.15, 0.55, 1.0, 0.40 }, ring = { 0.35, 0.75, 1.0, 0.85 } },
+        dead = { fill = { 0.2, 0.5, 0.85, 0.18 }, ring = { 0.35, 0.65, 0.95, 0.35 } },
+    },
+    ["2"] = {
+        alive = { fill = { 1.0, 0.22, 0.22, 0.40 }, ring = { 1.0, 0.45, 0.45, 0.85 } },
+        dead = { fill = { 0.85, 0.25, 0.25, 0.18 }, ring = { 0.95, 0.35, 0.35, 0.35 } },
+    },
+    neutral = {
+        alive = { fill = { 0.5, 0.5, 0.5, 0.30 }, ring = { 0.7, 0.7, 0.7, 0.60 } },
+        dead = { fill = { 0.5, 0.5, 0.5, 0.15 }, ring = { 0.7, 0.7, 0.7, 0.25 } },
+    },
+}
+
+local function draw_team_shadow(px, py, rx, ry, team, is_dead)
+    -- 1. Sombra base escura para ancoragem e profundidade física no chão da arena
+    love.graphics.setColor(0, 0, 0, is_dead and 0.20 or 0.35)
+    love.graphics.ellipse("fill", px, py, rx, ry)
+
+    -- 2. Preenchimento translúcido e anel de destaque por time ("1" = Azul, "2" = Vermelho, nil = Neutro)
+    local palette = (team and TEAM_SHADOW_COLORS[team]) or TEAM_SHADOW_COLORS.neutral
+    local style = is_dead and palette.dead or palette.alive
+
+    love.graphics.setColor(style.fill[1], style.fill[2], style.fill[3], style.fill[4])
+    love.graphics.ellipse("fill", px, py, rx, ry)
+
+    love.graphics.setColor(style.ring[1], style.ring[2], style.ring[3], style.ring[4])
+    love.graphics.setLineWidth(1.5)
+    love.graphics.ellipse("line", px, py, rx, ry)
+    love.graphics.setLineWidth(1)
+end
+
 function draw_entity(ent, is_me)
     local radius = 2 * VISUAL_SCALE
     local px = ent.x * VISUAL_SCALE
@@ -1218,8 +1634,9 @@ function draw_entity(ent, is_me)
     -- Sombra dos pés proporcional ao modelo de 32px ancorada na base (px, py)
     local shadow_radius_x = 13 * scale
     local shadow_radius_y = 4.5 * scale
-    love.graphics.setColor(0, 0, 0, 0.4)
-    love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+    local raw_team = ent.team or (ent.properties and ent.properties["team"])
+    local team = raw_team ~= nil and tostring(raw_team) or nil
+    draw_team_shadow(px, py, shadow_radius_x, shadow_radius_y, team, is_dead)
 
     -- Pivô nos pés (base central inferior: ox = 16, oy = 32 para modelos 32x32)
     local ox = sprite_w / 2
@@ -1334,27 +1751,58 @@ function draw_entity(ent, is_me)
     end
 end
 
-function draw_hud(sw, sh, my_entity)
-    -- HUD antiga removida - substituída por draw_combat_hud e draw_hotbar
-end
-
 function draw_debug(sw, sh)
-    love.graphics.setColor(0, 0, 0, 0.75)
-    love.graphics.rectangle("fill", sw - 240, 10, 230, 140, 6, 6)
+    local box_w = 275
+    local box_h = 258
+    love.graphics.setColor(0, 0, 0, 0.80)
+    love.graphics.rectangle("fill", sw - (box_w + 10), 10, box_w, box_h, 6, 6)
+    love.graphics.setColor(0.2, 0.8, 0.4, 0.85)
+    love.graphics.setLineWidth(1)
+    love.graphics.rectangle("line", sw - (box_w + 10), 10, box_w, box_h, 6, 6)
 
     local ent_count = #loci.get_entities()
     local me = loci.get_my_entity()
-    local tick_rate = loci.get_server_tick_rate and loci.get_server_tick_rate() or 30
+
+    -- Métricas de Telemetria do SDK (Zero-GC, Card #70)
+    local ping = (loci.get_ping and loci.get_ping()) or 0
+    local jitter = (loci.get_jitter and loci.get_jitter()) or 0
+    local loss = (loci.get_packet_loss and loci.get_packet_loss()) or 0
+    local measured_hz = (loci.get_tick_hz and loci.get_tick_hz()) or 0
+    local tick_hz = (measured_hz > 0 and measured_hz) or (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30
+
+    local lx = sw - box_w
+    local cur_y = 20
 
     love.graphics.setColor(0.4, 1.0, 0.5, 1)
-    love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), sw - 225, 20)
-    love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), sw - 225, 40)
-    love.graphics.print(string.format("Entities: %d", ent_count), sw - 225, 60)
-    love.graphics.print(string.format("Tick Rate: %d Hz", tick_rate), sw - 225, 80)
+    love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Entities: %d", ent_count), lx, cur_y); cur_y = cur_y + 18
     if me then
-        love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 100)
+        love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), lx, cur_y); cur_y = cur_y + 18
     end
-    love.graphics.print(string.format("Touch UI: %s [T]", show_touch_controls and "ON" or "OFF"), sw - 225, 120)
+    love.graphics.print(string.format("Touch UI: %s [T]", show_touch_controls and "ON" or "OFF"), lx, cur_y); cur_y = cur_y + 18
+
+    -- Seção de Telemetria de Rede (RFC 3550 & ADR 0002)
+    cur_y = cur_y + 4
+    love.graphics.setColor(0.3, 0.85, 1.0, 1)
+    love.graphics.print(string.format("Ping: %d ms", math.floor(ping + 0.5)), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Jitter: %.1f ms", jitter), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Loss: %.1f%%", loss), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Tick Rate: %.1f Hz", tick_hz), lx, cur_y); cur_y = cur_y + 18
+
+    -- Atalhos de Diagnóstico
+    cur_y = cur_y + 4
+    love.graphics.setColor(0.85, 0.85, 0.4, 1)
+    local sim_lat = (loci.netcode and loci.netcode.simulate_latency) or 0
+    local sim_loss = (loci.netcode and loci.netcode.simulate_packet_loss) or 0
+    if sim_lat > 0 or sim_loss > 0 then
+        local lat_ms = math.floor(sim_lat * 1000 + 0.5)
+        love.graphics.print(string.format("Sim: %dms/way (+%dms RTT) | %d%%", lat_ms, lat_ms * 2, math.floor(sim_loss * 100 + 0.5)), lx, cur_y); cur_y = cur_y + 18
+    else
+        love.graphics.print("Sim: OFF [F5:Lat F6:Loss]", lx, cur_y); cur_y = cur_y + 18
+    end
+    love.graphics.setColor(0.7, 0.7, 0.7, 1)
+    love.graphics.print("Export CSV: [F4]", lx, cur_y)
 end
 
 function draw_character_sheet(sw, sh, my_entity)
@@ -1475,5 +1923,9 @@ end
 
 function love.quit()
     print("[Client] Closing connection...")
+    if loci.quit then
+        loci.quit()
+    end
     loci.disconnect("Client exiting")
+    return false
 end
