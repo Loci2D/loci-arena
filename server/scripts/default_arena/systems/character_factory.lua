@@ -171,6 +171,7 @@ function CharacterFactory.create_character(entity_id, character_name)
     Loci.Commands.set_property(entity_id, "shield", "0")
     Loci.Commands.set_property(entity_id, "shield_active", "0")
     Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
+    Loci.Commands.set_property(entity_id, "fury_active", "false")
 
     -- 3. Lista de habilidades
     local skills_list = char_data.skills or {}
@@ -220,7 +221,7 @@ function CharacterFactory.on_entity_die(dead_entity_id)
             local char_name = Loci.get_entity_property(entity_id, "character_name")
             
             -- Passiva da Arya: Protetora Tática / Adrenalina
-            if string.lower(char_name or "") == "arya" and team == dead_team then
+            if string.lower(char_name or "") == "arya" and team and team == dead_team then
                 -- 1 segundo de paralisia = 30 ticks
                 Loci.Commands.set_property(entity_id, "paralyzed_until", tostring(current_tick + 30))
                 -- Ativa a Fúria
