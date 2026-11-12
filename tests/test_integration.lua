@@ -60,6 +60,7 @@ _G.love = {
         getLineWidth = function() return _G.love.graphics._line_width end,
         clear = function() end,
         circle = function() end,
+        arc = function() end,
         ellipse = function() end,
         line = function() end,
         push = function() end,
@@ -289,7 +290,131 @@ love.keypressed("f4")
 assert(csv_exported == true, "F4 must trigger loci.export_network_stats_csv()")
 print("  -> Passed: F3, F4, F5, F6 hotkeys work with real SDK APIs.")
 
-print("[Test 6] Testing Clean Shutdown in love.quit()...")
+print("[Test 6] Testing Combat HUD, Hotbar, Respawn Countdown & KDA Scoreboard...")
+-- Restore clean local entity state
+my_ent.properties.stunned_until = 0
+my_ent.properties.paralyzed_until = 0
+my_ent.properties.disarmed_until = 0
+my_ent.properties.is_dead = false
+my_ent.properties.hp = 2500
+my_ent.properties.max_hp = 5500
+my_ent.properties.shield = 400
+my_ent.properties.mana = 20
+my_ent.properties.max_mana = 100
+my_ent.properties.fury_active = true
+my_ent.properties.character_name = "arya"
+my_ent.properties.skills_list = "slash,fury_reward,whirlwind_dash,blade_throw"
+my_ent.properties.team = 1 -- cast_property_value converts "1" -> number 1
+
+local enemy_ent = entity_mod.new_entity(99, "player")
+enemy_ent.properties = {
+    entity_type = "player",
+    character_name = "mage",
+    team = 2,
+    kills = 3,
+    deaths = 1,
+}
+loci.entities = { [42] = my_ent, [99] = enemy_ent }
+loci._entities_list_cache = nil
+
+-- Verify font & lineWidth preservation across draw
+local orig_new_font = _G.love.graphics.newFont
+local new_font_calls = 0
+_G.love.graphics.newFont = function(...)
+    new_font_calls = new_font_calls + 1
+    return orig_new_font(...)
+end
+
+local saved_font = love.graphics.getFont()
+local saved_lw = love.graphics.getLineWidth()
+_G.love.timer._time = 100.65
+loci._last_state_tick = 100
+
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "HP: 2500/5500"), "Combat HUD must display HP")
+assert(contains_text(captured_prints, "Escudo: 400"), "Combat HUD must display Shield")
+assert(contains_text(captured_prints, "Mana: 20/100"), "Combat HUD must display Mana")
+assert(contains_text(captured_prints, "Slash") and contains_text(captured_prints, "Fúria"), "Hotbar must show Arya skill labels")
+assert(contains_text(captured_prints, "MANA"), "Hotbar must flag skills lacking mana (Dash=25, Lâmina=45 when mana=20)")
+assert(contains_text(captured_prints, "PRONTA!"), "Hotbar must highlight Fury active on fury_reward")
+assert(love.graphics.getFont() == saved_font, "love.draw must restore font after HUD/Hotbar")
+assert(love.graphics.getLineWidth() == saved_lw, "love.draw must restore lineWidth after HUD/Hotbar")
+
+-- Real cooldown duration (whirlwind_dash = 6.0s) and nil-entity guard
+loci.on_action_cast(nil, 1, 1, 0) -- must not crash
+loci.on_action_cast(my_ent, 3, 1, 0)
+_G.love.timer._time = 102.0 -- 1.35s elapsed -> 4.65s -> 4.7s remaining
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "4.7s"), "Hotbar must show real 6.0s cooldown countdown for whirlwind_dash")
+
+-- Tick-based CC feedback (blade_throw stun = 36 ticks = 1.2s; disarm = 60 ticks = 2.0s)
+my_ent.properties.stunned_until = 136
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "CC ATIVO: STUN (1.2s)"), "Hotbar must display exact tick-based STUN duration")
+
+my_ent.properties.stunned_until = 0
+my_ent.properties.disarmed_until = 160
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "CC ATIVO: DESARME (2.0s)"), "Hotbar must display exact tick-based DESARME duration")
+my_ent.properties.disarmed_until = 0
+
+-- Respawn countdown
+_G.love.timer._time = 105.0
+my_ent.properties.is_dead = true
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_printf, "YOU DIED"), "Respawn overlay must show YOU DIED")
+assert(contains_text(captured_printf, "Respawn em 10.0s"), "Respawn overlay must start 10.0s countdown")
+
+_G.love.timer._time = 108.5
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_printf, "Respawn em 6.5s"), "Respawn overlay must decrement countdown")
+my_ent.properties.is_dead = false
+
+-- Character swap resets cooldowns and adapts hotbar slots
+loci.on_property_changed(my_ent, "character_name", "arya", "mage")
+my_ent.properties.character_name = "mage"
+my_ent.properties.skills_list = "fireball"
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "Fireball"), "Hotbar must adapt to swapped character skills_list")
+assert(not contains_text(captured_prints, "4.7s"), "Cooldowns must clear after character swap")
+
+-- KDA Scoreboard: numeric team cast, font caching, font restoration
+love.keypressed("tab")
+new_font_calls = 0
+reset_draw_captures()
+love.draw()
+local calls_first_draw = new_font_calls
+assert(contains_text(captured_prints, "AZUL"), "KDA UI must render numeric team 1 as AZUL")
+assert(contains_text(captured_prints, "VERMELHO"), "KDA UI must render numeric team 2 as VERMELHO")
+assert(contains_text(captured_prints, "YOU") and contains_text(captured_prints, "P99"), "KDA UI must preserve PLAYER column")
+assert(contains_text(captured_prints, "MAGE"), "KDA UI must show HERO column")
+assert(love.graphics.getFont() == saved_font, "KDA UI must restore original font")
+
+new_font_calls = 0
+love.draw()
+assert(new_font_calls == 0, "KDA UI must not allocate new fonts on subsequent frames (first draw calls=" .. tostring(calls_first_draw) .. ")")
+love.keyreleased("tab")
+
+-- Connection HUD stays visible even before player entity spawns
+local saved_my_id = loci.my_entity_id
+loci.my_entity_id = nil
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "Loci Arena"), "Connection HUD must render even when my_entity is nil")
+loci.my_entity_id = saved_my_id
+loci.entities = { [42] = my_ent }
+loci._entities_list_cache = nil
+_G.love.graphics.newFont = orig_new_font
+print("  -> Passed: Combat HUD, Hotbar, Respawn Countdown, and KDA Scoreboard verified.")
+
+print("[Test 7] Testing Clean Shutdown in love.quit()...")
 csv_exported = false
 loci.netcode.auto_export_csv_on_quit = true
 local quit_called = false
