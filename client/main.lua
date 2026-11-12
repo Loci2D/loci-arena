@@ -1209,6 +1209,39 @@ function draw_arena_grid()
     love.graphics.print("(0, 0)", 6, 6)
 end
 
+local TEAM_SHADOW_COLORS = {
+    ["1"] = {
+        alive = { fill = { 0.15, 0.55, 1.0, 0.40 }, ring = { 0.35, 0.75, 1.0, 0.85 } },
+        dead = { fill = { 0.2, 0.5, 0.85, 0.18 }, ring = { 0.35, 0.65, 0.95, 0.35 } },
+    },
+    ["2"] = {
+        alive = { fill = { 1.0, 0.22, 0.22, 0.40 }, ring = { 1.0, 0.45, 0.45, 0.85 } },
+        dead = { fill = { 0.85, 0.25, 0.25, 0.18 }, ring = { 0.95, 0.35, 0.35, 0.35 } },
+    },
+    neutral = {
+        alive = { fill = { 0.5, 0.5, 0.5, 0.30 }, ring = { 0.7, 0.7, 0.7, 0.60 } },
+        dead = { fill = { 0.5, 0.5, 0.5, 0.15 }, ring = { 0.7, 0.7, 0.7, 0.25 } },
+    },
+}
+
+local function draw_team_shadow(px, py, rx, ry, team, is_dead)
+    -- 1. Sombra base escura para ancoragem e profundidade física no chão da arena
+    love.graphics.setColor(0, 0, 0, is_dead and 0.20 or 0.35)
+    love.graphics.ellipse("fill", px, py, rx, ry)
+
+    -- 2. Preenchimento translúcido e anel de destaque por time ("1" = Azul, "2" = Vermelho, nil = Neutro)
+    local palette = (team and TEAM_SHADOW_COLORS[team]) or TEAM_SHADOW_COLORS.neutral
+    local style = is_dead and palette.dead or palette.alive
+
+    love.graphics.setColor(style.fill[1], style.fill[2], style.fill[3], style.fill[4])
+    love.graphics.ellipse("fill", px, py, rx, ry)
+
+    love.graphics.setColor(style.ring[1], style.ring[2], style.ring[3], style.ring[4])
+    love.graphics.setLineWidth(1.5)
+    love.graphics.ellipse("line", px, py, rx, ry)
+    love.graphics.setLineWidth(1)
+end
+
 function draw_entity(ent, is_me)
     local radius = 2 * VISUAL_SCALE
     local px = ent.x * VISUAL_SCALE
@@ -1239,8 +1272,9 @@ function draw_entity(ent, is_me)
     -- Sombra dos pés proporcional ao modelo de 32px ancorada na base (px, py)
     local shadow_radius_x = 13 * scale
     local shadow_radius_y = 4.5 * scale
-    love.graphics.setColor(0, 0, 0, 0.4)
-    love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
+    local raw_team = ent.team or (ent.properties and ent.properties["team"])
+    local team = raw_team ~= nil and tostring(raw_team) or nil
+    draw_team_shadow(px, py, shadow_radius_x, shadow_radius_y, team, is_dead)
 
     -- Pivô nos pés (base central inferior: ox = 16, oy = 32 para modelos 32x32)
     local ox = sprite_w / 2
