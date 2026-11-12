@@ -183,6 +183,21 @@ local function load_character_sprite(character_name)
     return found_info
 end
 
+local function get_entity_skill_by_slot(entity, slot_index)
+    if not entity or not slot_index then return nil end
+    local list_str = entity:get("skills_list", "")
+    if not list_str or list_str == "" then return nil end
+
+    local idx = 1
+    for skill in string.gmatch(list_str, "[^,]+") do
+        if idx == slot_index then
+            return string.lower(skill)
+        end
+        idx = idx + 1
+    end
+    return nil
+end
+
 -- Screen shake state
 local shake_duration = 0
 local shake_total_duration = 0.2
@@ -456,19 +471,41 @@ function love.load(arg)
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
+        -- Ignora meta-ações (ex: troca de personagem)
+        if ability_id == 999 then
+            return
+        end
+
+        -- Alinha direção padrão (1, 0) com o servidor quando a mira for nula
+        local dx = tonumber(dir_x) or 0
+        local dy = tonumber(dir_y) or 0
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len > 0 then
+            dx = dx / len
+            dy = dy / len
+        else
+            dx, dy = 1, 0
+        end
+
+        local character_name = string.lower(tostring(entity and entity:get("character_name", "default") or "default"))
+        local skill_name = get_entity_skill_by_slot(entity, ability_id)
         local lifetime = 0.35
-        if ability_id == 3 then
+        if skill_name == "fireball" then
+            lifetime = 0.40
+        elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
             lifetime = 0.45 -- Whirlwind Dash
-        elseif ability_id == 4 then
+        elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
             lifetime = 0.60 -- Blade Throw
         end
 
         table.insert(visual_fx, {
             x = entity and entity.x or 0,
             y = entity and entity.y or 0,
-            dir_x = dir_x,
-            dir_y = dir_y,
+            dir_x = dx,
+            dir_y = dy,
             ability_id = ability_id,
+            skill_name = skill_name,
+            character_name = character_name,
             lifetime = lifetime,
             max_lifetime = lifetime
         })
@@ -703,20 +740,9 @@ function love.keypressed(key)
         end
 
         if connection_status:find("Connected") then
-            local char_cycle = { "arya", "default", "mage", "warrior" }
-            local cur_name = string.lower(me and (me.character_name or (me.properties and me.properties["character_name"])) or "arya")
-            local cur_idx = 0
-            for idx, name in ipairs(char_cycle) do
-                if name == cur_name then
-                    cur_idx = idx - 1
-                    break
-                end
-            end
-            local next_idx = (cur_idx + 1) % #char_cycle
-            local next_char = char_cycle[next_idx + 1]
-            print(string.format("[Client] Trocando personagem para %s (índice: %d)", next_char, next_idx))
-            -- Envia índice do personagem (0=arya, 1=default, 2=mage, 3=warrior)
-            loci.send_action(999, next_idx, 0)
+            print("[Client] Solicitando troca de personagem...")
+            -- Servidor cicla automaticamente sem precisar do índice
+            loci.send_action(999, 0, 0)
             movement_sync:mark_needs_resync()
         else
             print("[Client] Não conectado - não é possível trocar personagem")
@@ -805,8 +831,60 @@ function love.draw()
         local fx_start_x = fx.x * VISUAL_SCALE
         local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
 
-        if fx.ability_id == 1 then
-            -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro
+        -- Mapeamento de VFX desacoplado por skill_name (com fallback por ability_id / character_name)
+        local char_name = string.lower(tostring(fx.character_name or "default"))
+        local skill_name = fx.skill_name
+        if not skill_name then
+            if fx.ability_id == 1 then
+                skill_name = (char_name == "mage") and "fireball" or "slash"
+            elseif fx.ability_id == 2 then
+                skill_name = "fury_reward"
+            elseif fx.ability_id == 3 then
+                skill_name = "whirlwind_dash"
+            elseif fx.ability_id == 4 then
+                skill_name = "blade_throw"
+            end
+        end
+
+        if skill_name == "fireball" then
+            -- Fireball: projétil até range * 0.7 (210px) seguido de explosão na área real (aoe_radius = 60px)
+            local max_dist = 210
+            local travel_t = math.min(1.0, inv_prog / 0.5)
+            local travel_dist = max_dist * travel_t
+            local fireball_x = fx_start_x + fx.dir_x * travel_dist
+            local fireball_y = fx_start_y + fx.dir_y * travel_dist
+
+            if inv_prog <= 0.5 then
+                local radius = 18 + 8 * travel_t
+                -- Rastro de fogo
+                love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.4)
+                love.graphics.setLineWidth(3)
+                love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
+
+                -- Núcleo da bola de fogo em voo
+                love.graphics.setColor(1.0, 0.55, 0.1, progress * 0.9)
+                love.graphics.circle("fill", fireball_x, fireball_y, radius)
+                love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.75)
+                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
+                love.graphics.setColor(1.0, 1.0, 0.85, progress * 0.6)
+                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
+            else
+                -- Explosão expansiva até o raio real da AoE (60px)
+                local blast_t = (inv_prog - 0.5) / 0.5
+                local blast_alpha = 1.0 - blast_t
+                local blast_r = 20 + 40 * blast_t
+
+                love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
+                love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
+                love.graphics.setColor(1.0, 0.75, 0.2, blast_alpha * 0.55)
+                love.graphics.circle("fill", fireball_x, fireball_y, blast_r * 0.55)
+                love.graphics.setColor(1.0, 0.35, 0.05, blast_alpha * 0.9)
+                love.graphics.setLineWidth(3)
+                love.graphics.circle("line", fireball_x, fireball_y, blast_r)
+            end
+
+        elseif skill_name == "slash" then
+            -- Slash: Arco cortante frontal metálico/azul claro
             local angle = math.atan2(fx.dir_y, fx.dir_x)
             local radius = 45 * (0.8 + 0.4 * inv_prog)
             love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
@@ -816,8 +894,8 @@ function love.draw()
             love.graphics.setLineWidth(8)
             love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
 
-        elseif fx.ability_id == 2 then
-            -- Skill 2 (Fury Reward): Impacto carmesim/fogo com onda de choque
+        elseif skill_name == "fury_reward" then
+            -- Fury Reward: Impacto carmesim/fogo com onda de choque
             local hit_dist = 60 -- (7.5 unidades no mundo * VISUAL_SCALE = 60px na tela)
             local hit_x = fx_start_x + fx.dir_x * hit_dist
             local hit_y = fx_start_y + fx.dir_y * hit_dist
@@ -828,8 +906,8 @@ function love.draw()
             love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
             love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
 
-        elseif fx.ability_id == 3 then
-            -- Skill 3 (Whirlwind Dash): Círculo 360º de corte giratório dourado com lâminas
+        elseif skill_name == "whirlwind_dash" then
+            -- Whirlwind Dash: Círculo 360º de corte giratório dourado com lâminas
             local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
             local dash_world_dist = (160 / VISUAL_SCALE) * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades no mundo)
             local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
@@ -852,8 +930,8 @@ function love.draw()
                 )
             end
 
-        elseif fx.ability_id == 4 then
-            -- Skill 4 (Blade Throw): Espada viajando até o alvo + impacto expansivo de Stun
+        elseif skill_name == "blade_throw" then
+            -- Blade Throw: Espada viajando até o alvo + impacto expansivo de Stun
             local max_dist = 260
             local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
             local blade_x = fx_start_x + fx.dir_x * travel_dist
