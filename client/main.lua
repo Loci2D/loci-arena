@@ -200,6 +200,23 @@ local ARENA_MIN = -500
 local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 
+-- Rastreamento local de CC e cooldowns (baseado em tempo do cliente)
+local cc_states = {
+    stunned = { active = false, start_time = 0, duration = 0 },
+    disarmed = { active = false, start_time = 0, duration = 0 },
+    paralyzed = { active = false, start_time = 0, duration = 0 }
+}
+
+local cooldown_slots = {
+    [1] = { active = false, start_time = 0, duration = 0 },
+    [2] = { active = false, start_time = 0, duration = 0 },
+    [3] = { active = false, start_time = 0, duration = 0 },
+    [4] = { active = false, start_time = 0, duration = 0 }
+}
+
+-- Taxa de tick do servidor (para converter ticks em segundos)
+local SERVER_TICK_RATE = 30  -- 30 Hz
+
 function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
@@ -310,6 +327,51 @@ function love.load(arg)
                     is_shield = true
                 })
             end
+        elseif key == "stunned_until" then
+            -- Detectar quando stun é aplicado ou removido (para o jogador local)
+            local my_entity = loci.get_my_entity()
+            if my_entity and entity.id == my_entity.id then
+                local new_stunned_until = tonumber(new_val) or 0
+                if new_stunned_until > 0 then
+                    -- Stun aplicado - assumir duração de 2 segundos (60 ticks a 30 Hz)
+                    cc_states.stunned.active = true
+                    cc_states.stunned.start_time = os.clock()
+                    cc_states.stunned.duration = 2.0  -- 60 ticks / 30 Hz = 2 segundos
+                else
+                    -- Stun removido - limpar estado
+                    cc_states.stunned.active = false
+                end
+            end
+        elseif key == "disarmed_until" then
+            -- Detectar quando desarme é aplicado ou removido (para o jogador local)
+            local my_entity = loci.get_my_entity()
+            if my_entity and entity.id == my_entity.id then
+                local new_disarmed_until = tonumber(new_val) or 0
+                if new_disarmed_until > 0 then
+                    -- Desarme aplicado - assumir duração de 2 segundos (60 ticks a 30 Hz)
+                    cc_states.disarmed.active = true
+                    cc_states.disarmed.start_time = os.clock()
+                    cc_states.disarmed.duration = 2.0  -- 60 ticks / 30 Hz = 2 segundos
+                else
+                    -- Desarme removido - limpar estado
+                    cc_states.disarmed.active = false
+                end
+            end
+        elseif key == "paralyzed_until" then
+            -- Detectar quando paralisia é aplicada ou removida (para o jogador local)
+            local my_entity = loci.get_my_entity()
+            if my_entity and entity.id == my_entity.id then
+                local new_paralyzed_until = tonumber(new_val) or 0
+                if new_paralyzed_until > 0 then
+                    -- Paralisia aplicada - assumir duração de 2 segundos
+                    cc_states.paralyzed.active = true
+                    cc_states.paralyzed.start_time = os.clock()
+                    cc_states.paralyzed.duration = 2.0
+                else
+                    -- Paralisia removida - limpar estado
+                    cc_states.paralyzed.active = false
+                end
+            end
         end
     end
 
@@ -320,6 +382,33 @@ function love.load(arg)
             lifetime = 0.45 -- Whirlwind Dash
         elseif ability_id == 4 then
             lifetime = 0.60 -- Blade Throw
+        end
+
+        -- Rastrear cooldown para o jogador local
+        local my_entity = loci.get_my_entity()
+        if my_entity and entity.id == my_entity.id then
+            -- Mapear ability_id para slot (baseado na configuração do personagem)
+            -- Space=1, Q=2, E=3, R=4
+            local slot = ability_id  -- Assumindo que ability_id 1-4 correspondem aos slots
+            if slot >= 1 and slot <= 4 then
+                -- Duração do cooldown em segundos (estimada baseada no servidor)
+                local cooldown_duration = 0
+                if slot == 1 then
+                    cooldown_duration = 1.0  -- Slash: ~30 ticks
+                elseif slot == 2 then
+                    cooldown_duration = 0.5  -- Fury Reward: ~15 ticks
+                elseif slot == 3 then
+                    cooldown_duration = 3.0  -- Whirlwind Dash: ~90 ticks
+                elseif slot == 4 then
+                    cooldown_duration = 14.0 -- Blade Throw: ~420 ticks
+                end
+
+                if cooldown_duration > 0 then
+                    cooldown_slots[slot].active = true
+                    cooldown_slots[slot].start_time = os.clock()
+                    cooldown_slots[slot].duration = cooldown_duration
+                end
+            end
         end
 
         table.insert(visual_fx, {
@@ -617,7 +706,7 @@ local function draw_combat_hud(my_entity)
     love.graphics.rectangle("fill", x, y, bar_width * hp_pct, bar_height)
     love.graphics.setColor(1, 1, 1, 0.8)
     love.graphics.setFont(font_hud_small)
-    love.graphics.print(string.format("HP: %d/%d", hp, max_hp), x + 5, y + 10)
+    love.graphics.print(string.format("HP: %d/%d", hp, max_hp), x + bar_width + 10, y + 2)
 
     -- Barra de Escudo (se houver)
     if shield > 0 then
@@ -627,7 +716,7 @@ local function draw_combat_hud(my_entity)
         love.graphics.setColor(0.4, 0.4, 0.9, 1)
         love.graphics.rectangle("fill", x, y, bar_width, bar_height)
         love.graphics.setColor(1, 1, 1, 0.8)
-        love.graphics.print(string.format("Escudo: %d", shield), x + 5, y + 10)
+        love.graphics.print(string.format("Escudo: %d", shield), x + bar_width + 10, y + 2)
         y = y + 15
     else
         y = y + 15
@@ -640,7 +729,7 @@ local function draw_combat_hud(my_entity)
     love.graphics.setColor(0.2, 0.4, 0.9, 1)
     love.graphics.rectangle("fill", x, y, bar_width * mana_pct, bar_height)
     love.graphics.setColor(1, 1, 1, 0.8)
-    love.graphics.print(string.format("Mana: %d/%d", mana, max_mana), x + 5, y + 10)
+    love.graphics.print(string.format("Mana: %d/%d", mana, max_mana), x + bar_width + 10, y + 2)
 
     -- Status de conexão e controles
     local sw, sh = GAME_WIDTH, GAME_HEIGHT
@@ -661,7 +750,9 @@ end
 
 -- Desenha hotbar de habilidades
 local function draw_hotbar(my_entity)
-    if not my_entity then return end
+    if not my_entity then
+        return  -- Não desenha se entidade não existe (antes do spawn)
+    end
 
     local slot_width = 50
     local slot_height = 50
@@ -670,30 +761,81 @@ local function draw_hotbar(my_entity)
     local start_y = 100
 
     local skills = {
-        { key = "Space", label = "1" },
-        { key = "Q", label = "2" },
-        { key = "E", label = "3" },
-        { key = "R", label = "4" }
+        { key = "Space", label = "1", slot = 1 },
+        { key = "Q", label = "2", slot = 2 },
+        { key = "E", label = "3", slot = 3 },
+        { key = "R", label = "4", slot = 4 }
     }
 
-    -- Verificar estados de CC
-    local stunned_until = tonumber(my_entity:get("stunned_until", 0)) or 0
-    local paralyzed_until = tonumber(my_entity:get("paralyzed_until", 0)) or 0
-    local disarmed_until = tonumber(my_entity:get("disarmed_until", 0)) or 0
-    local current_tick = loci.get_server_tick_rate and os.clock() * loci.get_server_tick_rate() or 0
-    local is_cc = current_tick < stunned_until or current_tick < paralyzed_until or current_tick < disarmed_until
+    local current_time = os.clock()
 
-    local fury_active = my_entity:get("fury_active") == "true"
+    -- Atualizar estados de CC baseado em tempo local
+    local is_stunned = false
+    local is_paralyzed = false
+    local is_disarmed = false
+
+    -- Verificar se stunned expirou
+    if cc_states.stunned.active then
+        if current_time - cc_states.stunned.start_time >= cc_states.stunned.duration then
+            cc_states.stunned.active = false
+        else
+            is_stunned = true
+        end
+    end
+
+    -- Verificar se disarmed expirou
+    if cc_states.disarmed.active then
+        if current_time - cc_states.disarmed.start_time >= cc_states.disarmed.duration then
+            cc_states.disarmed.active = false
+        else
+            is_disarmed = true
+        end
+    end
+
+    -- Verificar se paralyzed expirou
+    if cc_states.paralyzed.active then
+        if current_time - cc_states.paralyzed.start_time >= cc_states.paralyzed.duration then
+            cc_states.paralyzed.active = false
+        else
+            is_paralyzed = true
+        end
+    end
+
+    local is_cc = is_stunned or is_paralyzed or is_disarmed
+
+    -- Verificar Fúria (aceita booleano ou string)
+    local fury_value = my_entity:get("fury_active")
+    local fury_active = fury_value == true or fury_value == "true"
+
+    -- Verificar Mana (para feedback visual quando mana < 30%)
+    local mana = tonumber(my_entity:get("mana", 0)) or 0
+    local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
+    local mana_pct = max_mana > 0 and (mana / max_mana) or 0
+    local is_low_mana = mana_pct < 0.3  -- Menos de 30% de mana
 
     for i, skill in ipairs(skills) do
         local x = start_x + (i - 1) * (slot_width + padding)
         local y = start_y
 
+        -- Verificar cooldown do slot usando tempo local
+        local is_on_cooldown = false
+        if cooldown_slots[skill.slot].active then
+            if current_time - cooldown_slots[skill.slot].start_time >= cooldown_slots[skill.slot].duration then
+                cooldown_slots[skill.slot].active = false
+            else
+                is_on_cooldown = true
+            end
+        end
+
         -- Fundo do slot
         if is_cc then
             love.graphics.setColor(0.5, 0.2, 0.2, 0.8)  -- Vermelho se CC
+        elseif is_on_cooldown then
+            love.graphics.setColor(0.3, 0.3, 0.4, 0.8)  -- Cinza se em cooldown
         elseif fury_active then
             love.graphics.setColor(0.8, 0.4, 0.1, 0.8)  -- Laranja se Fúria
+        elseif is_low_mana then
+            love.graphics.setColor(0.4, 0.3, 0.3, 0.8)  -- Cinza escuro se pouca mana
         else
             love.graphics.setColor(0.15, 0.15, 0.2, 0.8)  -- Normal
         end

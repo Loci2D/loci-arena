@@ -22,24 +22,24 @@ function CharacterFactory.update_tick(tick)
         -- Usar ipairs/array e iterar de trás para frente para evitar problemas (sandbox restringe pairs)
         for i = #active_entities, 1, -1 do
             local entity_id = active_entities[i]
-            
+
             local is_dead = Loci.get_entity_property(entity_id, "is_dead") == "true"
             if not is_dead then
                 -- HP Regen
                 local hp = tonumber(Loci.get_entity_property(entity_id, "hp")) or 0
                 local max_hp = tonumber(Loci.get_entity_property(entity_id, "max_hp")) or 100
                 local hp_regen = tonumber(Loci.get_entity_property(entity_id, "hp_regen")) or 0
-                
+
                 if hp > 0 and hp < max_hp and hp_regen > 0 then
                     hp = math.min(max_hp, hp + hp_regen)
                     Loci.Commands.set_property(entity_id, "hp", tostring(hp))
                 end
-                
+
                 -- Mana Regen
                 local mana = tonumber(Loci.get_entity_property(entity_id, "mana")) or 0
                 local max_mana = tonumber(Loci.get_entity_property(entity_id, "max_mana")) or 100
                 local mana_regen = tonumber(Loci.get_entity_property(entity_id, "mana_regen")) or 0
-                
+
                 if mana < max_mana and mana_regen > 0 then
                     mana = math.min(max_mana, mana + mana_regen)
                     Loci.Commands.set_property(entity_id, "mana", tostring(mana))
@@ -47,7 +47,7 @@ function CharacterFactory.update_tick(tick)
             end
         end
     end
-    
+
     -- Verificar expiração de status effects temporários a cada tick
     for i = #active_entities, 1, -1 do
         local entity_id = active_entities[i]
