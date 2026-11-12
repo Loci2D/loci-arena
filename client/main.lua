@@ -2,12 +2,7 @@
 -- Entrypoint for the game client connecting to the authoritative loci2d server.
 
 package.path = package.path .. ";./loci2d/?.lua;./loci2d/lib/?.lua;./client/loci2d/?.lua;./client/loci2d/lib/?.lua;./src/?.lua;./client/src/?.lua;./?.lua;./lib/?.lua"
-local is_windows = package.config:sub(1, 1) == "\\"
-if is_windows then
-    package.cpath = package.cpath .. ";./loci2d/lib/?.dll;./loci2d/?.dll;./client/loci2d/lib/?.dll;./client/loci2d/?.dll;./?.dll;./lib/?.dll"
-else
-    package.cpath = package.cpath .. ";./loci2d/lib/?.so;./loci2d/?.so;./client/loci2d/lib/?.so;./client/loci2d/?.so;./?.so;./lib/?.so;./loci2d/lib/?.dylib;./client/loci2d/lib/?.dylib"
-end
+package.cpath = package.cpath .. ";./loci2d/lib/?.so;./loci2d/?.so;./client/loci2d/lib/?.so;./client/loci2d/?.so;./?.so;./lib/?.so"
 
 local ok, loci = pcall(require, "loci_client")
 if not ok then
@@ -21,6 +16,7 @@ local push = require("src.push")
 local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
+local MovementSync = require("src.movement_sync")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -36,6 +32,8 @@ local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
 
 -- UI & State variables
 local connection_status = "Connecting..."
+local connected_status_label = ""
+local movement_sync = MovementSync.new()
 local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
@@ -185,6 +183,21 @@ local function load_character_sprite(character_name)
     return found_info
 end
 
+local function get_entity_skill_by_slot(entity, slot_index)
+    if not entity or not slot_index then return nil end
+    local list_str = entity:get("skills_list", "")
+    if not list_str or list_str == "" then return nil end
+
+    local idx = 1
+    for skill in string.gmatch(list_str, "[^,]+") do
+        if idx == slot_index then
+            return string.lower(skill)
+        end
+        idx = idx + 1
+    end
+    return nil
+end
+
 -- Screen shake state
 local shake_duration = 0
 local shake_total_duration = 0.2
@@ -199,6 +212,146 @@ local VISUAL_SCALE = 8 -- Pixels per Meter (escala para desenho)
 local ARENA_MIN = -500
 local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
+
+-- A engine clampa o centro do colisor circular (raio 2.0) dentro de [-500, +500].
+-- A predição local do cliente precisa respeitar o mesmo limite seguro para não
+-- desenhar o próprio jogador além da barreira enquanto a tecla fica pressionada.
+-- Espelha intencionalmente `server/scripts/default_arena/core/arena_bounds.lua`
+-- porque o cliente Love2D e o VFS sandbox do servidor não compartilham módulos Lua;
+-- manter sincronizado se o mapa ou o raio do colisor mudarem.
+local PLAYER_COLLIDER_RADIUS = 2.0
+local PREDICTED_SAFE_MIN_X = ARENA_MIN + PLAYER_COLLIDER_RADIUS
+local PREDICTED_SAFE_MAX_X = ARENA_MAX - PLAYER_COLLIDER_RADIUS
+local PREDICTED_SAFE_MIN_Y = ARENA_MIN + PLAYER_COLLIDER_RADIUS
+local PREDICTED_SAFE_MAX_Y = ARENA_MAX - PLAYER_COLLIDER_RADIUS
+
+local function clamp_arena_coords(x, y)
+    local cx = math.max(PREDICTED_SAFE_MIN_X, math.min(PREDICTED_SAFE_MAX_X, x or 0))
+    local cy = math.max(PREDICTED_SAFE_MIN_Y, math.min(PREDICTED_SAFE_MAX_Y, y or 0))
+    return cx, cy
+end
+
+local function should_clamp_entity(ent)
+    if not ent then return false end
+    local ent_type = (ent.get and ent:get("entity_type"))
+        or (ent.properties and ent.properties["entity_type"])
+    if ent_type ~= nil then
+        local t = string.lower(tostring(ent_type))
+        return t == "player" or t == "hero" or t == "character"
+    end
+    local bp = type(ent.blueprint) == "string" and string.lower(ent.blueprint) or ""
+    if bp:find("projectile", 1, true) or bp:find("bullet", 1, true) or bp:find("fx", 1, true) then
+        return false
+    end
+    return true
+end
+
+local function clamp_entity_to_arena(ent, clamp_recon_error, compensate_overshoot)
+    if not ent then return false, false end
+
+    local old_x = ent.x
+    local old_y = ent.y
+    local clamped_x = false
+    local clamped_y = false
+
+    if ent.x then
+        if ent.x > PREDICTED_SAFE_MAX_X then
+            ent.x = PREDICTED_SAFE_MAX_X
+            clamped_x = true
+        elseif ent.x < PREDICTED_SAFE_MIN_X then
+            ent.x = PREDICTED_SAFE_MIN_X
+            clamped_x = true
+        end
+    end
+
+    if ent.y then
+        if ent.y > PREDICTED_SAFE_MAX_Y then
+            ent.y = PREDICTED_SAFE_MAX_Y
+            clamped_y = true
+        elseif ent.y < PREDICTED_SAFE_MIN_Y then
+            ent.y = PREDICTED_SAFE_MIN_Y
+            clamped_y = true
+        end
+    end
+
+    -- Zera apenas a componente de velocidade que tenta atravessar o limite em contato
+    if ent.x and ent.vx then
+        if (ent.x >= PREDICTED_SAFE_MAX_X and ent.vx > 0) or (ent.x <= PREDICTED_SAFE_MIN_X and ent.vx < 0) then
+            ent.vx = 0
+        end
+    end
+    if ent.y and ent.vy then
+        if (ent.y >= PREDICTED_SAFE_MAX_Y and ent.vy > 0) or (ent.y <= PREDICTED_SAFE_MIN_Y and ent.vy < 0) then
+            ent.vy = 0
+        end
+    end
+
+    -- Ajusta o erro de reconciliação sem descartar correções que apontam para dentro da arena
+    -- (ex.: knockback/body-block enquanto o jogador segura tecla contra a parede):
+    -- 1) Pós-loci.update (dash / fallback): desconta o overshoot já absorvido pelo clamp
+    --    para eliminar o "efeito mola" sem apagar divergências reais para dentro.
+    -- 2) Sempre: limita _error ao intervalo válido [SAFE_MIN - x, SAFE_MAX - x] para
+    --    bloquear erro residual para fora e preservar correções para dentro.
+    if clamp_recon_error then
+        if ent.x and ent._error_x and ent._error_x ~= 0 then
+            local err_x = ent._error_x
+            if compensate_overshoot and clamped_x then
+                err_x = err_x - (ent.x - old_x)
+            end
+            err_x = math.max(PREDICTED_SAFE_MIN_X - ent.x,
+                math.min(PREDICTED_SAFE_MAX_X - ent.x, err_x))
+            ent._error_x = (math.abs(err_x) < 1e-6) and 0 or err_x
+        end
+        if ent.y and ent._error_y and ent._error_y ~= 0 then
+            local err_y = ent._error_y
+            if compensate_overshoot and clamped_y then
+                err_y = err_y - (ent.y - old_y)
+            end
+            err_y = math.max(PREDICTED_SAFE_MIN_Y - ent.y,
+                math.min(PREDICTED_SAFE_MAX_Y - ent.y, err_y))
+            ent._error_y = (math.abs(err_y) < 1e-6) and 0 or err_y
+        end
+    end
+
+    return clamped_x, clamped_y
+end
+
+-- Replica propositalmente a cinemática padrão de caminhada do `sdk-love2d`
+-- (`move_speed * tick_rate * dt`) via `_prediction_handler` em vez de depender só
+-- do clamp pós-`loci.update`. Isso aplica `clamp_entity_to_arena` *antes* de `decay_error`
+-- e `reconcile_position`, evitando que passos maiores (FPS baixo ou buff de velocidade)
+-- ultrapassem ±498 e distorçam a reconciliação contra a parede. Se o SDK passar a expor
+-- um hook de pós-predição/clamp antes da reconciliação, esta cópia pode ser removida.
+local function predict_local_movement(ent, dx, dy, dt)
+    if not ent then return end
+
+    local in_dx = dx or 0
+    local in_dy = dy or 0
+    local len = math.sqrt(in_dx * in_dx + in_dy * in_dy)
+
+    if len > 0 then
+        local ndx = in_dx / len
+        local ndy = in_dy / len
+        local default_speed = (loci.netcode and loci.netcode.default_move_speed) or 3.0
+        local raw_speed = (ent.get and (ent:get("move_speed") or ent:get("speed")))
+            or (ent.properties and (ent.properties.move_speed or ent.properties.speed))
+            or default_speed
+        local move_speed = tonumber(raw_speed) or 3.0
+        local tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0
+        local speed_sec = move_speed * tick_rate
+
+        ent.x = (ent.x or 0) + ndx * speed_sec * dt
+        ent.y = (ent.y or 0) + ndy * speed_sec * dt
+        ent.vx = ndx * move_speed
+        ent.vy = ndy * move_speed
+    else
+        ent.vx = 0
+        ent.vy = 0
+    end
+
+    -- Roda antes de decay_error e poll_network: preserva erro corretivo para dentro e bloqueia erro para fora
+    clamp_entity_to_arena(ent, true, false)
+end
 
 function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
@@ -229,13 +382,21 @@ function love.load(arg)
         return
     end
 
-    connection_status = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
+    connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
+    connection_status = connected_status_label
 
     -- Inicializar placeholders padronizados de 32x32px
     init_placeholders()
 
     -- Pré-carregar sprites disponíveis em assets/sprites/ (padrão 32x32px)
     load_character_sprite("arya")
+
+    -- Registrar predição local com clamp nos limites da arena antes da reconciliação.
+    -- Nota: durante dash ativo (`dashing_until`), o SDK desvia para o ramo próprio e não chama
+    -- `_prediction_handler`; por isso o clamp pós-`loci.update` em `love.update` cobre o dash.
+    if loci.set_prediction_handler then
+        loci.set_prediction_handler(predict_local_movement)
+    end
 
     -- Event hooks
     loci.on_entity_spawned = function(entity)
@@ -310,19 +471,41 @@ function love.load(arg)
     end
 
     loci.on_action_cast = function(entity, ability_id, dir_x, dir_y)
+        -- Ignora meta-ações (ex: troca de personagem)
+        if ability_id == 999 then
+            return
+        end
+
+        -- Alinha direção padrão (1, 0) com o servidor quando a mira for nula
+        local dx = tonumber(dir_x) or 0
+        local dy = tonumber(dir_y) or 0
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len > 0 then
+            dx = dx / len
+            dy = dy / len
+        else
+            dx, dy = 1, 0
+        end
+
+        local character_name = string.lower(tostring(entity and entity:get("character_name", "default") or "default"))
+        local skill_name = get_entity_skill_by_slot(entity, ability_id)
         local lifetime = 0.35
-        if ability_id == 3 then
+        if skill_name == "fireball" then
+            lifetime = 0.40
+        elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
             lifetime = 0.45 -- Whirlwind Dash
-        elseif ability_id == 4 then
+        elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
             lifetime = 0.60 -- Blade Throw
         end
 
         table.insert(visual_fx, {
             x = entity and entity.x or 0,
             y = entity and entity.y or 0,
-            dir_x = dir_x,
-            dir_y = dir_y,
+            dir_x = dx,
+            dir_y = dy,
             ability_id = ability_id,
+            skill_name = skill_name,
+            character_name = character_name,
             lifetime = lifetime,
             max_lifetime = lifetime
         })
@@ -332,13 +515,23 @@ function love.load(arg)
         rejection_msg = reason
         rejection_timer = 2.5
     end
+
+    loci.on_connection_lost = function(reason)
+        connection_status = "Reconnecting (" .. tostring(reason or "timeout") .. ")..."
+        movement_sync:on_connection_lost()
+    end
+
+    loci.on_reconnected = function(entity_id)
+        if connected_status_label ~= "" then
+            connection_status = connected_status_label
+        end
+        movement_sync:on_reconnected()
+    end
 end
 
-local last_sent_dx, last_sent_dy = 0, 0
-
-local function update_movement()
+local function read_move_input()
     local dx, dy = 0, 0
-    
+
     -- Prioridade: joystick virtual (se ativo e visível) > teclado
     if show_touch_controls and virtual_joystick.is_move_active() then
         dx, dy = virtual_joystick.get_move_vector()
@@ -349,11 +542,14 @@ local function update_movement()
         if love.keyboard.isDown("d") or love.keyboard.isDown("right") then dx = dx + 1 end
     end
 
-    if dx ~= last_sent_dx or dy ~= last_sent_dy then
-        last_sent_dx = dx
-        last_sent_dy = dy
-        loci.send_move(dx, dy)
-    end
+    return dx, dy
+end
+
+local function update_movement(my_entity)
+    local dx, dy = read_move_input()
+    local cur_tick = tonumber(loci._last_state_tick) or 0
+    local now = (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
+    movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
 end
 
 function love.update(dt)
@@ -362,7 +558,10 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
-        update_movement()
+        if connected_status_label ~= "" and connection_status:find("^Reconnecting") then
+            connection_status = connected_status_label
+        end
+        update_movement(my_entity)
 
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
         local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
@@ -417,15 +616,22 @@ function love.update(dt)
                 virtual_joystick.pop_release_events()
             end
         end
-        
-        -- Direct camera binding eliminates lag jitter between camera and player
-        cam_x = my_entity.x * VISUAL_SCALE
-        cam_y = my_entity.y * VISUAL_SCALE
+    else
+        movement_sync:on_entity_missing()
     end
 
-    -- Update visual orientation and direction for all entities
+    -- Passagem única de clamp por frame (cobre dash local — cujo ramo no SDK ignora
+    -- _prediction_handler — além de extrapolação de remotas em jitter) + animação e câmera.
+    local clamped_my_entity = false
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
+        local is_local = my_entity and (ent.id == my_entity.id)
+        if is_local then
+            clamped_my_entity = true
+        end
+        if should_clamp_entity(ent) then
+            clamp_entity_to_arena(ent, is_local, is_local)
+        end
         local is_moving = false
         local vx = ent.vx or 0
         local vy = ent.vy or 0
@@ -434,6 +640,15 @@ function love.update(dt)
             is_moving = true
         end
         procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
+    end
+
+    if my_entity then
+        if not clamped_my_entity and should_clamp_entity(my_entity) then
+            clamp_entity_to_arena(my_entity, true, true)
+        end
+        -- Direct camera binding eliminates lag jitter between camera and player
+        cam_x = my_entity.x * VISUAL_SCALE
+        cam_y = my_entity.y * VISUAL_SCALE
     end
 
     -- Update rejection message timer
@@ -525,20 +740,10 @@ function love.keypressed(key)
         end
 
         if connection_status:find("Connected") then
-            local char_cycle = { "arya", "default", "mage", "warrior" }
-            local cur_name = string.lower(me and (me.character_name or (me.properties and me.properties["character_name"])) or "arya")
-            local cur_idx = 0
-            for idx, name in ipairs(char_cycle) do
-                if name == cur_name then
-                    cur_idx = idx - 1
-                    break
-                end
-            end
-            local next_idx = (cur_idx + 1) % #char_cycle
-            local next_char = char_cycle[next_idx + 1]
-            print(string.format("[Client] Trocando personagem para %s (índice: %d)", next_char, next_idx))
-            -- Envia índice do personagem (0=arya, 1=default, 2=mage, 3=warrior)
-            loci.send_action(999, next_idx, 0)
+            print("[Client] Solicitando troca de personagem...")
+            -- Servidor cicla automaticamente sem precisar do índice
+            loci.send_action(999, 0, 0)
+            movement_sync:mark_needs_resync()
         else
             print("[Client] Não conectado - não é possível trocar personagem")
         end
@@ -626,8 +831,60 @@ function love.draw()
         local fx_start_x = fx.x * VISUAL_SCALE
         local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
 
-        if fx.ability_id == 1 then
-            -- Skill 1 (Slash): Arco cortante frontal metálico/azul claro
+        -- Mapeamento de VFX desacoplado por skill_name (com fallback por ability_id / character_name)
+        local char_name = string.lower(tostring(fx.character_name or "default"))
+        local skill_name = fx.skill_name
+        if not skill_name then
+            if fx.ability_id == 1 then
+                skill_name = (char_name == "mage") and "fireball" or "slash"
+            elseif fx.ability_id == 2 then
+                skill_name = "fury_reward"
+            elseif fx.ability_id == 3 then
+                skill_name = "whirlwind_dash"
+            elseif fx.ability_id == 4 then
+                skill_name = "blade_throw"
+            end
+        end
+
+        if skill_name == "fireball" then
+            -- Fireball: projétil até range * 0.7 (210px) seguido de explosão na área real (aoe_radius = 60px)
+            local max_dist = 210
+            local travel_t = math.min(1.0, inv_prog / 0.5)
+            local travel_dist = max_dist * travel_t
+            local fireball_x = fx_start_x + fx.dir_x * travel_dist
+            local fireball_y = fx_start_y + fx.dir_y * travel_dist
+
+            if inv_prog <= 0.5 then
+                local radius = 18 + 8 * travel_t
+                -- Rastro de fogo
+                love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.4)
+                love.graphics.setLineWidth(3)
+                love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
+
+                -- Núcleo da bola de fogo em voo
+                love.graphics.setColor(1.0, 0.55, 0.1, progress * 0.9)
+                love.graphics.circle("fill", fireball_x, fireball_y, radius)
+                love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.75)
+                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
+                love.graphics.setColor(1.0, 1.0, 0.85, progress * 0.6)
+                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
+            else
+                -- Explosão expansiva até o raio real da AoE (60px)
+                local blast_t = (inv_prog - 0.5) / 0.5
+                local blast_alpha = 1.0 - blast_t
+                local blast_r = 20 + 40 * blast_t
+
+                love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
+                love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
+                love.graphics.setColor(1.0, 0.75, 0.2, blast_alpha * 0.55)
+                love.graphics.circle("fill", fireball_x, fireball_y, blast_r * 0.55)
+                love.graphics.setColor(1.0, 0.35, 0.05, blast_alpha * 0.9)
+                love.graphics.setLineWidth(3)
+                love.graphics.circle("line", fireball_x, fireball_y, blast_r)
+            end
+
+        elseif skill_name == "slash" then
+            -- Slash: Arco cortante frontal metálico/azul claro
             local angle = math.atan2(fx.dir_y, fx.dir_x)
             local radius = 45 * (0.8 + 0.4 * inv_prog)
             love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
@@ -637,8 +894,8 @@ function love.draw()
             love.graphics.setLineWidth(8)
             love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
 
-        elseif fx.ability_id == 2 then
-            -- Skill 2 (Fury Reward): Impacto carmesim/fogo com onda de choque
+        elseif skill_name == "fury_reward" then
+            -- Fury Reward: Impacto carmesim/fogo com onda de choque
             local hit_dist = 60 -- (7.5 unidades no mundo * VISUAL_SCALE = 60px na tela)
             local hit_x = fx_start_x + fx.dir_x * hit_dist
             local hit_y = fx_start_y + fx.dir_y * hit_dist
@@ -649,11 +906,15 @@ function love.draw()
             love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
             love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
 
-        elseif fx.ability_id == 3 then
-            -- Skill 3 (Whirlwind Dash): Círculo 360º de corte giratório dourado com lâminas
-            local dash_dist = 160 * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades * VISUAL_SCALE)
-            local curr_x = fx_start_x + fx.dir_x * dash_dist
-            local curr_y = fx_start_y + fx.dir_y * dash_dist
+        elseif skill_name == "whirlwind_dash" then
+            -- Whirlwind Dash: Círculo 360º de corte giratório dourado com lâminas
+            local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
+            local dash_world_dist = (160 / VISUAL_SCALE) * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades no mundo)
+            local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
+            local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
+            local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
+            local curr_x = clamped_wx * VISUAL_SCALE
+            local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
             local r = 65 * (0.7 + 0.5 * inv_prog)
             local spin_angle = inv_prog * math.pi * 5
             love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
@@ -669,8 +930,8 @@ function love.draw()
                 )
             end
 
-        elseif fx.ability_id == 4 then
-            -- Skill 4 (Blade Throw): Espada viajando até o alvo + impacto expansivo de Stun
+        elseif skill_name == "blade_throw" then
+            -- Blade Throw: Espada viajando até o alvo + impacto expansivo de Stun
             local max_dist = 260
             local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
             local blade_x = fx_start_x + fx.dir_x * travel_dist
@@ -883,6 +1144,39 @@ function draw_arena_grid()
     love.graphics.print("(0, 0)", 6, 6)
 end
 
+local TEAM_SHADOW_COLORS = {
+    ["1"] = {
+        alive = { fill = { 0.15, 0.55, 1.0, 0.40 }, ring = { 0.35, 0.75, 1.0, 0.85 } },
+        dead = { fill = { 0.2, 0.5, 0.85, 0.18 }, ring = { 0.35, 0.65, 0.95, 0.35 } },
+    },
+    ["2"] = {
+        alive = { fill = { 1.0, 0.22, 0.22, 0.40 }, ring = { 1.0, 0.45, 0.45, 0.85 } },
+        dead = { fill = { 0.85, 0.25, 0.25, 0.18 }, ring = { 0.95, 0.35, 0.35, 0.35 } },
+    },
+    neutral = {
+        alive = { fill = { 0.5, 0.5, 0.5, 0.30 }, ring = { 0.7, 0.7, 0.7, 0.60 } },
+        dead = { fill = { 0.5, 0.5, 0.5, 0.15 }, ring = { 0.7, 0.7, 0.7, 0.25 } },
+    },
+}
+
+local function draw_team_shadow(px, py, rx, ry, team, is_dead)
+    -- 1. Sombra base escura para ancoragem e profundidade física no chão da arena
+    love.graphics.setColor(0, 0, 0, is_dead and 0.20 or 0.35)
+    love.graphics.ellipse("fill", px, py, rx, ry)
+
+    -- 2. Preenchimento translúcido e anel de destaque por time ("1" = Azul, "2" = Vermelho, nil = Neutro)
+    local palette = (team and TEAM_SHADOW_COLORS[team]) or TEAM_SHADOW_COLORS.neutral
+    local style = is_dead and palette.dead or palette.alive
+
+    love.graphics.setColor(style.fill[1], style.fill[2], style.fill[3], style.fill[4])
+    love.graphics.ellipse("fill", px, py, rx, ry)
+
+    love.graphics.setColor(style.ring[1], style.ring[2], style.ring[3], style.ring[4])
+    love.graphics.setLineWidth(1.5)
+    love.graphics.ellipse("line", px, py, rx, ry)
+    love.graphics.setLineWidth(1)
+end
+
 function draw_entity(ent, is_me)
     local radius = 2 * VISUAL_SCALE
     local px = ent.x * VISUAL_SCALE
@@ -913,52 +1207,9 @@ function draw_entity(ent, is_me)
     -- Sombra dos pés proporcional ao modelo de 32px ancorada na base (px, py)
     local shadow_radius_x = 13 * scale
     local shadow_radius_y = 4.5 * scale
-
-    -- Identificação de time ("1" ou "2")
-    local team = tostring(ent.team or (ent.properties and ent.properties["team"]) or "1")
-
-    -- 1. Sombra base escura para ancoragem e profundidade física no chão da arena
-    love.graphics.setColor(0, 0, 0, is_dead and 0.20 or 0.35)
-    love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
-
-    -- 2. Preenchimento translúcido e borda/anel da cor do time (Azul = Time 1, Vermelho = Time 2)
-    if team == "1" then
-        -- Time 1: Azul
-        if is_dead then
-            love.graphics.setColor(0.2, 0.5, 0.85, 0.18)
-            love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
-            love.graphics.setColor(0.35, 0.65, 0.95, 0.35)
-        else
-            love.graphics.setColor(0.15, 0.55, 1.0, 0.40)
-            love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
-            love.graphics.setColor(0.35, 0.75, 1.0, 0.85)
-        end
-        love.graphics.setLineWidth(1.5)
-        love.graphics.ellipse("line", px, py, shadow_radius_x, shadow_radius_y)
-        love.graphics.setLineWidth(1)
-    elseif team == "2" then
-        -- Time 2: Vermelho
-        if is_dead then
-            love.graphics.setColor(0.85, 0.25, 0.25, 0.18)
-            love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
-            love.graphics.setColor(0.95, 0.35, 0.35, 0.35)
-        else
-            love.graphics.setColor(1.0, 0.22, 0.22, 0.40)
-            love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
-            love.graphics.setColor(1.0, 0.45, 0.45, 0.85)
-        end
-        love.graphics.setLineWidth(1.5)
-        love.graphics.ellipse("line", px, py, shadow_radius_x, shadow_radius_y)
-        love.graphics.setLineWidth(1)
-    else
-        -- Fallback neutro se time não for 1 nem 2
-        love.graphics.setColor(0.5, 0.5, 0.5, is_dead and 0.15 or 0.30)
-        love.graphics.ellipse("fill", px, py, shadow_radius_x, shadow_radius_y)
-        love.graphics.setColor(0.7, 0.7, 0.7, is_dead and 0.25 or 0.60)
-        love.graphics.setLineWidth(1.5)
-        love.graphics.ellipse("line", px, py, shadow_radius_x, shadow_radius_y)
-        love.graphics.setLineWidth(1)
-    end
+    local raw_team = ent.team or (ent.properties and ent.properties["team"])
+    local team = raw_team ~= nil and tostring(raw_team) or nil
+    draw_team_shadow(px, py, shadow_radius_x, shadow_radius_y, team, is_dead)
 
     -- Pivô nos pés (base central inferior: ox = 16, oy = 32 para modelos 32x32)
     local ox = sprite_w / 2
