@@ -33,6 +33,7 @@ local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
 -- UI & State variables
 local connection_status = "Connecting..."
 local connected_status_label = ""
+local is_connection_lost = false
 local movement_sync = MovementSync.new()
 local rejection_msg = ""
 local rejection_timer = 0
@@ -382,8 +383,13 @@ function love.load(arg)
         return
     end
 
+    is_connection_lost = false
     connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
     connection_status = connected_status_label
+
+    if loci.netcode and os.getenv("LOCI_AUTO_EXPORT_CSV") == "1" then
+        loci.netcode.auto_export_csv_on_quit = true
+    end
 
     -- Inicializar placeholders padronizados de 32x32px
     init_placeholders()
@@ -517,11 +523,15 @@ function love.load(arg)
     end
 
     loci.on_connection_lost = function(reason)
+        print("[Client] Conexão instável ou perdida: " .. tostring(reason))
+        is_connection_lost = true
         connection_status = "Reconnecting (" .. tostring(reason or "timeout") .. ")..."
         movement_sync:on_connection_lost()
     end
 
     loci.on_reconnected = function(entity_id)
+        print("[Client] Reconexão estabelecida com sucesso! Entity ID: " .. tostring(entity_id))
+        is_connection_lost = false
         if connected_status_label ~= "" then
             connection_status = connected_status_label
         end
@@ -558,6 +568,9 @@ function love.update(dt)
     
     local my_entity = loci.get_my_entity()
     if my_entity then
+        if is_connection_lost then
+            is_connection_lost = false
+        end
         if connected_status_label ~= "" and connection_status:find("^Reconnecting") then
             connection_status = connected_status_label
         end
@@ -710,9 +723,45 @@ local function cast_ability_at_mouse(ability_id)
     loci.send_action_at_position(ability_id, aim_x, aim_y)
 end
 
+local LATENCY_PRESETS = { 0, 0.050, 0.100 }
+local PACKET_LOSS_PRESETS = { 0, 0.10, 0.25 }
+
+local function cycle_netcode_preset(field, presets)
+    if not loci.netcode then return 0 end
+    local cur = tonumber(loci.netcode[field]) or 0
+    for i, val in ipairs(presets) do
+        if math.abs(cur - val) < 1e-4 then
+            local next_val = presets[(i % #presets) + 1]
+            loci.netcode[field] = next_val
+            return next_val
+        end
+    end
+    local next_val = presets[2] or 0
+    loci.netcode[field] = next_val
+    return next_val
+end
+
 function love.keypressed(key)
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
+    elseif key == "f4" then
+        if loci.export_network_stats_csv then
+            local path = loci.export_network_stats_csv()
+            if path then
+                print("[Client] Telemetria exportada via F4: " .. tostring(path))
+            else
+                print("[Client] Falha ao exportar telemetria via F4")
+            end
+        end
+    elseif key == "f5" then
+        -- Alternar latência simulada por sentido (0ms -> 50ms -> 100ms -> 0ms)
+        local next_lat = cycle_netcode_preset("simulate_latency", LATENCY_PRESETS)
+        local lat_ms = math.floor(next_lat * 1000 + 0.5)
+        print(string.format("[Client] Latência simulada ajustada para: %d ms/sentido (~+%d ms RTT)", lat_ms, lat_ms * 2))
+    elseif key == "f6" then
+        -- Alternar perda de pacotes simulada (0% -> 10% -> 25% -> 0%)
+        local next_loss = cycle_netcode_preset("simulate_packet_loss", PACKET_LOSS_PRESETS)
+        print(string.format("[Client] Perda simulada ajustada para: %d%%", math.floor(next_loss * 100 + 0.5)))
     elseif key == "c" then
         show_character_sheet = not show_character_sheet
     elseif key == "t" or key == "f1" then
@@ -1099,6 +1148,22 @@ function love.draw()
         virtual_joystick.draw()
     end
 
+    -- 6. Banner de Perda de Conexão / Reconexão (ADR 0002)
+    if is_connection_lost then
+        local banner_w = 340
+        local banner_h = 36
+        local bx = (sw - banner_w) / 2
+        local by = 16
+        love.graphics.setColor(0.85, 0.15, 0.15, 0.92)
+        love.graphics.rectangle("fill", bx, by, banner_w, banner_h, 6, 6)
+        love.graphics.setColor(0.95, 0.35, 0.35, 0.95)
+        love.graphics.setLineWidth(1.5)
+        love.graphics.rectangle("line", bx, by, banner_w, banner_h, 6, 6)
+        love.graphics.setLineWidth(1)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.printf("Conexão instável / Reconectando...", 0, by + 9, sw, "center")
+    end
+
     push:finish()
 end
 
@@ -1309,22 +1374,57 @@ function draw_hud(sw, sh, my_entity)
 end
 
 function draw_debug(sw, sh)
-    love.graphics.setColor(0, 0, 0, 0.75)
-    love.graphics.rectangle("fill", sw - 240, 10, 230, 140, 6, 6)
+    local box_w = 275
+    local box_h = 258
+    love.graphics.setColor(0, 0, 0, 0.80)
+    love.graphics.rectangle("fill", sw - (box_w + 10), 10, box_w, box_h, 6, 6)
+    love.graphics.setColor(0.2, 0.8, 0.4, 0.85)
+    love.graphics.setLineWidth(1)
+    love.graphics.rectangle("line", sw - (box_w + 10), 10, box_w, box_h, 6, 6)
 
     local ent_count = #loci.get_entities()
     local me = loci.get_my_entity()
-    local tick_rate = loci.get_server_tick_rate and loci.get_server_tick_rate() or 30
+
+    -- Métricas de Telemetria do SDK (Zero-GC, Card #70)
+    local ping = (loci.get_ping and loci.get_ping()) or 0
+    local jitter = (loci.get_jitter and loci.get_jitter()) or 0
+    local loss = (loci.get_packet_loss and loci.get_packet_loss()) or 0
+    local measured_hz = (loci.get_tick_hz and loci.get_tick_hz()) or 0
+    local tick_hz = (measured_hz > 0 and measured_hz) or (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30
+
+    local lx = sw - box_w
+    local cur_y = 20
 
     love.graphics.setColor(0.4, 1.0, 0.5, 1)
-    love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), sw - 225, 20)
-    love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), sw - 225, 40)
-    love.graphics.print(string.format("Entities: %d", ent_count), sw - 225, 60)
-    love.graphics.print(string.format("Tick Rate: %d Hz", tick_rate), sw - 225, 80)
+    love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Sequence: %d", loci._sequence_id or 0), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Entities: %d", ent_count), lx, cur_y); cur_y = cur_y + 18
     if me then
-        love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), sw - 225, 100)
+        love.graphics.print(string.format("Pos: (%.1f, %.1f)", me.x, me.y), lx, cur_y); cur_y = cur_y + 18
     end
-    love.graphics.print(string.format("Touch UI: %s [T]", show_touch_controls and "ON" or "OFF"), sw - 225, 120)
+    love.graphics.print(string.format("Touch UI: %s [T]", show_touch_controls and "ON" or "OFF"), lx, cur_y); cur_y = cur_y + 18
+
+    -- Seção de Telemetria de Rede (RFC 3550 & ADR 0002)
+    cur_y = cur_y + 4
+    love.graphics.setColor(0.3, 0.85, 1.0, 1)
+    love.graphics.print(string.format("Ping: %d ms", math.floor(ping + 0.5)), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Jitter: %.1f ms", jitter), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Loss: %.1f%%", loss), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Tick Rate: %.1f Hz", tick_hz), lx, cur_y); cur_y = cur_y + 18
+
+    -- Atalhos de Diagnóstico
+    cur_y = cur_y + 4
+    love.graphics.setColor(0.85, 0.85, 0.4, 1)
+    local sim_lat = (loci.netcode and loci.netcode.simulate_latency) or 0
+    local sim_loss = (loci.netcode and loci.netcode.simulate_packet_loss) or 0
+    if sim_lat > 0 or sim_loss > 0 then
+        local lat_ms = math.floor(sim_lat * 1000 + 0.5)
+        love.graphics.print(string.format("Sim: %dms/way (+%dms RTT) | %d%%", lat_ms, lat_ms * 2, math.floor(sim_loss * 100 + 0.5)), lx, cur_y); cur_y = cur_y + 18
+    else
+        love.graphics.print("Sim: OFF [F5:Lat F6:Loss]", lx, cur_y); cur_y = cur_y + 18
+    end
+    love.graphics.setColor(0.7, 0.7, 0.7, 1)
+    love.graphics.print("Export CSV: [F4]", lx, cur_y)
 end
 
 function draw_character_sheet(sw, sh, my_entity)
@@ -1445,5 +1545,9 @@ end
 
 function love.quit()
     print("[Client] Closing connection...")
+    if loci.quit then
+        loci.quit()
+    end
     loci.disconnect("Client exiting")
+    return false
 end
