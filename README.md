@@ -82,7 +82,12 @@ Em outro terminal (ou múltiplos para testar mais de um jogador):
 - **F1 / T**: Alternar controles virtuais touch
 - **C**: Exibir ficha de atributos
 - **TAB**: Exibir placar KDA
-- **F3**: Alternar painel de depuração (Ping, FPS, Ticks, Entidades)
+- **F3**: Alternar painel de depuração (FPS, Entidades, Ping, Jitter, Loss, Tick Rate)
+- **F4**: Exportar telemetria de rede para CSV (`logs/network_stats_<timestamp>.csv`)
+- **F5**: Alternar latência simulada por sentido (`0ms -> 50ms -> 100ms`)
+- **F6**: Alternar perda de pacotes simulada (`0% -> 10% -> 25%`)
+
+> **Exportação automática ao sair:** Por padrão, `auto_export_csv_on_quit` fica desativado (`false`) para evitar criação de arquivos a cada encerramento. Para exportar o CSV automaticamente ao fechar o cliente, execute com `LOCI_AUTO_EXPORT_CSV=1 ./scripts/run_client.sh`.
 
 ---
 
