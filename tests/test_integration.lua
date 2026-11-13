@@ -414,7 +414,134 @@ loci._entities_list_cache = nil
 _G.love.graphics.newFont = orig_new_font
 print("  -> Passed: Combat HUD, Hotbar, Respawn Countdown, and KDA Scoreboard verified.")
 
-print("[Test 7] Testing Clean Shutdown in love.quit()...")
+print("[Test 7] Testing Audio System (WAV loading, Placeholder Fallback, Caster Skill SFX & Mute)...")
+local AudioSystem = require("src.audio_system")
+local played_sounds = {}
+local stopped_all_audio = 0
+local placeholder_generated = 0
+
+local function make_mock_source(tag)
+    local src = { tag = tag, volume = 1.0 }
+    function src:setVolume(v) self.volume = v end
+    function src:clone()
+        return make_mock_source(self.tag)
+    end
+    function src:play()
+        table.insert(played_sounds, self.tag)
+    end
+    function src:stop() end
+    return src
+end
+
+local orig_fs_get_info = _G.love.filesystem.getInfo
+_G.love.filesystem.getInfo = function(path)
+    local f = io.open(path, "rb")
+    if f then
+        f:close()
+        return { type = "file" }
+    end
+    return nil
+end
+
+_G.love.sound = {
+    newSoundData = function(samples, rate, bits, ch)
+        assert(type(samples) == "number" and samples == math.floor(samples) and samples > 0,
+            "newSoundData samples must be a positive integer")
+        placeholder_generated = placeholder_generated + 1
+        return { samples = samples, rate = rate, bits = bits, ch = ch, setSample = function() end }
+    end
+}
+
+local simulate_missing_slash = false
+_G.love.audio = {
+    newSource = function(src_or_path, src_type)
+        if type(src_or_path) == "string" then
+            if simulate_missing_slash and src_or_path:find("slash.wav", 1, true) then
+                error("file not found")
+            end
+            local name = src_or_path:match("([^/]+)%.wav$") or src_or_path
+            return make_mock_source(name)
+        end
+        return make_mock_source("placeholder")
+    end,
+    stop = function()
+        stopped_all_audio = stopped_all_audio + 1
+    end
+}
+
+local loaded_count = AudioSystem.init()
+assert(loaded_count == 9, "All 9 audio catalog entries must load from client/assets/audio/, got " .. tostring(loaded_count))
+assert(placeholder_generated == 0, "No placeholders needed when all .wav files exist")
+
+-- Test procedural placeholder fallback when a .wav is missing
+simulate_missing_slash = true
+_G.love.filesystem.getInfo = function(path)
+    if path:find("slash.wav", 1, true) then return nil end
+    local f = io.open(path, "rb")
+    if f then f:close(); return { type = "file" } end
+    return nil
+end
+AudioSystem.init()
+assert(placeholder_generated == 1, "Missing .wav must trigger generate_placeholder_sound once")
+assert(AudioSystem.play("slash") == true, "Placeholder sound must be playable")
+assert(played_sounds[#played_sounds] == "placeholder", "Missing slash.wav should play procedural placeholder")
+
+-- Restore full .wav loading
+simulate_missing_slash = false
+_G.love.filesystem.getInfo = orig_fs_get_info
+AudioSystem.init()
+
+-- Test remote caster vs local player skill sound resolution
+played_sounds = {}
+my_ent.properties.character_name = "arya"
+my_ent.properties.skills_list = "slash,fury_reward,whirlwind_dash,blade_throw"
+enemy_ent.properties.character_name = "mage"
+enemy_ent.properties.skills_list = "fireball"
+
+loci.on_action_cast(enemy_ent, 1, 1, 0) -- Enemy Mage slot 1 -> fireball (NOT local slash!)
+assert(played_sounds[#played_sounds] == "fireball",
+    "on_action_cast must resolve skill from casting entity (expected fireball, got " .. tostring(played_sounds[#played_sounds]) .. ")")
+
+local before_meta = #played_sounds
+loci.on_action_cast(my_ent, 999, 0, 0) -- Meta action swap must not play SFX
+assert(#played_sounds == before_meta, "Meta action 999 must not trigger skill SFX")
+
+-- Test combat & death SFX (including boolean and string is_dead + no duplicate on repeat)
+loci.on_property_changed(my_ent, "hp", 1000, 800) -- 200 dmg -> hit
+assert(played_sounds[#played_sounds] == "hit", "Normal damage must play hit SFX")
+loci.on_property_changed(my_ent, "hp", 800, 400) -- 400 dmg >= 350 -> critical
+assert(played_sounds[#played_sounds] == "critical", "Critical damage (>=350) must play critical SFX")
+loci.on_property_changed(my_ent, "shield", 200, 50) -- shield absorbed 150 -> shield_hit
+assert(played_sounds[#played_sounds] == "shield_hit", "Shield absorption must play shield_hit SFX")
+
+loci.on_property_changed(my_ent, "is_dead", false, true) -- boolean true -> death
+assert(played_sounds[#played_sounds] == "death", "Boolean is_dead=true must play death SFX")
+local count_after_death = #played_sounds
+loci.on_property_changed(my_ent, "is_dead", true, true) -- repeated death update -> no duplicate
+assert(#played_sounds == count_after_death, "Repeated is_dead=true must not replay death SFX")
+loci.on_property_changed(my_ent, "is_dead", false, false)
+
+-- Test M mute toggle and HUD label
+love.keypressed("m")
+assert(AudioSystem.is_enabled() == false, "M key must mute AudioSystem")
+assert(stopped_all_audio >= 1, "Muting must stop currently playing sounds")
+local muted_count = #played_sounds
+assert(AudioSystem.play("slash") == false and #played_sounds == muted_count, "Muted AudioSystem must not play SFX")
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "M: Mudo"), "HUD controls bar must show M: Mudo when muted")
+
+love.keypressed("m")
+assert(AudioSystem.is_enabled() == true, "Second M press must unmute AudioSystem")
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "M: Som ON"), "HUD controls bar must show M: Som ON when active")
+
+_G.love.audio = nil
+_G.love.sound = nil
+print("  -> Passed: AudioSystem WAV loading, fallback, caster SFX, combat/death SFX, and mute verified.")
+
+print("[Test 8] Testing Clean Shutdown in love.quit()...")
 csv_exported = false
 loci.netcode.auto_export_csv_on_quit = true
 local quit_called = false

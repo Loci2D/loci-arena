@@ -17,6 +17,7 @@ local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
 local MovementSync = require("src.movement_sync")
+local AudioSystem = require("src.audio_system")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -451,6 +452,9 @@ function love.load(arg)
     -- Inicializar posições dos controles virtuais para a resolução do jogo
     virtual_joystick.update_with_game_dimensions(GAME_WIDTH, GAME_HEIGHT)
 
+    -- Carregar efeitos sonoros (SFX) com fallback procedural para placeholders
+    AudioSystem.init()
+
     local random_suffix = tostring(love.math and love.math.random(1000, 9999) or math.random(1000, 9999))
     local player_name = "Player_" .. random_suffix
 
@@ -506,9 +510,12 @@ function love.load(arg)
             local damage = old_hp - new_hp
 
             if damage > 0 then
+                local is_critical = damage >= 350
+                AudioSystem.play(is_critical and "critical" or "hit")
+
                 -- 1. Screen shake apenas para dano significativo no jogador local
                 local my_entity = loci.get_my_entity()
-                if my_entity and entity.id == my_entity.id and damage > 50 then
+                if my_entity and entity and entity.id == my_entity.id and damage > 50 then
                     shake_total_duration = 0.2
                     shake_duration = 0.2
                     local intensity = math.min(8, 2.5 + (damage / 120))
@@ -518,7 +525,6 @@ function love.load(arg)
                 -- 2. Dano flutuante para qualquer entidade (local ou inimiga)
                 -- Ataques normais variam de ~150 a 300 de dano após mitigação de defesa;
                 -- Golpes com dano >= 350 são críticos reais (multiplicador 2.25x)
-                local is_critical = damage >= 350
                 local hud_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) + 32 -- Inicia acima da cabeça e HUD do modelo escalado
                 table.insert(floating_damage, {
                     value = damage,
@@ -537,8 +543,10 @@ function love.load(arg)
             local damage = old_shield - new_shield
 
             if damage > 0 then
+                AudioSystem.play("shield_hit")
+
                 local my_entity = loci.get_my_entity()
-                if my_entity and entity.id == my_entity.id and damage > 50 then
+                if my_entity and entity and entity.id == my_entity.id and damage > 50 then
                     shake_total_duration = 0.2
                     shake_duration = 0.2
                     local intensity = math.min(8, 2.5 + (damage / 120))
@@ -561,6 +569,10 @@ function love.load(arg)
             local my_entity = loci.get_my_entity()
             if entity and my_entity and entity.id == my_entity.id then
                 local dead = (new_val == true or new_val == "true")
+                local was_dead = (old_val == true or old_val == "true")
+                if dead and not was_dead then
+                    AudioSystem.play("death")
+                end
                 if dead and not respawn_state.active then
                     respawn_state.active = true
                     respawn_state.start_time = get_client_time()
@@ -597,6 +609,12 @@ function love.load(arg)
 
         local character_name = string.lower(tostring(entity and entity:get("character_name", "default") or "default"))
         local skill_name = get_entity_skill_by_slot(entity, ability_id)
+        local audio_skill = skill_name
+        if not audio_skill and ability_id == 1 and character_name == "mage" then
+            audio_skill = "fireball"
+        end
+        AudioSystem.play_skill(audio_skill, ability_id)
+
         local lifetime = 0.35
         if skill_name == "fireball" then
             lifetime = 0.40
@@ -920,6 +938,9 @@ function love.keypressed(key)
         else
             print("[Client] Não conectado - não é possível trocar personagem")
         end
+    elseif key == "m" then
+        local enabled = AudioSystem.toggle_mute()
+        print("[Audio] Áudio " .. (enabled and "ativado" or "desativado (mudo)"))
     end
 end
 
@@ -1030,13 +1051,14 @@ local function draw_combat_hud(my_entity)
 
     -- Status de conexão e controles (sempre visível, mesmo antes do spawn)
     love.graphics.setColor(0, 0, 0, 0.55)
-    love.graphics.rectangle("fill", 10, sh - 62, 600, 52, 6, 6)
+    love.graphics.rectangle("fill", 10, sh - 62, 680, 52, 6, 6)
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.print("Loci Arena", 20, sh - 55)
     love.graphics.setColor(0.7, 0.7, 0.85, 1)
     love.graphics.print(connection_status, 20, sh - 38)
     love.graphics.setColor(1, 1, 1, 0.75)
-    love.graphics.print("WASD: Mover | Espaço/Q/E/R: Skills | TAB: Placar | K: Trocar | T: Touch UI | C: Ficha", 20, sh - 22)
+    local audio_label = AudioSystem.is_enabled() and "M: Som ON" or "M: Mudo"
+    love.graphics.print("WASD: Mover | Espaço/Q/E/R: Skills | TAB: Placar | K: Trocar | T: Touch UI | C: Ficha | " .. audio_label, 20, sh - 22)
 
     if rejection_timer > 0 then
         love.graphics.setColor(0.95, 0.25, 0.25, 0.95)
