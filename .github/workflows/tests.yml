@@ -1,0 +1,59 @@
+name: Lua Tests
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    paths:
+      - 'client/**/*.lua'
+      - 'server/**/*.lua'
+      - 'tests/**'
+      - 'scripts/test_*.lua'
+      - 'scripts/run_tests.sh'
+      - '.loci2d-sdk-version'
+      - '.github/workflows/tests.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'client/**/*.lua'
+      - 'server/**/*.lua'
+      - 'tests/**'
+      - 'scripts/test_*.lua'
+      - 'scripts/run_tests.sh'
+      - '.loci2d-sdk-version'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: lua-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run Lua Test Suites
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lua5.1 curl unzip
+
+      - name: Cache Loci2D Love2D SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: client/loci2d
+          key: loci2d-sdk-${{ hashFiles('.loci2d-sdk-version') }}
+
+      - name: Download Loci2D Love2D SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: ./scripts/setup_sdk.sh --download
+
+      - name: Run all test suites
+        run: ./scripts/run_tests.sh
