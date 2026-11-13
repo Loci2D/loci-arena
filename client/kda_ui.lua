@@ -13,6 +13,24 @@ local ROW_HEIGHT = 35
 -- Estado
 local show_kda = false
 
+-- Fontes criadas uma vez (otimização)
+local font_title = nil
+local font_header = nil
+local font_rank = nil
+local font_normal = nil
+local font_footer = nil
+
+-- Inicializar fontes
+local function init_fonts()
+    if not font_title then
+        font_title = love.graphics.newFont(24)
+        font_header = love.graphics.newFont(13)
+        font_rank = love.graphics.newFont(16)
+        font_normal = love.graphics.newFont(12)
+        font_footer = love.graphics.newFont(12)
+    end
+end
+
 -- Mostrar UI
 function kda_ui.show()
     show_kda = true
@@ -33,6 +51,12 @@ function kda_ui.draw(entities, my_entity)
     if not show_kda then
         return
     end
+
+    -- Inicializar fontes na primeira chamada
+    init_fonts()
+
+    local prev_font = love.graphics.getFont()
+    local prev_line_width = love.graphics.getLineWidth and love.graphics.getLineWidth() or 1
 
     -- Usa a resolução virtual do jogo (1280x720) garantida pelo push:start()
     local sw, sh = 1280, 720
@@ -55,7 +79,7 @@ function kda_ui.draw(entities, my_entity)
 
     -- Título "SCOREBOARD"
     love.graphics.setColor(0.95, 0.95, 1, 1)
-    love.graphics.setFont(love.graphics.newFont(24))
+    love.graphics.setFont(font_title)
     love.graphics.print("SCOREBOARD", x + PADDING, y + PADDING + 8)
 
     -- Linha separadora
@@ -64,13 +88,15 @@ function kda_ui.draw(entities, my_entity)
     love.graphics.line(x + PADDING, y + PADDING + 55, x + UI_WIDTH - PADDING, y + PADDING + 55)
 
     -- Cabeçalho da tabela
-    love.graphics.setFont(love.graphics.newFont(13))
+    love.graphics.setFont(font_header)
     love.graphics.setColor(0.5, 0.5, 0.6, 1)
     love.graphics.print("RANK", x + PADDING, y + PADDING + 70)
-    love.graphics.print("PLAYER", x + PADDING + 80, y + PADDING + 70)
-    love.graphics.print("KILLS", x + PADDING + 220, y + PADDING + 70)
-    love.graphics.print("DEATHS", x + PADDING + 320, y + PADDING + 70)
-    love.graphics.print("K/D", x + PADDING + 420, y + PADDING + 70)
+    love.graphics.print("PLAYER", x + PADDING + 65, y + PADDING + 70)
+    love.graphics.print("TEAM", x + PADDING + 160, y + PADDING + 70)
+    love.graphics.print("HERO", x + PADDING + 265, y + PADDING + 70)
+    love.graphics.print("KILLS", x + PADDING + 415, y + PADDING + 70)
+    love.graphics.print("DEATHS", x + PADDING + 505, y + PADDING + 70)
+    love.graphics.print("K/D", x + PADDING + 595, y + PADDING + 70)
 
     -- Ordenar jogadores por ranking: Kills > Deaths <
     local sorted_entities = {}
@@ -104,6 +130,10 @@ function kda_ui.draw(entities, my_entity)
         local kills = tonumber(ent.kills or (ent.properties and ent.properties["kills"]) or 0) or 0
         local deaths = tonumber(ent.deaths or (ent.properties and ent.properties["deaths"]) or 0) or 0
         local kd_ratio = deaths > 0 and (kills / deaths) or kills
+        local raw_team = (ent.get and ent:get("team")) or ent.team or (ent.properties and ent.properties["team"])
+        local team_key = raw_team ~= nil and tostring(raw_team) or "?"
+        local raw_hero = (ent.get and ent:get("character_name", "Unknown")) or ent.character_name or (ent.properties and ent.properties["character_name"]) or "Unknown"
+        local hero = string.upper(tostring(raw_hero))
 
         -- Highlight para o jogador atual (estilo Valorant)
         if is_me then
@@ -113,33 +143,58 @@ function kda_ui.draw(entities, my_entity)
 
         -- Rank
         love.graphics.setColor(0.7, 0.7, 0.8, 1)
-        love.graphics.setFont(love.graphics.newFont(16))
+        love.graphics.setFont(font_rank)
         love.graphics.print(tostring(rank) .. ".", x + PADDING, row_y)
 
-        -- Nome do jogador
+        -- Jogador
         love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.setFont(font_normal)
         local label = is_me and "YOU" or ("P" .. tostring(ent.id))
-        love.graphics.print(label, x + PADDING + 80, row_y)
+        love.graphics.print(label, x + PADDING + 65, row_y)
+
+        -- Time (azul/vermelho) — cast_property_value converte "1"/"2" para número
+        local team_label = team_key
+        if team_key == "1" then
+            love.graphics.setColor(0.4, 0.6, 1.0, 1)
+            team_label = "AZUL"
+        elseif team_key == "2" then
+            love.graphics.setColor(1.0, 0.4, 0.4, 1)
+            team_label = "VERMELHO"
+        else
+            love.graphics.setColor(0.5, 0.5, 0.5, 1)
+        end
+        love.graphics.print(team_label, x + PADDING + 160, row_y)
+
+        -- Herói
+        love.graphics.setColor(0.9, 0.9, 0.9, 1)
+        love.graphics.print(hero, x + PADDING + 265, row_y)
 
         -- Kills (verde neon)
         love.graphics.setColor(0.0, 0.95, 0.5, 1)
-        love.graphics.print(tostring(kills), x + PADDING + 220, row_y)
+        love.graphics.print(tostring(kills), x + PADDING + 415, row_y)
 
         -- Deaths (vermelho neon)
         love.graphics.setColor(0.95, 0.35, 0.35, 1)
-        love.graphics.print(tostring(deaths), x + PADDING + 320, row_y)
+        love.graphics.print(tostring(deaths), x + PADDING + 505, row_y)
 
         -- K/D Ratio (amarelo/branco)
         love.graphics.setColor(1, 1, 0.7, 1)
-        love.graphics.print(string.format("%.2f", kd_ratio), x + PADDING + 420, row_y)
+        love.graphics.print(string.format("%.2f", kd_ratio), x + PADDING + 595, row_y)
 
         row_y = row_y + ROW_HEIGHT
     end
 
     -- Footer com instruções
     love.graphics.setColor(0.4, 0.4, 0.5, 1)
-    love.graphics.setFont(love.graphics.newFont(12))
+    love.graphics.setFont(font_footer)
     love.graphics.print("Hold TAB for scoreboard", x + PADDING, y + UI_HEIGHT - 25)
+
+    -- Restaura estado gráfico para não afetar overlays seguintes
+    if prev_font then
+        love.graphics.setFont(prev_font)
+    end
+    love.graphics.setLineWidth(prev_line_width)
+    love.graphics.setColor(1, 1, 1, 1)
 end
 
 return kda_ui
