@@ -16,6 +16,7 @@ local push = require("src.push")
 local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
+local sprite_anim = require("src.sprite_anim")
 local MovementSync = require("src.movement_sync")
 local AudioSystem = require("src.audio_system")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
@@ -114,79 +115,7 @@ local DIRECTIONS_8 = {
 
 local function load_character_sprite(character_name)
     if not character_name or character_name == "" then return nil end
-    local key = string.lower(character_name)
-    if character_sprites[key] ~= nil then
-        local cached = character_sprites[key]
-        return (cached ~= false and cached) or nil
-    end
-
-    local found_info = nil
-
-    -- 1. Tenta carregar pasta com conjunto de 8 direções do Pixelab (ex: assets/sprites/arya/south.png)
-    local dir_folder_candidates = {
-        "assets/sprites/" .. key,
-        "client/assets/sprites/" .. key
-    }
-    for _, folder in ipairs(dir_folder_candidates) do
-        if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(folder .. "/south.png") then
-            local rot_images = {}
-            local loaded_any = false
-            for _, dir in ipairs(DIRECTIONS_8) do
-                local p = folder .. "/" .. dir .. ".png"
-                if love.filesystem.getInfo(p) then
-                    local ok, img = pcall(love.graphics.newImage, p)
-                    if ok and img then
-                        img:setFilter("nearest", "nearest")
-                        rot_images[dir] = img
-                        loaded_any = true
-                    end
-                end
-            end
-            if loaded_any then
-                local def_img = rot_images["south"] or rot_images["east"]
-                found_info = {
-                    has_rotations = true,
-                    rotations = rot_images,
-                    image = def_img,
-                    width = def_img and def_img:getWidth() or SPRITE_BASE_SIZE,
-                    height = def_img and def_img:getHeight() or SPRITE_BASE_SIZE
-                }
-                print(string.format("[Client] Loaded 8-direction sprite set for '%s' from %s/", character_name, folder))
-                break
-            end
-        end
-    end
-
-    -- 2. Fallback: carregar PNG único (ex: assets/sprites/arya.png)
-    if not found_info then
-        local possible_paths = {
-            "assets/sprites/" .. key .. ".png",
-            "assets/sprites/" .. character_name .. ".png",
-            "client/assets/sprites/" .. key .. ".png"
-        }
-
-        for _, path in ipairs(possible_paths) do
-            if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(path) then
-                local ok_img, img = pcall(love.graphics.newImage, path)
-                if ok_img and img then
-                    img:setFilter("nearest", "nearest")
-                    local w = img:getWidth()
-                    local h = img:getHeight()
-                    print(string.format("[Client] Loaded character sprite '%s' (%dx%d) for '%s'", path, w, h, character_name))
-                    found_info = {
-                        has_rotations = false,
-                        image = img,
-                        width = w,
-                        height = h
-                    }
-                    break
-                end
-            end
-        end
-    end
-
-    character_sprites[key] = found_info or false
-    return found_info
+    return sprite_anim.load_character(character_name)
 end
 
 local function get_entity_skill_by_slot(entity, slot_index)
@@ -500,6 +429,7 @@ function love.load(arg)
     loci.on_entity_despawned = function(entity_id)
         print("[Event] Entity despawned: ID " .. tostring(entity_id))
         procedural_anim.clear_state(entity_id)
+        sprite_anim.clear_entity_state(entity_id)
     end
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
@@ -566,9 +496,12 @@ function love.load(arg)
                 })
             end
         elseif key == "is_dead" then
+            local dead = (new_val == true or new_val == "true")
+            if entity then
+                sprite_anim.set_dead(entity.id, dead)
+            end
             local my_entity = loci.get_my_entity()
             if entity and my_entity and entity.id == my_entity.id then
-                local dead = (new_val == true or new_val == "true")
                 local was_dead = (old_val == true or old_val == "true")
                 if dead and not was_dead then
                     AudioSystem.play("death")
@@ -582,7 +515,14 @@ function love.load(arg)
                     respawn_state.active = false
                 end
             end
+        elseif key == "fury_active" then
+            if (new_val == true or new_val == "true") and entity then
+                sprite_anim.trigger_ally_death(entity.id)
+            end
         elseif key == "character_name" then
+            if entity then
+                sprite_anim.on_character_changed(entity.id, new_val)
+            end
             local my_entity = loci.get_my_entity()
             if entity and my_entity and entity.id == my_entity.id then
                 reset_cooldown_slots()
@@ -614,6 +554,10 @@ function love.load(arg)
             audio_skill = "fireball"
         end
         AudioSystem.play_skill(audio_skill, ability_id)
+
+        if entity then
+            sprite_anim.trigger_action(entity.id, skill_name, ability_id, dx, dy)
+        end
 
         local lifetime = 0.35
         if skill_name == "fireball" then
@@ -794,7 +738,17 @@ function love.update(dt)
         if speed > 0.05 then
             is_moving = true
         end
-        procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
+        local p_state = procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
+        local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
+        local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
+        sprite_anim.update(dt, ent.id, {
+            character_name = char_name,
+            direction = p_state and p_state.direction or "south",
+            facing = p_state and p_state.facing or 1,
+            is_moving = is_moving,
+            speed = speed,
+            is_dead = is_dead
+        })
     end
 
     if my_entity then
@@ -1640,18 +1594,26 @@ function draw_entity(ent, is_me)
     local shield_value = tonumber(ent.shield or (ent.properties and ent.properties["shield"])) or 0
 
     local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
-    local sprite_info = load_character_sprite(char_name)
-
-    -- Dimensões do sprite / modelo (padrão 32x32px)
-    local sprite_w = (sprite_info and sprite_info.width) or SPRITE_BASE_SIZE
-    local sprite_h = (sprite_info and sprite_info.height) or SPRITE_BASE_SIZE
-
-    -- Escala de renderização: SPRITE_SCALE pixels por pixel do sprite (32px * 2 = 64px na tela)
-    local scale = SPRITE_SCALE
 
     -- Estado visual e de orientação da entidade (8 direções)
     local anim_state = procedural_anim.get_state(ent.id)
     local ent_dir = anim_state.direction or "south"
+
+    -- Obter frame animado e pivô sob demanda da máquina de estados
+    local img_to_draw, ox, oy, has_8way = sprite_anim.get_frame({
+        entity_id = ent.id,
+        character_name = char_name,
+        direction = ent_dir,
+        is_dead = is_dead,
+        is_moving = anim_state.is_moving
+    })
+
+    -- Dimensões do sprite / modelo (ox = w/2, oy = h recalculados por frame)
+    local sprite_w = ox and (ox * 2) or SPRITE_BASE_SIZE
+    local sprite_h = oy or SPRITE_BASE_SIZE
+
+    -- Escala de renderização: SPRITE_SCALE pixels por pixel do sprite (32px * 2 = 64px na tela)
+    local scale = SPRITE_SCALE
 
     -- Sombra dos pés proporcional ao modelo de 32px ancorada na base (px, py)
     local shadow_radius_x = 13 * scale
@@ -1660,16 +1622,14 @@ function draw_entity(ent, is_me)
     local team = raw_team ~= nil and tostring(raw_team) or nil
     draw_team_shadow(px, py, shadow_radius_x, shadow_radius_y, team, is_dead)
 
-    -- Pivô nos pés (base central inferior: ox = 16, oy = 32 para modelos 32x32)
-    local ox = sprite_w / 2
-    local oy = sprite_h
+    -- Pivô nos pés (base central inferior: ox = w/2, oy = h)
+    ox = ox or (sprite_w / 2)
+    oy = oy or sprite_h
 
     local draw_x = px
     local draw_y = py -- Posição sólida e alinhada à grade de pixels (sem bobbing procedural)
 
-    if sprite_info then
-        -- Seleciona a imagem correta: rotação 8-way do Pixelab ou imagem padrão
-        local img_to_draw = (sprite_info.has_rotations and sprite_info.rotations[ent_dir]) or sprite_info.image
+    if img_to_draw then
         if is_dead then
             love.graphics.setColor(0.5, 0.5, 0.5, 0.75)
         else
@@ -1678,7 +1638,7 @@ function draw_entity(ent, is_me)
 
         -- Para imagem única sem rotações, espelha via facing; para 8 direções do Pixelab, desenha direto sem distorção
         local scale_x = scale
-        if not sprite_info.has_rotations then
+        if not has_8way then
             scale_x = scale * (anim_state.facing or 1)
         end
 
