@@ -495,6 +495,12 @@ function love.load(arg)
     -- Event hooks
     loci.on_entity_spawned = function(entity)
         print(string.format("[Event] Entity spawned: ID %s at (%.1f, %.1f)", tostring(entity.id), entity.x, entity.y))
+
+        -- Iniciar BGM quando o jogador local spawnar
+        local my_entity = loci.get_my_entity()
+        if my_entity and entity.id == my_entity.id then
+            AudioSystem.play_bgm("arena")
+        end
     end
 
     loci.on_entity_despawned = function(entity_id)
