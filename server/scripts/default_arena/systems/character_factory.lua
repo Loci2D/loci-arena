@@ -222,12 +222,12 @@ function CharacterFactory.on_entity_die(dead_entity_id)
             
             -- Passiva da Arya: Protetora Tática / Adrenalina
             if string.lower(char_name or "") == "arya" and team and team == dead_team then
-                -- 1 segundo de paralisia = 30 ticks
-                Loci.Commands.set_property(entity_id, "paralyzed_until", tostring(current_tick + 30))
+                -- 3 segundos de paralisia = 90 ticks
+                Loci.Commands.set_property(entity_id, "paralyzed_until", tostring(current_tick + 90))
                 -- Ativa a Fúria
                 Loci.Commands.set_property(entity_id, "fury_active", "true")
                 if Loci and Loci.Log then
-                    Loci.Log.info("[Arya] Aliado morreu! " .. tostring(entity_id) .. " em choque térmico/emocional por 1s. Fúria ativada.")
+                    Loci.Log.info("[Arya] Aliado morreu! " .. tostring(entity_id) .. " em choque térmico/emocional por 3s. Fúria ativada.")
                 end
             end
         end

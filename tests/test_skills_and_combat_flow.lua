@@ -394,11 +394,11 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     assert(p3.props.hp == "0" and p3.props.is_dead == "true")
     assert(p3.props.deaths == "1" and p2.props.kills == "1")
     assert(p1.props.fury_active == "true")
-    assert(p1.props.paralyzed_until == "100") -- 70 + 30
+    assert(p1.props.paralyzed_until == "160") -- 70 + 90
     assert(on_action(1, 2, 1, 0) == false, "paralyzed p1 cannot cast fury_reward yet")
 
-    -- 4. Advance to tick 100: paralysis expires, p1 moves next to p2 and finishes p2 with fury_reward (slot 2)
-    env.step_ticks(71, 100)
+    -- 4. Advance to tick 160: paralysis expires, p1 moves next to p2 and finishes p2 with fury_reward (slot 2)
+    env.step_ticks(71, 160)
     p2.x, p2.y = 5, 0
     p2.props.hp = "200"
     with_fixed_random(0.99, function()
@@ -408,8 +408,8 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     assert(p2.props.deaths == "1" and p1.props.kills == "1")
     assert(p1.props.fury_active == "false")
 
-    -- 5. Advance to tick 400 (300 ticks after tick 100): both p3 (died at 70) and p2 (died at 100) have respawned
-    env.step_ticks(101, 400)
+    -- 5. Advance to tick 460 (300 ticks after tick 160): both p3 (died at 70) and p2 (died at 160) have respawned
+    env.step_ticks(161, 460)
     assert(p3.props.is_dead == "false" and p3.props.hp == p3.props.max_hp)
     assert(p2.props.is_dead == "false" and p2.props.hp == p2.props.max_hp)
 

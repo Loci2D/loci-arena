@@ -517,7 +517,7 @@ function love.load(arg)
             end
         elseif key == "fury_active" then
             if (new_val == true or new_val == "true") and entity then
-                sprite_anim.trigger_ally_death(entity.id)
+                sprite_anim.trigger_ally_death(entity.id, entity.character_name)
             end
         elseif key == "character_name" then
             if entity then

@@ -615,6 +615,23 @@ local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
     if state then
         -- Obter animação preferida ou padrão do estado
         local anim_name = sprite_set.anim_map.preferred_anims[state.name] or state.default_anim
+        local target_f_idx = f_idx
+
+        -- Sequência de luto/choque da Arya (total 18 frames):
+        -- Frames 1..9: "ela_caindo_no_chao_chorando"
+        -- Frames 10..18: "apos_isso_ela_pega_sua_espada_devolta_e_acende_uma"
+        if state.name == "aliado_morre" and state.animations
+           and state.animations["ela_caindo_no_chao_chorando"]
+           and state.animations["apos_isso_ela_pega_sua_espada_devolta_e_acende_uma"] then
+            if f_idx <= 9 then
+                anim_name = "ela_caindo_no_chao_chorando"
+                target_f_idx = f_idx
+            else
+                anim_name = "apos_isso_ela_pega_sua_espada_devolta_e_acende_uma"
+                target_f_idx = f_idx - 9
+            end
+        end
+
         local anim = anim_name and state.animations[anim_name]
         if not anim and state.animations then
             _, anim = next(state.animations)
@@ -623,7 +640,7 @@ local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
         -- 1. Frame exato na direção solicitada
         if anim and anim[dir] and #anim[dir] > 0 then
             local frames = anim[dir]
-            local clamped_idx = math.min(math.max(1, f_idx), #frames)
+            local clamped_idx = math.min(math.max(1, target_f_idx), #frames)
             local path = frames[clamped_idx]
             local img, w, h = load_image(path)
             if img then
@@ -637,7 +654,7 @@ local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
             for _, alt_dir in ipairs(fallbacks) do
                 if anim[alt_dir] and #anim[alt_dir] > 0 then
                     local frames = anim[alt_dir]
-                    local clamped_idx = math.min(math.max(1, f_idx), #frames)
+                    local clamped_idx = math.min(math.max(1, target_f_idx), #frames)
                     local img, w, h = load_image(frames[clamped_idx])
                     if img then
                         return img, w, h, true
@@ -794,8 +811,9 @@ function SpriteAnim.trigger_action(entity_id, skill_name, ability_id, dir_x, dir
 end
 
 -- Reação quando um aliado morre (passiva da Arya: "aliado_morre")
-function SpriteAnim.trigger_ally_death(entity_id)
-    local state = entity_states[entity_id]
+function SpriteAnim.trigger_ally_death(entity_id, char_name)
+    local cname = (char_name and char_name ~= "") and char_name or "arya"
+    local state = SpriteAnim.get_entity_state(entity_id, cname)
     if not state or state.is_dead then return end
 
     local sprite_set = SpriteAnim.load_character(state.character_name)
@@ -808,6 +826,7 @@ function SpriteAnim.trigger_ally_death(entity_id)
         state.frame_index = 1
         state.timer = 0
         state.is_locked = true
+        print(string.format("[Client] Entity %s playing '%s' (3s paralysis mourning animation)", tostring(entity_id), mapped_state))
     end
 end
 
@@ -849,6 +868,12 @@ local function get_state_frame_count(sprite_set, state_name, direction)
         if mapped then
             state = sprite_set.states[mapped]
         end
+    end
+
+    if (state_name == "aliado_morre" or (state and state.name == "aliado_morre")) and state and state.animations
+       and state.animations["ela_caindo_no_chao_chorando"]
+       and state.animations["apos_isso_ela_pega_sua_espada_devolta_e_acende_uma"] then
+        return 18
     end
 
     if not state or not state.animations then return 9 end
@@ -913,9 +938,13 @@ function SpriteAnim.update(dt, entity_id, data)
     -- Se estiver executando uma ação bloqueante (ataque ou aliado_morre)
     if state.is_locked and state.current_action then
         local total_frames = get_state_frame_count(sprite_set, state.current_action, state.direction)
+        local cur_frame_dur = frame_duration
+        if state.current_action == "aliado_morre" and total_frames == 18 then
+            cur_frame_dur = 3.0 / 18 -- 0.1667s por frame, exatamente 3 segundos no total
+        end
         state.timer = state.timer + dt
-        if state.timer >= frame_duration then
-            state.timer = state.timer - frame_duration
+        if state.timer >= cur_frame_dur then
+            state.timer = state.timer - cur_frame_dur
             state.frame_index = state.frame_index + 1
             if state.frame_index > total_frames then
                 -- Fim da animação one-shot: desbloquear e retornar ao estado de locomoção/idle
