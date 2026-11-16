@@ -31,6 +31,7 @@ socket.udp = function()
 end
 
 -- 2. Mock Love2D minimal environment
+_G.unpack = unpack or table.unpack
 _G.love = {
     getVersion = function() return 11, 5, 0 end,
     window = {
@@ -562,5 +563,96 @@ assert(quit_called == true, "love.quit() must invoke loci.quit()")
 assert(csv_exported == true, "loci.quit() must trigger export_network_stats_csv when auto_export_csv_on_quit=true")
 assert(disconnect_called == true, "love.quit() must invoke loci.disconnect()")
 print("  -> Passed: love.quit invokes loci.quit() and loci.disconnect() cleanly.")
+
+print("[Test 9] Testing BGM System (Streaming, Loop, Track Switching, Mute/Unmute & Headless)...")
+local bgm_played = {}
+local bgm_stopped = {}
+local bgm_paused = {}
+
+local function make_mock_bgm_source(tag)
+    local src = { tag = tag, volume = 1.0, looping = false, paused = false }
+    function src:setVolume(v) self.volume = v end
+    function src:setLooping(loop) self.looping = loop end
+    function src:play()
+        table.insert(bgm_played, self.tag)
+        self.paused = false
+    end
+    function src:stop()
+        table.insert(bgm_stopped, self.tag)
+    end
+    function src:pause()
+        table.insert(bgm_paused, self.tag)
+        self.paused = true
+    end
+    return src
+end
+
+-- Mock BGM file exists
+_G.love.filesystem.getInfo = function(path)
+    if path:find("bgm_arena.mp3", 1, true) then
+        return { type = "file" }
+    end
+    local f = io.open(path, "rb")
+    if f then f:close(); return { type = "file" } end
+    return nil
+end
+
+-- Override newSource to distinguish BGM (stream) from SFX (static)
+local orig_new_source = _G.love.audio.newSource
+_G.love.audio.newSource = function(src_or_path, src_type)
+    if type(src_or_path) == "string" and src_type == "stream" then
+        local name = src_or_path:match("([^/]+)%.[^.]+$") or src_or_path
+        return make_mock_bgm_source(name)
+    end
+    return orig_new_source(src_or_path, src_type)
+end
+
+AudioSystem.init()
+assert(#bgm_played == 0, "BGM should not auto-start on init")
+
+-- Test play_bgm with loop
+AudioSystem.play_bgm("arena")
+assert(bgm_played[#bgm_played] == "bgm_arena", "play_bgm('arena') must load and play bgm_arena.mp3")
+assert(AudioSystem.get_current_bgm() == "arena", "get_current_bgm() must return 'arena'")
+
+-- Test track switching (no overlap)
+AudioSystem.play_bgm("arena") -- Play same track again
+assert(#bgm_stopped == 0, "Playing same BGM track should not stop previous (no double-stop)")
+
+-- Test stop_bgm
+AudioSystem.stop_bgm()
+assert(#bgm_stopped > 0 and bgm_stopped[#bgm_stopped] == "bgm_arena", "stop_bgm() must stop current BGM")
+assert(AudioSystem.get_current_bgm() == nil, "get_current_bgm() must return nil after stop")
+
+-- Test pause/resume
+AudioSystem.play_bgm("arena")
+AudioSystem.pause_bgm()
+assert(#bgm_paused > 0 and bgm_paused[#bgm_paused] == "bgm_arena", "pause_bgm() must pause current BGM")
+AudioSystem.resume_bgm()
+assert(bgm_played[#bgm_played] == "bgm_arena", "resume_bgm() must resume paused BGM")
+
+-- Test mute/unmute preserves BGM state
+AudioSystem.play_bgm("arena")
+AudioSystem.set_enabled(false) -- Mute
+assert(AudioSystem.is_enabled() == false, "Mute must disable audio")
+AudioSystem.set_enabled(true) -- Unmute
+assert(AudioSystem.is_enabled() == true, "Unmute must re-enable audio")
+assert(bgm_played[#bgm_played] == "bgm_arena", "Unmute must resume BGM that was playing before mute")
+
+-- Test volume control
+AudioSystem.set_sfx_volume(0.5)
+assert(AudioSystem.get_sfx_volume() == 0.5, "set_sfx_volume(0.5) must set SFX volume to 0.5")
+AudioSystem.set_bgm_volume(0.3)
+assert(AudioSystem.get_bgm_volume() == 0.3, "set_bgm_volume(0.3) must set BGM volume to 0.3")
+
+-- Test headless mode (no love.audio)
+local current_bgm_before = AudioSystem.get_current_bgm()
+_G.love.audio = nil
+_G.love.sound = nil
+AudioSystem.init() -- Should not crash in headless mode
+assert(AudioSystem.play_bgm("arena") == false, "BGM play must fail silently in headless mode")
+assert(AudioSystem.get_current_bgm() == current_bgm_before, "Headless mode must not corrupt BGM state")
+
+print("  -> Passed: BGM streaming, loop, track switching, mute/unmute, volume control, and headless verified.")
 
 print("\n>>> ALL CLIENT INTEGRATION TESTS PASSED SUCCESSFULLY! <<<")

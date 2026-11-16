@@ -1,11 +1,17 @@
--- Sistema de Áudio (SFX) para Loci Arena
--- Carrega arquivos .wav de client/assets/audio/ e gera placeholders procedurais se ausentes.
+-- Sistema de Áudio (SFX + BGM) para Loci Arena
+-- Carrega arquivos .wav (SFX) e .ogg/.mp3 (BGM) de client/assets/audio/
+-- SFX usa "static" com clone() para sobreposição; BGM usa "stream" para arquivos longos.
 
 local audio_system = {}
 
 local AUDIO_DIR_CANDIDATES = {
     "assets/audio/",
     "client/assets/audio/",
+}
+
+-- BGM: Streaming (stream) para arquivos longos, sem placeholder
+local BGM_CATALOG = {
+    arena = { file = "bgm_arena.mp3", volume = 0.5 },
 }
 
 local SOUND_CATALOG = {
@@ -38,6 +44,15 @@ local ABILITY_FALLBACK_MAP = {
 
 local sounds = {}
 local audio_enabled = true
+
+-- BGM state
+local bgm_sources = {}
+local current_bgm = nil
+local bgm_was_playing_before_mute = false
+
+-- Volume independente (0.0 a 1.0)
+local sfx_volume = 1.0
+local bgm_volume = 1.0
 
 local function has_audio_backend()
     return love ~= nil and love.audio ~= nil and type(love.audio.newSource) == "function"
@@ -78,11 +93,12 @@ local function generate_placeholder_sound(frequency, duration)
     return nil
 end
 
-local function resolve_audio_path(filename)
+local function resolve_audio_path(filename, source_type)
+    source_type = source_type or "static"
     for _, dir in ipairs(AUDIO_DIR_CANDIDATES) do
         local path = dir .. filename
         if not love.filesystem or not love.filesystem.getInfo or love.filesystem.getInfo(path) then
-            local ok, source = pcall(love.audio.newSource, path, "static")
+            local ok, source = pcall(love.audio.newSource, path, source_type)
             if ok and source then
                 return source
             end
@@ -103,6 +119,10 @@ end
 --- Carrega todos os efeitos sonoros cadastrados (com fallback procedural caso o .wav falte).
 function audio_system.init()
     sounds = {}
+    bgm_sources = {}
+    current_bgm = nil
+    bgm_was_playing_before_mute = false
+
     if not has_audio_backend() then
         print("[Audio] Backend de áudio indisponível (modo headless); SFX desabilitado com segurança")
         return 0
@@ -121,6 +141,24 @@ function audio_system.init()
     end
 
     print(string.format("[Audio] %d efeitos sonoros carregados", loaded))
+
+    -- Carregar BGM (streaming, sem placeholder)
+    for key, entry in pairs(BGM_CATALOG) do
+        local src = resolve_audio_path(entry.file, "stream")
+        if src then
+            if src.setLooping then
+                pcall(src.setLooping, src, true)
+            end
+            if entry.volume and src.setVolume then
+                pcall(src.setVolume, src, entry.volume * bgm_volume)
+            end
+            bgm_sources[key] = src
+            print(string.format("[Audio] BGM '%s' carregado (streaming)", key))
+        else
+            print(string.format("[Audio] BGM '%s' não encontrado (%s) - trilha desabilitada silenciosamente", key, entry.file))
+        end
+    end
+
     return loaded
 end
 
@@ -140,7 +178,7 @@ function audio_system.play(sound_name)
         if ok_clone and clone then
             local entry = SOUND_CATALOG[sound_name]
             if entry and entry.volume and type(clone.setVolume) == "function" then
-                pcall(clone.setVolume, clone, entry.volume)
+                pcall(clone.setVolume, clone, entry.volume * sfx_volume)
             end
             local ok_play = pcall(clone.play, clone)
             if ok_play then
@@ -178,15 +216,127 @@ function audio_system.is_enabled()
 end
 
 function audio_system.set_enabled(enabled)
+    local was_enabled = audio_enabled
     audio_enabled = not not enabled
-    if not audio_enabled and love and love.audio and type(love.audio.stop) == "function" then
-        pcall(love.audio.stop)
+
+    if not has_audio_backend() then
+        return audio_enabled
     end
+
+    if not audio_enabled then
+        -- Mudo: pausar BGM específico (preservando posição)
+        if current_bgm and type(current_bgm.pause) == "function" then
+            pcall(current_bgm.pause, current_bgm)
+        end
+        -- Marcar estado da BGM para retomar ao desmutar
+        bgm_was_playing_before_mute = (current_bgm ~= nil)
+    else
+        -- Desmutar: retomar BGM se estava tocando antes
+        if bgm_was_playing_before_mute and current_bgm then
+            pcall(current_bgm.play, current_bgm)
+        end
+    end
+
     return audio_enabled
 end
 
 function audio_system.toggle_mute()
     return audio_system.set_enabled(not audio_enabled)
+end
+
+-- ========== BGM API ==========
+
+--- Reproduz uma faixa de BGM em loop (para a anterior se estiver tocando).
+function audio_system.play_bgm(track_name)
+    if not has_audio_backend() then
+        return false
+    end
+
+    local bgm = bgm_sources[track_name]
+    if not bgm then
+        print(string.format("[Audio] BGM '%s' não encontrado", track_name))
+        return false
+    end
+
+    -- Parar BGM anterior se estiver tocando
+    if current_bgm and current_bgm ~= bgm then
+        pcall(current_bgm.stop, current_bgm)
+    end
+
+    current_bgm = bgm
+    bgm_was_playing_before_mute = true
+
+    if type(bgm.play) == "function" then
+        pcall(bgm.play, bgm)
+        print(string.format("[Audio] BGM '%s' iniciado", track_name))
+        return true
+    end
+    return false
+end
+
+--- Para a BGM atual.
+function audio_system.stop_bgm()
+    if current_bgm and type(current_bgm.stop) == "function" then
+        pcall(current_bgm.stop, current_bgm)
+        current_bgm = nil
+        bgm_was_playing_before_mute = false
+        print("[Audio] BGM parado")
+    end
+end
+
+--- Pausa a BGM atual (preserva posição).
+function audio_system.pause_bgm()
+    if current_bgm and type(current_bgm.pause) == "function" then
+        pcall(current_bgm.pause, current_bgm)
+        print("[Audio] BGM pausado")
+    end
+end
+
+--- Retoma a BGM pausada.
+function audio_system.resume_bgm()
+    if current_bgm and type(current_bgm.play) == "function" then
+        pcall(current_bgm.play, current_bgm)
+        print("[Audio] BGM retomado")
+    end
+end
+
+--- Retorna a faixa de BGM atual (nome ou nil).
+function audio_system.get_current_bgm()
+    for name, src in pairs(bgm_sources) do
+        if src == current_bgm then
+            return name
+        end
+    end
+    return nil
+end
+
+-- ========== Volume Control ==========
+
+--- Define o volume de SFX (0.0 a 1.0).
+function audio_system.set_sfx_volume(vol)
+    sfx_volume = math.max(0.0, math.min(1.0, vol or 1.0))
+end
+
+--- Define o volume de BGM (0.0 a 1.0).
+function audio_system.set_bgm_volume(vol)
+    bgm_volume = math.max(0.0, math.min(1.0, vol or 1.0))
+    -- Aplicar volume imediatamente ao BGM atual
+    if current_bgm and type(current_bgm.setVolume) == "function" then
+        local entry = BGM_CATALOG[audio_system.get_current_bgm()]
+        if entry then
+            pcall(current_bgm.setVolume, current_bgm, entry.volume * bgm_volume)
+        end
+    end
+end
+
+--- Retorna o volume de SFX.
+function audio_system.get_sfx_volume()
+    return sfx_volume
+end
+
+--- Retorna o volume de BGM.
+function audio_system.get_bgm_volume()
+    return bgm_volume
 end
 
 function audio_system.get_catalog()
