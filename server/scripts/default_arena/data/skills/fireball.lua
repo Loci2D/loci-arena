@@ -20,10 +20,10 @@ return {
     description = "Bola de fogo explosiva com dano mágico em área",
     mana_cost = 35,
     cooldown = 45, -- 1.5s a 30Hz
-    range = 300 / VISUAL_SCALE,     -- 37.5 unidades no mundo (300px na tela)
+    range = 360 / VISUAL_SCALE,     -- 45.0 unidades no mundo (360px na tela) - aumentado de 300px
     damage = 500,
     damage_type = CombatSystem.DamageType.MAGICAL,
-    aoe_radius = 60 / VISUAL_SCALE, -- 7.5 unidades no mundo (60px na tela)
+    aoe_radius = 75 / VISUAL_SCALE, -- 9.375 unidades no mundo (75px na tela) - aumentado de 60px
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         -- Normaliza vetor de mira

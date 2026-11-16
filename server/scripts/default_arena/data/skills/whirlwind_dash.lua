@@ -21,12 +21,12 @@ return {
     description = "Avança na direção da mira, desferindo um giro de 360º com dano físico em área.",
     mana_cost = 25,
     cooldown = 180, -- 6 segundos a 30Hz
-    range = 160 / VISUAL_SCALE,     -- 20.0 unidades no mundo (160px na tela)
+    range = 200 / VISUAL_SCALE,     -- 25.0 unidades no mundo (200px na tela) - aumentado de 160px
     dash_duration_ticks = 4,        -- ~0.13s a 30Hz para uma investida rápida
-    dash_speed = (160 / VISUAL_SCALE) / 4, -- 5.0 unidades/tick (desloca 20.0 unidades em 4 ticks)
+    dash_speed = (200 / VISUAL_SCALE) / 4, -- 6.25 unidades/tick (desloca 25.0 unidades em 4 ticks)
     damage = 450,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 65 / VISUAL_SCALE, -- 8.125 unidades no mundo (65px na tela)
+    aoe_radius = 80 / VISUAL_SCALE, -- 10.0 unidades no mundo (80px na tela) - aumentado de 65px
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         -- Normaliza direção da mira
