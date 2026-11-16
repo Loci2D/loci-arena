@@ -19,10 +19,10 @@ return {
     description = "Golpe físico devastador de médio alcance, ativado após um aliado morrer.",
     mana_cost = 0,
     cooldown = 150, -- 5.0s a 30Hz (em 1v1/sem aliados; em times é ativado pela passiva de morte de aliado)
-    range = 160 / VISUAL_SCALE,    -- 20.0 unidades no mundo (160px na tela) - aumentado de 120px
+    range = 240 / VISUAL_SCALE,    -- 30.0 unidades no mundo (240px na tela) - aumentado significativamente
     damage = 500,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 70 / VISUAL_SCALE, -- 8.75 unidades no mundo (70px na tela) - aumentado de 50px
+    aoe_radius = 100 / VISUAL_SCALE, -- 12.5 unidades no mundo (100px na tela) - aumentado significativamente
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         local caster_team = Loci.get_entity_property(entity_id, "team") or "1"

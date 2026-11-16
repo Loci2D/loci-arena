@@ -20,10 +20,10 @@ return {
     description = "Ataque corporal com dano físico em área frontal",
     mana_cost = 10,
     cooldown = 15, -- 0.5s a 30Hz
-    range = 120 / VISUAL_SCALE,    -- 15.0 unidades no mundo (120px na tela) - aumentado de 80px
+    range = 200 / VISUAL_SCALE,    -- 25.0 unidades no mundo (200px na tela) - aumentado significativamente
     damage = 350,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 60 / VISUAL_SCALE, -- 7.5 unidades no mundo (60px na tela) - aumentado de 45px
+    aoe_radius = 80 / VISUAL_SCALE, -- 10.0 unidades no mundo (80px na tela) - aumentado significativamente
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         -- Normaliza vetor de mira

@@ -1264,7 +1264,7 @@ local function draw_procedural_skill_fx(fx)
         love.graphics.setLineWidth(8)
         love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
     elseif skill_name == "fury_reward" then
-        local hit_dist = 80 -- (10.0 unidades no mundo * VISUAL_SCALE = 80px na tela) - atualizado de 60
+        local hit_dist = 120 -- (15.0 unidades no mundo * VISUAL_SCALE = 120px na tela)
         local hit_x = fx_start_x + fx.dir_x * hit_dist
         local hit_y = fx_start_y + fx.dir_y * hit_dist
         local r = 50 * (0.5 + 0.8 * inv_prog)
@@ -1275,7 +1275,7 @@ local function draw_procedural_skill_fx(fx)
         love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
     elseif skill_name == "whirlwind_dash" then
         local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
-        local dash_world_dist = (200 / VISUAL_SCALE) * inv_prog -- 25 unidades no mundo - atualizado de 160
+        local dash_world_dist = (280 / VISUAL_SCALE) * inv_prog -- 35 unidades no mundo
         local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
         local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
         local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
@@ -1365,8 +1365,8 @@ function love.draw()
     if my_entity and show_touch_controls then
         -- Alcance no mundo de cada habilidade (em pixels visuais: range * VISUAL_SCALE)
         local SKILL_RANGES = {
-            [3] = 200, -- Whirlwind Dash (25.0 * 8) - atualizado de 160
-            [4] = 320, -- Blade Throw (40.0 * 8) - atualizado de 260
+            [3] = 280, -- Whirlwind Dash (35.0 * 8)
+            [4] = 400, -- Blade Throw (50.0 * 8)
         }
 
         for slot = 3, 4 do
