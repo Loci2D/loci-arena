@@ -70,7 +70,15 @@ local function file_exists(path)
     if not path or path == "" then return false end
     if love and love.filesystem and love.filesystem.getInfo then
         local info = love.filesystem.getInfo(path)
-        return info ~= nil and info.type ~= "directory"
+        if type(info) == "table" then
+            return info.type ~= "directory"
+        elseif type(info) == "boolean" then
+            if not info then return false end
+            local f = io.open(path, "r")
+            if f then f:close(); return true end
+            return false
+        end
+        return false
     end
     local f = io.open(path, "r")
     if f then
@@ -84,7 +92,14 @@ local function dir_exists(path)
     if not path or path == "" then return false end
     if love and love.filesystem and love.filesystem.getInfo then
         local info = love.filesystem.getInfo(path)
-        return info ~= nil and (info.type == "directory" or info.type == "symlink")
+        if type(info) == "table" then
+            return info.type == "directory" or info.type == "symlink"
+        elseif type(info) == "boolean" then
+            if not info then return false end
+            local ok, _, code = os.execute("test -d \"" .. path .. "\" 2>/dev/null")
+            return (ok == true or code == 0 or ok == 0)
+        end
+        return false
     end
     local ok, _, code = os.execute("test -d \"" .. path .. "\" 2>/dev/null")
     return (ok == true or code == 0 or ok == 0)
