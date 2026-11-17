@@ -304,7 +304,7 @@ run_test("CharacterFactory.on_entity_die activates Arya passive only for living 
     env.props[1].is_dead = "true"
     CF.on_entity_die(1)
 
-    assert(env.props[2].paralyzed_until == "230", "living allied Arya must be paralyzed for 30 ticks")
+    assert(env.props[2].paralyzed_until == "290", "living allied Arya must be paralyzed for 90 ticks")
     assert(env.props[2].fury_active == "true", "living allied Arya must activate fury")
     assert(env.props[3].fury_active == "false", "dead Arya must not trigger passive")
     assert(env.props[4].fury_active == "false", "enemy Arya must not trigger passive")
