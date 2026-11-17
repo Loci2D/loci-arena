@@ -11,7 +11,7 @@ return {
         mag_def = 100,    -- 50.0% mitigação mágica
         mana = 250,
         max_mana = 250,
-        move_speed = 3.0,
+        move_speed = 2.6,  -- Reduzido de 3.0 (ranged precisa de mais mobilidade)
         hp_regen = 10,
         mana_regen = 15
     },
