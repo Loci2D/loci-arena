@@ -65,6 +65,18 @@ local cache_lru_counter = 0
 -- Estados visuais/animação por entidade (máquina de estados)
 local entity_states = {}
 
+-- Sanitização de nome de personagem para evitar path traversal / caracteres inválidos
+local function sanitize_char_name(char_name)
+    if type(char_name) ~= "string" or char_name == "" then return nil end
+    if char_name:find("..", 1, true) or char_name:find("[/\\\"\';$`|&<>]") then
+        return nil
+    end
+    if not char_name:match("^[%w_%-]+$") then
+        return nil
+    end
+    return char_name
+end
+
 -- Helpers de I/O protegidos
 local function file_exists(path)
     if not path or path == "" then return false end
@@ -94,15 +106,20 @@ local function dir_exists(path)
         local info = love.filesystem.getInfo(path)
         if type(info) == "table" then
             return info.type == "directory" or info.type == "symlink"
-        elseif type(info) == "boolean" then
-            if not info then return false end
-            local ok, _, code = os.execute("test -d \"" .. path .. "\" 2>/dev/null")
-            return (ok == true or code == 0 or ok == 0)
+        elseif type(info) == "boolean" and not info then
+            return false
         end
-        return false
     end
-    local ok, _, code = os.execute("test -d \"" .. path .. "\" 2>/dev/null")
-    return (ok == true or code == 0 or ok == 0)
+    -- Fallback sem spawn de shell: no POSIX, io.open em diretório retorna file handle com read(1) -> EISDIR (21)
+    local f = io.open(path, "r")
+    if f then
+        local ok, _, code = f:read(1)
+        f:close()
+        if ok == nil and code == 21 then
+            return true
+        end
+    end
+    return false
 end
 
 local function read_text_file(path)
@@ -159,33 +176,77 @@ local function calc_direction_8way(dx, dy, fallback_dir)
     return DIRECTIONS_8[index + 1] or fallback_dir or "south"
 end
 
+-- Calcula linha real dos pés (base opaca) e altura visual do conteúdo via ImageData
+local function compute_alpha_bounds(img_data, w, h)
+    if not img_data or not img_data.getPixel then
+        return h, h
+    end
+    local min_y, max_y = h, -1
+    for y = 0, h - 1 do
+        for x = 0, w - 1 do
+            local _, _, _, a = img_data:getPixel(x, y)
+            if a and a > 0.04 then
+                if y < min_y then min_y = y end
+                if y > max_y then max_y = y end
+            end
+        end
+    end
+    if max_y >= min_y then
+        local foot_y = max_y + 1
+        local visual_h = math.max(24, foot_y - min_y)
+        return foot_y, visual_h
+    end
+    return h, h
+end
+
 -- Carregamento sob demanda com descarte LRU
 local function load_image(path)
-    if not path or path == "" then return nil, 0, 0 end
+    if not path or path == "" then return nil, 0, 0, 0, 0 end
 
     local cached = image_cache[path]
     if cached then
         cache_lru_counter = cache_lru_counter + 1
         cached.lru = cache_lru_counter
-        return cached.img, cached.w, cached.h
+        return cached.img, cached.w, cached.h, cached.foot_y, cached.visual_h
     end
 
     if not file_exists(path) then
-        return nil, 0, 0
+        return nil, 0, 0, 0, 0
     end
 
     if not (love and love.graphics and love.graphics.newImage) then
-        return nil, 0, 0
+        return nil, 0, 0, 0, 0
     end
 
-    local ok, img = pcall(love.graphics.newImage, path)
-    if not (ok and img) then
-        return nil, 0, 0
+    local img = nil
+    local foot_y, visual_h = nil, nil
+
+    if love.image and love.image.newImageData then
+        local ok_id, img_data = pcall(love.image.newImageData, path)
+        if ok_id and img_data then
+            local ok_img, loaded_img = pcall(love.graphics.newImage, img_data)
+            if ok_img and loaded_img then
+                img = loaded_img
+                local iw = img:getWidth()
+                local ih = img:getHeight()
+                foot_y, visual_h = compute_alpha_bounds(img_data, iw, ih)
+            end
+        end
+    end
+
+    if not img then
+        local ok, loaded_img = pcall(love.graphics.newImage, path)
+        if not (ok and loaded_img) then
+            return nil, 0, 0, 0, 0
+        end
+        img = loaded_img
     end
 
     img:setFilter("nearest", "nearest")
     local w = img:getWidth()
     local h = img:getHeight()
+    foot_y = foot_y or h
+    visual_h = visual_h or h
 
     -- Despejo LRU se limite excedido
     if cache_count >= MAX_IMAGE_CACHE then
@@ -207,20 +268,23 @@ local function load_image(path)
         img = img,
         w = w,
         h = h,
+        foot_y = foot_y,
+        visual_h = visual_h,
         lru = cache_lru_counter
     }
     cache_count = cache_count + 1
 
-    return img, w, h
+    return img, w, h, foot_y, visual_h
 end
 
 -- Resolução de pasta do personagem com variações de case e paths relativos
 local function resolve_character_dir(char_name)
-    if not char_name or char_name == "" then return nil, nil end
+    local safe_name = sanitize_char_name(char_name)
+    if not safe_name then return nil, nil end
 
-    local lower = string.lower(char_name)
-    local cap = char_name:sub(1, 1):upper() .. char_name:sub(2):lower()
-    local orig = char_name
+    local lower = string.lower(safe_name)
+    local cap = safe_name:sub(1, 1):upper() .. safe_name:sub(2):lower()
+    local orig = safe_name
 
     local variants = { lower, cap, orig }
     local base_prefixes = { "assets/sprites/", "client/assets/sprites/" }
@@ -246,6 +310,29 @@ local function resolve_character_dir(char_name)
     end
 
     return nil, nil
+end
+
+-- Helper para coletar frames PNG ordenados por direção 8-way em uma pasta base
+local function collect_direction_frames(base_dir, target_map)
+    local found = false
+    for _, dir in ipairs(DIRECTIONS_8) do
+        local dir_path = base_dir .. "/" .. dir
+        if dir_exists(dir_path) then
+            local frames = {}
+            local f_items = get_directory_items(dir_path)
+            table.sort(f_items)
+            for _, f in ipairs(f_items) do
+                if f:match("%.png$") then
+                    table.insert(frames, dir_path .. "/" .. f)
+                end
+            end
+            if #frames > 0 then
+                target_map[dir] = frames
+                found = true
+            end
+        end
+    end
+    return found
 end
 
 -- Parser de convenção de diretórios quando não há metadata.json
@@ -292,22 +379,8 @@ local function scan_directory_convention(char_dir)
                     -- animations/<dir>/frame_XXX.png
                     local anim_name = "default"
                     state_data.animations[anim_name] = {}
-                    for _, dir in ipairs(DIRECTIONS_8) do
-                        local dir_path = anim_dir .. "/" .. dir
-                        if dir_exists(dir_path) then
-                            local frames = {}
-                            local f_items = get_directory_items(dir_path)
-                            table.sort(f_items)
-                            for _, f in ipairs(f_items) do
-                                if f:match("%.png$") then
-                                    table.insert(frames, dir_path .. "/" .. f)
-                                end
-                            end
-                            if #frames > 0 then
-                                state_data.animations[anim_name][dir] = frames
-                                state_data.has_frames = true
-                            end
-                        end
+                    if collect_direction_frames(anim_dir, state_data.animations[anim_name]) then
+                        state_data.has_frames = true
                     end
                     state_data.default_anim = anim_name
                 else
@@ -316,22 +389,8 @@ local function scan_directory_convention(char_dir)
                         local sub_path = anim_dir .. "/" .. sub
                         if dir_exists(sub_path) then
                             state_data.animations[sub] = {}
-                            for _, dir in ipairs(DIRECTIONS_8) do
-                                local dir_path = sub_path .. "/" .. dir
-                                if dir_exists(dir_path) then
-                                    local frames = {}
-                                    local f_items = get_directory_items(dir_path)
-                                    table.sort(f_items)
-                                    for _, f in ipairs(f_items) do
-                                        if f:match("%.png$") then
-                                            table.insert(frames, dir_path .. "/" .. f)
-                                        end
-                                    end
-                                    if #frames > 0 then
-                                        state_data.animations[sub][dir] = frames
-                                        state_data.has_frames = true
-                                    end
-                                end
+                            if collect_direction_frames(sub_path, state_data.animations[sub]) then
+                                state_data.has_frames = true
                             end
                             if not state_data.default_anim then
                                 state_data.default_anim = sub
@@ -344,8 +403,7 @@ local function scan_directory_convention(char_dir)
             -- 3. Estrutura direta <state>/<dir>/frame_XXX.png (ex: morte)
             local has_direct_dir = false
             for _, dir in ipairs(DIRECTIONS_8) do
-                local dir_path = state_path .. "/" .. dir
-                if dir_exists(dir_path) then
+                if dir_exists(state_path .. "/" .. dir) then
                     has_direct_dir = true
                     break
                 end
@@ -356,22 +414,8 @@ local function scan_directory_convention(char_dir)
                 if not state_data.animations[anim_name] then
                     state_data.animations[anim_name] = {}
                 end
-                for _, dir in ipairs(DIRECTIONS_8) do
-                    local dir_path = state_path .. "/" .. dir
-                    if dir_exists(dir_path) then
-                        local frames = {}
-                        local f_items = get_directory_items(dir_path)
-                        table.sort(f_items)
-                        for _, f in ipairs(f_items) do
-                            if f:match("%.png$") then
-                                table.insert(frames, dir_path .. "/" .. f)
-                            end
-                        end
-                        if #frames > 0 then
-                            state_data.animations[anim_name][dir] = frames
-                            state_data.has_frames = true
-                        end
-                    end
+                if collect_direction_frames(state_path, state_data.animations[anim_name]) then
+                    state_data.has_frames = true
                 end
                 state_data.default_anim = anim_name
             end
@@ -435,14 +479,16 @@ end
 
 -- Carregar conjunto completo do personagem
 function SpriteAnim.load_character(char_name)
-    if not char_name or char_name == "" then return nil end
-    local key = string.lower(char_name)
+    local safe_name = sanitize_char_name(char_name)
+    if not safe_name then return nil end
+
+    local key = string.lower(safe_name)
     if loaded_characters[key] ~= nil then
         local c = loaded_characters[key]
         return (c ~= false and c) or nil
     end
 
-    local resolved_path, path_type = resolve_character_dir(char_name)
+    local resolved_path, path_type = resolve_character_dir(safe_name)
     if not resolved_path then
         loaded_characters[key] = false
         return nil
@@ -465,19 +511,14 @@ function SpriteAnim.load_character(char_name)
                 ally_death = "aliado_morre"
             },
             skills = {
-                slash = "Habilidade_1",
-                fury_reward = "Habilidade_2",
-                whirlwind_dash = "Habilidade_3",
-                blade_throw = "Habilidade_4",
                 [1] = "Habilidade_1",
                 [2] = "Habilidade_2",
                 [3] = "Habilidade_3",
                 [4] = "Habilidade_4"
             },
-            preferred_anims = {
-                aliado_morre = "ela_caindo_no_chao_chorando",
-                morte = "ela_caindo_no_chao_morta_apos_levar_um_golpe_fatal"
-            },
+            preferred_anims = {},
+            sequences = {},
+            state_durations = {},
             fps = DEFAULT_FPS
         }
     }
@@ -493,7 +534,6 @@ function SpriteAnim.load_character(char_name)
             if file_exists(amp) then
                 local custom_map = load_lua_table(amp)
                 if custom_map then
-                    -- Mesclar anim_map
                     if custom_map.states then
                         for k, v in pairs(custom_map.states) do
                             sprite_set.anim_map.states[k] = v
@@ -507,6 +547,16 @@ function SpriteAnim.load_character(char_name)
                     if custom_map.preferred_anims then
                         for k, v in pairs(custom_map.preferred_anims) do
                             sprite_set.anim_map.preferred_anims[k] = v
+                        end
+                    end
+                    if custom_map.sequences then
+                        for k, v in pairs(custom_map.sequences) do
+                            sprite_set.anim_map.sequences[k] = v
+                        end
+                    end
+                    if custom_map.state_durations then
+                        for k, v in pairs(custom_map.state_durations) do
+                            sprite_set.anim_map.state_durations[k] = v
                         end
                     end
                     if custom_map.fps then
@@ -536,21 +586,21 @@ function SpriteAnim.load_character(char_name)
             sprite_set.states = parsed_states
             sprite_set.has_animations = true
             sprite_set.has_rotations = true
-            print(string.format("[Client] Loaded animated 8-direction sprite set for '%s' from %s/", char_name, resolved_path))
+            print(string.format("[Client] Loaded animated 8-direction sprite set for '%s' from %s/", safe_name, resolved_path))
         end
     elseif path_type == "single" then
         sprite_set.single_image_path = resolved_path
         sprite_set.has_rotations = false
         sprite_set.has_animations = false
-        print(string.format("[Client] Loaded single character sprite '%s' for '%s'", resolved_path, char_name))
+        print(string.format("[Client] Loaded single character sprite '%s' for '%s'", resolved_path, safe_name))
     end
 
-    -- Se não encontrou estados animados nem single_image_path, tentar single fallback <key>.png
-    if not sprite_set.has_animations and not sprite_set.single_image_path then
+    -- Preencher single_image_path como fallback estático (inclusive para sets animados caso frames falhem)
+    if not sprite_set.single_image_path then
         local fallback_singles = {
             "assets/sprites/" .. key .. ".png",
             "client/assets/sprites/" .. key .. ".png",
-            "assets/sprites/" .. char_name .. ".png"
+            "assets/sprites/" .. safe_name .. ".png"
         }
         for _, p in ipairs(fallback_singles) do
             if file_exists(p) then
@@ -565,40 +615,91 @@ function SpriteAnim.load_character(char_name)
     return valid and sprite_set or nil
 end
 
+local function find_state_entry(sprite_set, state_name)
+    if not sprite_set or not sprite_set.states or not state_name then return nil end
+    local state = sprite_set.states[state_name]
+    if state then return state end
+    local mapped = sprite_set.anim_map.states[state_name] or sprite_set.anim_map.skills[state_name]
+    if mapped then
+        return sprite_set.states[mapped]
+    end
+    return nil
+end
+
+local function get_anim_dir_frame_count(anim, dir)
+    if not anim then return 0 end
+    if dir and anim[dir] and #anim[dir] > 0 then
+        return #anim[dir]
+    end
+    local fallbacks = DIRECTION_FALLBACKS[dir or "south"] or DIRECTIONS_8
+    for _, alt_dir in ipairs(fallbacks) do
+        if anim[alt_dir] and #anim[alt_dir] > 0 then
+            return #anim[alt_dir]
+        end
+    end
+    return 0
+end
+
+local function resolve_anim_and_frame(sprite_set, state, dir, f_idx)
+    if not state or not state.animations then return nil, f_idx end
+
+    local sequences = sprite_set.anim_map and sprite_set.anim_map.sequences
+    local seq = sequences and sequences[state.name]
+    if type(seq) == "table" and #seq > 0 then
+        local offset = 0
+        local last_anim, last_cnt = nil, 0
+        for _, sub_name in ipairs(seq) do
+            local sub_anim = state.animations[sub_name]
+            local cnt = get_anim_dir_frame_count(sub_anim, dir)
+            if cnt > 0 then
+                if f_idx <= offset + cnt then
+                    return sub_anim, math.max(1, f_idx - offset)
+                end
+                offset = offset + cnt
+                last_anim = sub_anim
+                last_cnt = cnt
+            end
+        end
+        if last_anim then
+            return last_anim, last_cnt
+        end
+    end
+
+    local anim_name = sprite_set.anim_map.preferred_anims[state.name] or state.default_anim
+    local anim = anim_name and state.animations[anim_name]
+    if not anim then
+        _, anim = next(state.animations)
+    end
+    return anim, f_idx
+end
+
 -- Resolução de imagem de frame com cadeia estrita de fallbacks:
 -- 1. Frame exato (state, anim, dir, frame_idx)
 -- 2. Direção mais próxima no mesmo state/anim
--- 3. Primeiro frame disponível da direção
+-- 3. Primeiro frame disponível da animação
 -- 4. Rotação estática do mesmo estado (state.rotations[dir])
 -- 5. Rotação estática de "idle" / "Rotacao"
 -- 6. Sprite padrão / imagem única do personagem
 -- 7. nil (cairá para placeholder em main.lua)
 local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
-    if not sprite_set then return nil, 0, 0, false end
+    if not sprite_set then return nil, 0, 0, false, 0, 0 end
 
     -- Fallback se for personagem de imagem única
     if not sprite_set.has_animations then
         if sprite_set.single_image_path then
-            local img, w, h = load_image(sprite_set.single_image_path)
+            local img, w, h, foot_y, visual_h = load_image(sprite_set.single_image_path)
             if img then
-                return img, w, h, false
+                return img, w, h, false, foot_y, visual_h
             end
         end
-        return nil, 0, 0, false
+        return nil, 0, 0, false, 0, 0
     end
 
     local dir = direction or "south"
     local f_idx = frame_idx or 1
 
     -- Tentar encontrar o estado solicitado
-    local state = sprite_set.states[state_name]
-    if not state then
-        -- Mapear estado genérico via anim_map
-        local mapped = sprite_set.anim_map.states[state_name] or sprite_set.anim_map.skills[state_name]
-        if mapped then
-            state = sprite_set.states[mapped]
-        end
-    end
+    local state = find_state_entry(sprite_set, state_name)
 
     -- Se estado não existe, tentar fallback de estado
     if not state then
@@ -613,38 +714,15 @@ local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
     end
 
     if state then
-        -- Obter animação preferida ou padrão do estado
-        local anim_name = sprite_set.anim_map.preferred_anims[state.name] or state.default_anim
-        local target_f_idx = f_idx
-
-        -- Sequência de luto/choque da Arya (total 18 frames):
-        -- Frames 1..9: "ela_caindo_no_chao_chorando"
-        -- Frames 10..18: "apos_isso_ela_pega_sua_espada_devolta_e_acende_uma"
-        if state.name == "aliado_morre" and state.animations
-           and state.animations["ela_caindo_no_chao_chorando"]
-           and state.animations["apos_isso_ela_pega_sua_espada_devolta_e_acende_uma"] then
-            if f_idx <= 9 then
-                anim_name = "ela_caindo_no_chao_chorando"
-                target_f_idx = f_idx
-            else
-                anim_name = "apos_isso_ela_pega_sua_espada_devolta_e_acende_uma"
-                target_f_idx = f_idx - 9
-            end
-        end
-
-        local anim = anim_name and state.animations[anim_name]
-        if not anim and state.animations then
-            _, anim = next(state.animations)
-        end
+        local anim, target_f_idx = resolve_anim_and_frame(sprite_set, state, dir, f_idx)
 
         -- 1. Frame exato na direção solicitada
         if anim and anim[dir] and #anim[dir] > 0 then
             local frames = anim[dir]
             local clamped_idx = math.min(math.max(1, target_f_idx), #frames)
-            local path = frames[clamped_idx]
-            local img, w, h = load_image(path)
+            local img, w, h, foot_y, visual_h = load_image(frames[clamped_idx])
             if img then
-                return img, w, h, true
+                return img, w, h, true, foot_y, visual_h
             end
         end
 
@@ -655,9 +733,9 @@ local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
                 if anim[alt_dir] and #anim[alt_dir] > 0 then
                     local frames = anim[alt_dir]
                     local clamped_idx = math.min(math.max(1, target_f_idx), #frames)
-                    local img, w, h = load_image(frames[clamped_idx])
+                    local img, w, h, foot_y, visual_h = load_image(frames[clamped_idx])
                     if img then
-                        return img, w, h, true
+                        return img, w, h, true, foot_y, visual_h
                     end
                 end
             end
@@ -665,11 +743,12 @@ local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
 
         -- 3. Primeiro frame disponível em qualquer direção da animação
         if anim then
-            for _, d_frames in pairs(anim) do
-                if #d_frames > 0 then
-                    local img, w, h = load_image(d_frames[1])
+            for _, d_dir in ipairs(DIRECTIONS_8) do
+                local d_frames = anim[d_dir]
+                if d_frames and #d_frames > 0 then
+                    local img, w, h, foot_y, visual_h = load_image(d_frames[1])
                     if img then
-                        return img, w, h, true
+                        return img, w, h, true, foot_y, visual_h
                     end
                 end
             end
@@ -677,18 +756,18 @@ local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
 
         -- 4. Rotação estática do estado atual
         if state.rotations and state.rotations[dir] then
-            local img, w, h = load_image(state.rotations[dir])
+            local img, w, h, foot_y, visual_h = load_image(state.rotations[dir])
             if img then
-                return img, w, h, true
+                return img, w, h, true, foot_y, visual_h
             end
         end
         if state.rotations then
             local fallbacks = DIRECTION_FALLBACKS[dir] or {}
             for _, alt_dir in ipairs(fallbacks) do
                 if state.rotations[alt_dir] then
-                    local img, w, h = load_image(state.rotations[alt_dir])
+                    local img, w, h, foot_y, visual_h = load_image(state.rotations[alt_dir])
                     if img then
-                        return img, w, h, true
+                        return img, w, h, true, foot_y, visual_h
                     end
                 end
             end
@@ -699,17 +778,17 @@ local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
     local idle_state = sprite_set.states["Rotacao"] or sprite_set.states[sprite_set.anim_map.states.idle]
     if idle_state and idle_state.rotations then
         if idle_state.rotations[dir] then
-            local img, w, h = load_image(idle_state.rotations[dir])
+            local img, w, h, foot_y, visual_h = load_image(idle_state.rotations[dir])
             if img then
-                return img, w, h, true
+                return img, w, h, true, foot_y, visual_h
             end
         end
         local fallbacks = DIRECTION_FALLBACKS[dir] or {}
         for _, alt_dir in ipairs(fallbacks) do
             if idle_state.rotations[alt_dir] then
-                local img, w, h = load_image(idle_state.rotations[alt_dir])
+                local img, w, h, foot_y, visual_h = load_image(idle_state.rotations[alt_dir])
                 if img then
-                    return img, w, h, true
+                    return img, w, h, true, foot_y, visual_h
                 end
             end
         end
@@ -717,14 +796,14 @@ local function resolve_frame_image(sprite_set, state_name, direction, frame_idx)
 
     -- 6. Imagem única de fallback
     if sprite_set.single_image_path then
-        local img, w, h = load_image(sprite_set.single_image_path)
+        local img, w, h, foot_y, visual_h = load_image(sprite_set.single_image_path)
         if img then
-            return img, w, h, false
+            return img, w, h, false, foot_y, visual_h
         end
     end
 
     -- 7. Placeholder final
-    return nil, 0, 0, false
+    return nil, 0, 0, false, 0, 0
 end
 
 -- Obter ou criar estado de animação de uma entidade
@@ -764,6 +843,22 @@ function SpriteAnim.clear_entity_state(entity_id)
     end
 end
 
+-- Reset de cache (útil para testes)
+function SpriteAnim.clear_cache()
+    loaded_characters = {}
+    image_cache = {}
+    cache_count = 0
+    cache_lru_counter = 0
+    entity_states = {}
+end
+
+function SpriteAnim.get_cache_stats()
+    return {
+        image_count = cache_count,
+        max_images = MAX_IMAGE_CACHE
+    }
+end
+
 -- Reset de personagem em runtime
 function SpriteAnim.on_character_changed(entity_id, new_char)
     if entity_id then
@@ -773,9 +868,9 @@ function SpriteAnim.on_character_changed(entity_id, new_char)
 end
 
 -- Disparo de habilidade/ataque
-function SpriteAnim.trigger_action(entity_id, skill_name, ability_id, dir_x, dir_y)
-    local state = entity_states[entity_id]
-    if not state or state.is_dead then return end
+function SpriteAnim.trigger_action(entity_id, skill_name, ability_id, dir_x, dir_y, char_name)
+    local state = SpriteAnim.get_entity_state(entity_id, char_name)
+    if not state or state.is_dead or state.character_name == "" then return end
 
     local sprite_set = SpriteAnim.load_character(state.character_name)
     if not sprite_set or not sprite_set.has_animations then return end
@@ -810,9 +905,10 @@ function SpriteAnim.trigger_action(entity_id, skill_name, ability_id, dir_x, dir
     end
 end
 
--- Reação quando um aliado morre (passiva da Arya: "aliado_morre")
+-- Reação quando um aliado morre (ex: passiva da Arya "aliado_morre")
 function SpriteAnim.trigger_ally_death(entity_id, char_name)
-    local cname = (char_name and char_name ~= "") and char_name or "arya"
+    local existing = entity_id and entity_states[entity_id]
+    local cname = (char_name and char_name ~= "") and char_name or (existing and existing.character_name ~= "" and existing.character_name) or "arya"
     local state = SpriteAnim.get_entity_state(entity_id, cname)
     if not state or state.is_dead then return end
 
@@ -826,13 +922,15 @@ function SpriteAnim.trigger_ally_death(entity_id, char_name)
         state.frame_index = 1
         state.timer = 0
         state.is_locked = true
-        print(string.format("[Client] Entity %s playing '%s' (3s paralysis mourning animation)", tostring(entity_id), mapped_state))
+        print(string.format("[Client] Entity %s playing '%s' mourning animation", tostring(entity_id), mapped_state))
     end
 end
 
 -- Notificar estado de morte/reviver
-function SpriteAnim.set_dead(entity_id, is_dead)
-    local state = entity_states[entity_id]
+function SpriteAnim.set_dead(entity_id, is_dead, char_name)
+    local state = (char_name and char_name ~= "")
+        and SpriteAnim.get_entity_state(entity_id, char_name)
+        or entity_states[entity_id]
     if not state then return end
 
     if is_dead then
@@ -862,21 +960,20 @@ end
 local function get_state_frame_count(sprite_set, state_name, direction)
     if not sprite_set or not sprite_set.has_animations then return 1 end
 
-    local state = sprite_set.states[state_name]
-    if not state then
-        local mapped = sprite_set.anim_map.states[state_name] or sprite_set.anim_map.skills[state_name]
-        if mapped then
-            state = sprite_set.states[mapped]
+    local state = find_state_entry(sprite_set, state_name)
+    if not state or not state.animations then return 9 end
+
+    local sequences = sprite_set.anim_map and sprite_set.anim_map.sequences
+    local seq = sequences and sequences[state.name]
+    if type(seq) == "table" and #seq > 0 then
+        local total = 0
+        for _, sub_name in ipairs(seq) do
+            total = total + get_anim_dir_frame_count(state.animations[sub_name], direction)
+        end
+        if total > 0 then
+            return total
         end
     end
-
-    if (state_name == "aliado_morre" or (state and state.name == "aliado_morre")) and state and state.animations
-       and state.animations["ela_caindo_no_chao_chorando"]
-       and state.animations["apos_isso_ela_pega_sua_espada_devolta_e_acende_uma"] then
-        return 18
-    end
-
-    if not state or not state.animations then return 9 end
 
     local anim_name = sprite_set.anim_map.preferred_anims[state.name] or state.default_anim
     local anim = anim_name and state.animations[anim_name]
@@ -884,8 +981,9 @@ local function get_state_frame_count(sprite_set, state_name, direction)
         _, anim = next(state.animations)
     end
 
-    if anim and anim[direction] and #anim[direction] > 0 then
-        return #anim[direction]
+    local count = get_anim_dir_frame_count(anim, direction)
+    if count > 0 then
+        return count
     end
 
     return 9 -- Padrão Pixelab
@@ -895,23 +993,29 @@ end
 function SpriteAnim.update(dt, entity_id, data)
     if not entity_id or not data then return end
 
+    dt = math.max(0, dt or 0)
+
     local char_name = data.character_name or ""
     local state = SpriteAnim.get_entity_state(entity_id, char_name)
     local sprite_set = SpriteAnim.load_character(char_name)
 
-    state.direction = data.direction or state.direction or "south"
+    -- Preservar direção e facing da habilidade/reação enquanto a animação estiver bloqueada
+    if not state.is_locked then
+        state.direction = data.direction or state.direction or "south"
+        if data.facing then
+            state.facing = data.facing
+        end
+    end
     state.is_moving = data.is_moving or false
     state.speed = data.speed or 0
-    if data.facing then
-        state.facing = data.facing
-    end
 
     local is_dead = data.is_dead or false
     if is_dead ~= state.is_dead then
-        SpriteAnim.set_dead(entity_id, is_dead)
+        SpriteAnim.set_dead(entity_id, is_dead, char_name)
     end
 
     local fps = (sprite_set and sprite_set.anim_map and sprite_set.anim_map.fps) or DEFAULT_FPS
+    if fps <= 0 then fps = DEFAULT_FPS end
     state.fps = fps
     local frame_duration = 1 / fps
 
@@ -921,12 +1025,14 @@ function SpriteAnim.update(dt, entity_id, data)
 
         if not state.death_finished then
             state.timer = state.timer + dt
-            if state.timer >= frame_duration then
+            while state.timer >= frame_duration do
                 state.timer = state.timer - frame_duration
                 state.frame_index = state.frame_index + 1
                 if state.frame_index >= total_frames then
                     state.frame_index = total_frames
                     state.death_finished = true
+                    state.timer = 0
+                    break
                 end
             end
         else
@@ -939,19 +1045,26 @@ function SpriteAnim.update(dt, entity_id, data)
     if state.is_locked and state.current_action then
         local total_frames = get_state_frame_count(sprite_set, state.current_action, state.direction)
         local cur_frame_dur = frame_duration
-        if state.current_action == "aliado_morre" and total_frames == 18 then
-            cur_frame_dur = 3.0 / 18 -- 0.1667s por frame, exatamente 3 segundos no total
+        local state_durations = sprite_set and sprite_set.anim_map and sprite_set.anim_map.state_durations
+        local custom_dur = state_durations and (state_durations[state.current_action] or state_durations[state.current_state])
+        if custom_dur and custom_dur > 0 and total_frames > 0 then
+            cur_frame_dur = custom_dur / total_frames
         end
+
         state.timer = state.timer + dt
-        if state.timer >= cur_frame_dur then
+        while state.timer >= cur_frame_dur do
             state.timer = state.timer - cur_frame_dur
             state.frame_index = state.frame_index + 1
             if state.frame_index > total_frames then
                 -- Fim da animação one-shot: desbloquear e retornar ao estado de locomoção/idle
                 state.is_locked = false
                 state.current_action = nil
+                state.current_state = "idle"
                 state.frame_index = 1
                 state.timer = 0
+                if data.direction then state.direction = data.direction end
+                if data.facing then state.facing = data.facing end
+                break
             end
         end
         return
@@ -971,7 +1084,7 @@ function SpriteAnim.update(dt, entity_id, data)
 
         local total_frames = get_state_frame_count(sprite_set, mapped_target, state.direction)
         state.timer = state.timer + dt
-        if state.timer >= frame_duration then
+        while state.timer >= frame_duration do
             state.timer = state.timer - frame_duration
             state.frame_index = (state.frame_index % total_frames) + 1
         end
@@ -983,7 +1096,7 @@ function SpriteAnim.update(dt, entity_id, data)
 end
 
 -- API principal de consulta de frame para renderização
--- get_frame(params) -> image, ox, oy, has_8way
+-- get_frame(params) -> image, ox, oy, has_8way, visual_h
 -- Aceita tabela com campos ou parâmetros individuais
 function SpriteAnim.get_frame(arg1, arg2, arg3, arg4)
     local char_name, state_name, direction, frame_idx
@@ -1008,7 +1121,7 @@ function SpriteAnim.get_frame(arg1, arg2, arg3, arg4)
 
     local sprite_set = SpriteAnim.load_character(char_name)
     if not sprite_set then
-        return nil, SPRITE_BASE_SIZE / 2, SPRITE_BASE_SIZE, false
+        return nil, SPRITE_BASE_SIZE / 2, SPRITE_BASE_SIZE, false, SPRITE_BASE_SIZE
     end
 
     local ent_state = nil
@@ -1022,7 +1135,11 @@ function SpriteAnim.get_frame(arg1, arg2, arg3, arg4)
     local active_dir = direction or (ent_state and ent_state.direction) or "south"
 
     if ent_state then
-        active_dir = direction or ent_state.direction or "south"
+        if ent_state.is_locked then
+            active_dir = ent_state.direction or direction or "south"
+        else
+            active_dir = direction or ent_state.direction or "south"
+        end
         active_frame = frame_idx or ent_state.frame_index or 1
 
         if is_dead or ent_state.is_dead then
@@ -1049,15 +1166,16 @@ function SpriteAnim.get_frame(arg1, arg2, arg3, arg4)
         active_frame = active_frame or 1
     end
 
-    local img, w, h, has_8way = resolve_frame_image(sprite_set, active_state, active_dir, active_frame)
+    local img, w, h, has_8way, foot_y, visual_h = resolve_frame_image(sprite_set, active_state, active_dir, active_frame)
     if not img then
-        return nil, SPRITE_BASE_SIZE / 2, SPRITE_BASE_SIZE, false
+        return nil, SPRITE_BASE_SIZE / 2, SPRITE_BASE_SIZE, false, SPRITE_BASE_SIZE
     end
 
     local ox = w / 2
-    local oy = h
+    local oy = (foot_y and foot_y > 0) and foot_y or h
+    local vh = (visual_h and visual_h > 0) and visual_h or oy
 
-    return img, ox, oy, has_8way
+    return img, ox, oy, has_8way, vh
 end
 
 return SpriteAnim

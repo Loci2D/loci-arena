@@ -67,9 +67,11 @@ local function parse_unicode_escape(s)
   local n1 = tonumber(s:sub(1, 4), 16)
   if not n1 then return nil end
   if n1 >= 0xd800 and n1 <= 0xdbff then
-    local n2 = tonumber(s:sub(7, 10), 16)
-    if n2 and n2 >= 0xdc00 and n2 <= 0xdfff then
-      return codepoint_to_utf8((n1 - 0xd800) * 0x400 + (n2 - 0xdc00) + 0x10000), 10
+    if s:sub(5, 6) == "\\u" then
+      local n2 = tonumber(s:sub(7, 10), 16)
+      if n2 and n2 >= 0xdc00 and n2 <= 0xdfff then
+        return codepoint_to_utf8((n1 - 0xd800) * 0x400 + (n2 - 0xdc00) + 0x10000), 10
+      end
     end
   end
   return codepoint_to_utf8(n1), 4

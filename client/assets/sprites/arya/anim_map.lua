@@ -26,6 +26,17 @@ return {
         aliado_morre = "ela_caindo_no_chao_chorando",
         morte = "ela_caindo_no_chao_morta_apos_levar_um_golpe_fatal",
     },
+    -- Sequências compostas por múltiplos blocos de animação em ordem
+    sequences = {
+        aliado_morre = {
+            "ela_caindo_no_chao_chorando",
+            "apos_isso_ela_pega_sua_espada_devolta_e_acende_uma",
+        },
+    },
+    -- Duração total fixa em segundos para estados específicos (ex: 3.0s de paralisia)
+    state_durations = {
+        aliado_morre = 3.0,
+    },
     fps = 11,
 }
 

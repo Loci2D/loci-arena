@@ -56,7 +56,6 @@ local SPRITE_BASE_SIZE = 32
 --   2 = 64px  (atual — bom equilíbrio visual para arena)
 --   4 = 128px (equivalente ao sprite 16x16 antigo multiplicado por 8)
 local SPRITE_SCALE = 2
-local character_sprites = {}
 local placeholder_canvases = {}
 
 local function create_character_placeholder(r, g, b, accent_r, accent_g, accent_b)
@@ -106,16 +105,6 @@ local function init_placeholders()
     placeholder_canvases["me"] = create_character_placeholder(0.2, 0.6, 0.95, 0.3, 0.9, 1.0)
     placeholder_canvases["enemy"] = create_character_placeholder(0.9, 0.3, 0.25, 1.0, 0.85, 0.2)
     placeholder_canvases["dead"] = create_character_placeholder(0.35, 0.35, 0.38, 0.5, 0.5, 0.5)
-end
-
-local DIRECTIONS_8 = {
-    "east", "south-east", "south", "south-west",
-    "west", "north-west", "north", "north-east"
-}
-
-local function load_character_sprite(character_name)
-    if not character_name or character_name == "" then return nil end
-    return sprite_anim.load_character(character_name)
 end
 
 local function get_entity_skill_by_slot(entity, slot_index)
@@ -411,8 +400,8 @@ function love.load(arg)
     -- Inicializar placeholders padronizados de 32x32px
     init_placeholders()
 
-    -- Pré-carregar sprites disponíveis em assets/sprites/ (padrão 32x32px)
-    load_character_sprite("arya")
+    -- Pré-carregar metadados de sprites disponíveis em assets/sprites/
+    sprite_anim.load_character("arya")
 
     -- Registrar predição local com clamp nos limites da arena antes da reconciliação.
     -- Nota: durante dash ativo (`dashing_until`), o SDK desvia para o ramo próprio e não chama
@@ -517,7 +506,10 @@ function love.load(arg)
             end
         elseif key == "fury_active" then
             if (new_val == true or new_val == "true") and entity then
-                sprite_anim.trigger_ally_death(entity.id, entity.character_name)
+                local cname = (entity.get and entity:get("character_name"))
+                    or entity.character_name
+                    or (entity.properties and entity.properties["character_name"])
+                sprite_anim.trigger_ally_death(entity.id, cname)
             end
         elseif key == "character_name" then
             if entity then
@@ -556,7 +548,7 @@ function love.load(arg)
         AudioSystem.play_skill(audio_skill, ability_id)
 
         if entity then
-            sprite_anim.trigger_action(entity.id, skill_name, ability_id, dx, dy)
+            sprite_anim.trigger_action(entity.id, skill_name, ability_id, dx, dy, character_name)
         end
 
         local lifetime = 0.35
@@ -1052,6 +1044,24 @@ local function draw_hotbar(my_entity)
     local fury_value = my_entity:get("fury_active")
     local fury_active = fury_value == true or fury_value == "true"
 
+    -- Verificar se há aliados no time (espelha server/scripts/default_arena/data/skills/fury_reward.lua)
+    local has_allies = false
+    local my_team = tostring((my_entity.get and my_entity:get("team")) or my_entity.team or "1")
+    local all_entities = (loci.get_entities and loci.get_entities()) or {}
+    for _, other in ipairs(all_entities) do
+        if other.id ~= my_entity.id then
+            local ent_type = (other.get and other:get("entity_type")) or (other.properties and other.properties["entity_type"])
+            local is_player = (ent_type == nil) or (string.lower(tostring(ent_type)) == "player")
+            if is_player then
+                local other_team = (other.get and other:get("team")) or (other.properties and other.properties["team"])
+                if other_team ~= nil and tostring(other_team) == my_team then
+                    has_allies = true
+                    break
+                end
+            end
+        end
+    end
+
     local mana = tonumber(my_entity:get("mana", 0)) or 0
     local raw_skills_list = my_entity.get and my_entity:get("skills_list", "") or ""
     local char_name = string.lower(tostring((my_entity.get and my_entity:get("character_name", "default")) or "default"))
@@ -1091,10 +1101,13 @@ local function draw_hotbar(my_entity)
 
             local is_on_cooldown = cd_remaining > 0
             local no_mana = mana < (meta.mana_cost or 0)
+            local is_fury_locked = (skill_name == "fury_reward" and not fury_active and has_allies)
 
             -- Fundo do slot
             if cc_label then
                 love.graphics.setColor(0.55, 0.18, 0.18, 0.85)
+            elseif is_fury_locked then
+                love.graphics.setColor(0.12, 0.12, 0.16, 0.65)
             elseif is_on_cooldown then
                 love.graphics.setColor(0.25, 0.25, 0.35, 0.85)
             elseif no_mana then
@@ -1111,18 +1124,24 @@ local function draw_hotbar(my_entity)
                 love.graphics.setColor(1.0, 0.65, 0.15, 0.95)
             elseif cc_label then
                 love.graphics.setColor(0.95, 0.30, 0.30, 0.90)
+            elseif is_fury_locked then
+                love.graphics.setColor(0.32, 0.32, 0.38, 0.55)
             else
                 love.graphics.setColor(0.45, 0.45, 0.55, 0.70)
             end
             love.graphics.setLineWidth(2)
             love.graphics.rectangle("line", x, y, slot_width, slot_height, 4)
 
-            -- Nome da habilidade e estado (cooldown / falta de mana / pronta)
+            -- Nome da habilidade e estado (cooldown / falta de mana / bloqueada / pronta)
             love.graphics.setFont(font_hud_small)
-            love.graphics.setColor(1, 1, 1, is_on_cooldown and 0.65 or 0.95)
+            local label_alpha = (is_on_cooldown and 0.65) or (is_fury_locked and 0.45) or 0.95
+            love.graphics.setColor(1, 1, 1, label_alpha)
             love.graphics.print(meta.label, x + 5, y + 5)
 
-            if is_on_cooldown then
+            if is_fury_locked then
+                love.graphics.setColor(0.75, 0.45, 0.45, 0.9)
+                love.graphics.print("BLOQ.", x + 5, y + 20)
+            elseif is_on_cooldown then
                 love.graphics.setColor(0.95, 0.85, 0.4, 1)
                 love.graphics.print(string.format("%.1fs", cd_remaining), x + 5, y + 20)
             elseif no_mana then
@@ -1134,7 +1153,7 @@ local function draw_hotbar(my_entity)
             end
 
             -- Tecla
-            love.graphics.setColor(0.8, 0.8, 0.9, 0.85)
+            love.graphics.setColor(0.8, 0.8, 0.9, is_fury_locked and 0.45 or 0.85)
             love.graphics.print(entry.key, x + 5, y + slot_height - 17)
         end
     end
@@ -1599,8 +1618,8 @@ function draw_entity(ent, is_me)
     local anim_state = procedural_anim.get_state(ent.id)
     local ent_dir = anim_state.direction or "south"
 
-    -- Obter frame animado e pivô sob demanda da máquina de estados
-    local img_to_draw, ox, oy, has_8way = sprite_anim.get_frame({
+    -- Obter frame animado, pivô real nos pés (ox, oy) e altura visual estável (visual_h)
+    local img_to_draw, ox, oy, has_8way, visual_h = sprite_anim.get_frame({
         entity_id = ent.id,
         character_name = char_name,
         direction = ent_dir,
@@ -1608,9 +1627,9 @@ function draw_entity(ent, is_me)
         is_moving = anim_state.is_moving
     })
 
-    -- Dimensões do sprite / modelo (ox = w/2, oy = h recalculados por frame)
+    -- Dimensões visuais do sprite / modelo (ox = w/2, sprite_h = altura útil para HUD/barra de HP)
     local sprite_w = ox and (ox * 2) or SPRITE_BASE_SIZE
-    local sprite_h = oy or SPRITE_BASE_SIZE
+    local sprite_h = visual_h or oy or SPRITE_BASE_SIZE
 
     -- Escala de renderização: SPRITE_SCALE pixels por pixel do sprite (32px * 2 = 64px na tela)
     local scale = SPRITE_SCALE

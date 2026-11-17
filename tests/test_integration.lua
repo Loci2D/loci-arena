@@ -91,7 +91,19 @@ _G.love = {
     filesystem = {
         createDirectory = function() return true end,
         write = function() return true end,
-        getInfo = function() return true end,
+        getInfo = function(path)
+            if not path or path == "" then return nil end
+            local f = io.open(path, "rb")
+            if f then
+                local ok, _, code = f:read(1)
+                f:close()
+                if ok == nil and code == 21 then
+                    return { type = "directory" }
+                end
+                return { type = "file" }
+            end
+            return nil
+        end,
         read = function(path)
             local f = io.open(path, "rb")
             if f then
@@ -340,6 +352,19 @@ assert(contains_text(captured_prints, "MANA"), "Hotbar must flag skills lacking 
 assert(contains_text(captured_prints, "PRONTA!"), "Hotbar must highlight Fury active on fury_reward")
 assert(love.graphics.getFont() == saved_font, "love.draw must restore font after HUD/Hotbar")
 assert(love.graphics.getLineWidth() == saved_lw, "love.draw must restore lineWidth after HUD/Hotbar")
+
+-- Fury inactive with allied player shows BLOQ. on fury_reward slot
+local ally_ent = entity_mod.new_entity(77, "player")
+ally_ent.properties = { entity_type = "player", character_name = "warrior", team = 1 }
+my_ent.properties.fury_active = false
+loci.entities = { [42] = my_ent, [77] = ally_ent, [99] = enemy_ent }
+loci._entities_list_cache = nil
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "BLOQ."), "Hotbar must show BLOQ. on fury_reward when fury_active is false and allies exist")
+my_ent.properties.fury_active = true
+loci.entities = { [42] = my_ent, [99] = enemy_ent }
+loci._entities_list_cache = nil
 
 -- Real cooldown duration (whirlwind_dash = 6.0s) and nil-entity guard
 loci.on_action_cast(nil, 1, 1, 0) -- must not crash
