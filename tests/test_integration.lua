@@ -31,6 +31,7 @@ socket.udp = function()
 end
 
 -- 2. Mock Love2D minimal environment
+-- Compatibilidade: Lua 5.2+/5.3+ não possuem o global `unpack` (usado por módulos do cliente)
 _G.unpack = unpack or table.unpack
 _G.love = {
     getVersion = function() return 11, 5, 0 end,

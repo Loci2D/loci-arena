@@ -11,7 +11,7 @@ local AUDIO_DIR_CANDIDATES = {
 
 -- BGM: Streaming (stream) para arquivos longos, sem placeholder
 local BGM_CATALOG = {
-    arena = { file = "bgm_arena.mp3", volume = 0.5 },
+    arena = { file = "bgm_arena.ogg", volume = 0.5 },
 }
 
 local SOUND_CATALOG = {
