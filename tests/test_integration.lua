@@ -590,94 +590,204 @@ assert(disconnect_called == true, "love.quit() must invoke loci.disconnect()")
 print("  -> Passed: love.quit invokes loci.quit() and loci.disconnect() cleanly.")
 
 print("[Test 9] Testing BGM System (Streaming, Loop, Track Switching, Mute/Unmute & Headless)...")
-local bgm_played = {}
-local bgm_stopped = {}
-local bgm_paused = {}
 
-local function make_mock_bgm_source(tag)
-    local src = { tag = tag, volume = 1.0, looping = false, paused = false }
+-- Mock de fonte de BGM com estado real (stopped/playing/paused) e posição de reprodução,
+-- para que as assertions verifiquem o ESTADO do áudio e não apenas "alguém chamou play".
+local bgm_sources_created = {}
+local function make_mock_bgm_source(path)
+    local src = { path = path, state = "stopped", pos = 0, looping = false, volume = 1.0, play_calls = 0, stop_calls = 0 }
     function src:setVolume(v) self.volume = v end
-    function src:setLooping(loop) self.looping = loop end
-    function src:play()
-        table.insert(bgm_played, self.tag)
-        self.paused = false
-    end
-    function src:stop()
-        table.insert(bgm_stopped, self.tag)
-    end
-    function src:pause()
-        table.insert(bgm_paused, self.tag)
-        self.paused = true
-    end
+    function src:setLooping(l) self.looping = l end
+    function src:isPlaying() return self.state == "playing" end
+    function src:play() self.state = "playing"; self.play_calls = self.play_calls + 1 end
+    function src:pause() if self.state == "playing" then self.state = "paused" end end
+    function src:stop() self.state = "stopped"; self.pos = 0; self.stop_calls = self.stop_calls + 1 end
+    function src:tell() return self.pos end
+    function src:seek(p) self.pos = p end
+    table.insert(bgm_sources_created, src)
     return src
 end
 
--- Mock BGM file exists
-_G.love.filesystem.getInfo = function(path)
-    if path:find("bgm_arena.mp3", 1, true) then
-        return { type = "file" }
+local function count_playing_bgm()
+    local n = 0
+    for _, s in ipairs(bgm_sources_created) do
+        if s.state == "playing" then n = n + 1 end
     end
-    local f = io.open(path, "rb")
-    if f then f:close(); return { type = "file" } end
+    return n
+end
+
+local function bgm_by_name(name)
+    for i = #bgm_sources_created, 1, -1 do
+        local s = bgm_sources_created[i]
+        if s.path:find(name, 1, true) then return s end
+    end
     return nil
 end
 
--- Override newSource to distinguish BGM (stream) from SFX (static)
-local orig_new_source = _G.love.audio.newSource
-_G.love.audio.newSource = function(src_or_path, src_type)
-    if type(src_or_path) == "string" and src_type == "stream" then
-        local name = src_or_path:match("([^/]+)%.[^.]+$") or src_or_path
-        return make_mock_bgm_source(name)
+local bgm_stream_requests = 0
+local function install_audio_mock()
+    bgm_sources_created = {}
+    _G.love.filesystem.getInfo = function(path)
+        if path:find("bgm_", 1, true) then return { type = "file" } end
+        local f = io.open(path, "rb")
+        if f then f:close(); return { type = "file" } end
+        return nil
     end
-    return orig_new_source(src_or_path, src_type)
+    _G.love.sound = nil
+    _G.love.audio = {
+        newSource = function(path, src_type)
+            if type(path) == "string" and path:find("bgm_", 1, true) then
+                assert(src_type == "stream", "BGM must be loaded with the 'stream' source type")
+                bgm_stream_requests = bgm_stream_requests + 1
+                return make_mock_bgm_source(path)
+            end
+            -- SFX: fonte estática mínima com clone()
+            local sfx = { setVolume = function() end, stop = function() end, play = function() end }
+            sfx.clone = function() return sfx end
+            return sfx
+        end,
+        -- love.audio.stop() real para TODAS as fontes e zera a posição
+        stop = function()
+            for _, s in ipairs(bgm_sources_created) do s:stop() end
+        end,
+    }
 end
 
+-- Segunda faixa só para o teste de troca (o catálogo real tem apenas 'arena').
+install_audio_mock()
+AudioSystem.register_bgm("boss", { file = "bgm_boss.mp3", volume = 0.4 })
 AudioSystem.init()
-assert(#bgm_played == 0, "BGM should not auto-start on init")
+assert(AudioSystem.is_enabled() == true, "Audio must start enabled")
+assert(bgm_stream_requests == 2, "init() must create 2 BGM stream sources (arena + boss), got " .. bgm_stream_requests)
+assert(count_playing_bgm() == 0, "BGM must not auto-start on init")
 
--- Test play_bgm with loop
+local arena = bgm_by_name("bgm_arena")
+local boss = bgm_by_name("bgm_boss")
+assert(arena and boss, "BGM sources must be created for arena and boss")
+assert(arena.looping == true and boss.looping == true, "BGM sources must be configured with setLooping(true)")
+
+-- play_bgm: toca em loop, faixa única
+assert(AudioSystem.play_bgm("arena") == true, "play_bgm('arena') must succeed")
+assert(arena.state == "playing" and AudioSystem.get_current_bgm() == "arena", "arena must be playing and current")
+
+-- Chamar a mesma faixa de novo (ex.: respawn) não reinicia nem para a música
+local arena_plays = arena.play_calls
+arena.pos = 42
 AudioSystem.play_bgm("arena")
-assert(bgm_played[#bgm_played] == "bgm_arena", "play_bgm('arena') must load and play bgm_arena.mp3")
-assert(AudioSystem.get_current_bgm() == "arena", "get_current_bgm() must return 'arena'")
+assert(arena.stop_calls == 0 and arena.pos == 42, "Replaying the current track must not restart it (position kept)")
+assert(arena.play_calls == arena_plays, "Replaying a track that is already playing must not call play() again")
 
--- Test track switching (no overlap)
-AudioSystem.play_bgm("arena") -- Play same track again
-assert(#bgm_stopped == 0, "Playing same BGM track should not stop previous (no double-stop)")
+-- Troca de faixa: a anterior para, nunca duas tocando
+assert(AudioSystem.play_bgm("boss") == true, "play_bgm('boss') must succeed")
+assert(arena.state == "stopped", "Previous BGM must be stopped when switching tracks")
+assert(boss.state == "playing" and count_playing_bgm() == 1, "Exactly one BGM must play after switching")
+assert(AudioSystem.get_current_bgm() == "boss", "get_current_bgm() must return 'boss'")
 
--- Test stop_bgm
+-- Faixa inexistente: falha sem derrubar a faixa atual
+assert(AudioSystem.play_bgm("nao_existe") == false, "Unknown BGM must return false")
+assert(boss.state == "playing" and AudioSystem.get_current_bgm() == "boss", "Unknown BGM must not disturb the current track")
+
+-- stop_bgm
 AudioSystem.stop_bgm()
-assert(#bgm_stopped > 0 and bgm_stopped[#bgm_stopped] == "bgm_arena", "stop_bgm() must stop current BGM")
-assert(AudioSystem.get_current_bgm() == nil, "get_current_bgm() must return nil after stop")
+assert(boss.state == "stopped" and AudioSystem.get_current_bgm() == nil, "stop_bgm() must stop and clear current BGM")
 
--- Test pause/resume
+-- pause / resume
 AudioSystem.play_bgm("arena")
+arena.pos = 10
 AudioSystem.pause_bgm()
-assert(#bgm_paused > 0 and bgm_paused[#bgm_paused] == "bgm_arena", "pause_bgm() must pause current BGM")
+assert(arena.state == "paused" and arena.pos == 10, "pause_bgm() must pause and keep the position")
 AudioSystem.resume_bgm()
-assert(bgm_played[#bgm_played] == "bgm_arena", "resume_bgm() must resume paused BGM")
+assert(arena.state == "playing" and arena.pos == 10, "resume_bgm() must resume from the same position")
 
--- Test mute/unmute preserves BGM state
-AudioSystem.play_bgm("arena")
-AudioSystem.set_enabled(false) -- Mute
-assert(AudioSystem.is_enabled() == false, "Mute must disable audio")
-AudioSystem.set_enabled(true) -- Unmute
-assert(AudioSystem.is_enabled() == true, "Unmute must re-enable audio")
-assert(bgm_played[#bgm_played] == "bgm_arena", "Unmute must resume BGM that was playing before mute")
+-- Mute: silencia tudo e Unmute: retoma a BGM na MESMA posição
+arena.pos = 77
+AudioSystem.set_enabled(false)
+assert(count_playing_bgm() == 0, "Muting must silence the BGM")
+AudioSystem.set_enabled(true)
+assert(arena.state == "playing", "Unmuting must resume the BGM that was playing")
+assert(arena.pos == 77, "Unmuting must resume the BGM at the position it had when muted, got " .. tostring(arena.pos))
 
--- Test volume control
+-- Bug 1: play_bgm com áudio mutado NÃO pode tocar, mas deve tocar ao desmutar
+AudioSystem.stop_bgm()
+AudioSystem.set_enabled(false)
+assert(AudioSystem.play_bgm("arena") == true, "play_bgm while muted must register the track")
+assert(count_playing_bgm() == 0, "play_bgm while muted must stay silent")
+assert(AudioSystem.get_current_bgm() == "arena", "play_bgm while muted must still set the current track")
+AudioSystem.resume_bgm()
+assert(count_playing_bgm() == 0, "resume_bgm while muted must stay silent")
+AudioSystem.set_enabled(true)
+assert(arena.state == "playing", "BGM requested while muted must start when unmuted")
+
+-- Bug 2: pausa explícita + mute + unmute NÃO retoma a música
+AudioSystem.pause_bgm()
+AudioSystem.set_enabled(false)
+AudioSystem.set_enabled(true)
+assert(arena.state ~= "playing", "A BGM paused explicitly must stay paused after mute/unmute")
+AudioSystem.resume_bgm()
+assert(arena.state == "playing", "resume_bgm() must resume a BGM paused before the mute")
+
+-- Mute repetido / unmute repetido são idempotentes
+local plays_before = arena.play_calls
+AudioSystem.set_enabled(true)
+assert(arena.play_calls == plays_before, "set_enabled(true) while already enabled must not call play() again")
+
+-- Mute também interrompe SFX em andamento via love.audio.stop()
+local stops_before = arena.stop_calls
+AudioSystem.set_enabled(false)
+assert(arena.stop_calls > stops_before, "Muting must call love.audio.stop() so in-flight SFX are cut")
+AudioSystem.set_enabled(true)
+
+-- Volume: BGM é independente do SFX e aplicado na hora
 AudioSystem.set_sfx_volume(0.5)
-assert(AudioSystem.get_sfx_volume() == 0.5, "set_sfx_volume(0.5) must set SFX volume to 0.5")
+assert(AudioSystem.get_sfx_volume() == 0.5, "set_sfx_volume(0.5) must set SFX volume")
+assert(math.abs(arena.volume - 0.5) < 1e-9, "SFX volume must not change BGM volume")
 AudioSystem.set_bgm_volume(0.3)
-assert(AudioSystem.get_bgm_volume() == 0.3, "set_bgm_volume(0.3) must set BGM volume to 0.3")
+assert(AudioSystem.get_bgm_volume() == 0.3, "set_bgm_volume(0.3) must set BGM volume")
+assert(math.abs(arena.volume - 0.5 * 0.3) < 1e-9, "BGM volume must be applied immediately (catalog 0.5 * 0.3), got " .. tostring(arena.volume))
+AudioSystem.set_bgm_volume(5)
+assert(AudioSystem.get_bgm_volume() == 1.0, "Volume must be clamped to [0, 1]")
+AudioSystem.set_bgm_volume(-1)
+assert(AudioSystem.get_bgm_volume() == 0.0, "Volume must be clamped to [0, 1]")
+AudioSystem.set_sfx_volume(1.0)
+AudioSystem.set_bgm_volume(1.0)
 
--- Test headless mode (no love.audio)
-local current_bgm_before = AudioSystem.get_current_bgm()
+-- love.quit() para a BGM (não deixa música tocando ao fechar o cliente)
+install_audio_mock()
+AudioSystem.init()
+AudioSystem.play_bgm("arena")
+assert(count_playing_bgm() == 1, "BGM must be playing before love.quit()")
+love.quit()
+assert(count_playing_bgm() == 0 and AudioSystem.get_current_bgm() == nil, "love.quit() must stop the BGM")
+
+-- Arquivo de BGM ausente: não quebra, não gera placeholder/beep
+install_audio_mock()
+_G.love.filesystem.getInfo = function() return nil end
+local placeholders_requested = 0
+_G.love.sound = { newSoundData = function() placeholders_requested = placeholders_requested + 1; return nil end }
+AudioSystem.init()
+local bgm_placeholders = placeholders_requested
+assert(AudioSystem.play_bgm("arena") == false, "Missing BGM file must make play_bgm return false")
+assert(count_playing_bgm() == 0 and AudioSystem.get_current_bgm() == nil, "Missing BGM file must not play anything")
+assert(placeholders_requested == bgm_placeholders, "Missing BGM must never fall back to a procedural beep")
+
+-- Headless (sem love.audio): nenhuma função da API pode quebrar
 _G.love.audio = nil
 _G.love.sound = nil
-AudioSystem.init() -- Should not crash in headless mode
+AudioSystem.init()
 assert(AudioSystem.play_bgm("arena") == false, "BGM play must fail silently in headless mode")
-assert(AudioSystem.get_current_bgm() == current_bgm_before, "Headless mode must not corrupt BGM state")
+assert(AudioSystem.get_current_bgm() == nil, "Headless mode must have no current BGM")
+assert(pcall(AudioSystem.pause_bgm), "pause_bgm() must not crash in headless mode")
+assert(pcall(AudioSystem.resume_bgm), "resume_bgm() must not crash in headless mode")
+assert(pcall(AudioSystem.stop_bgm), "stop_bgm() must not crash in headless mode")
+assert(pcall(AudioSystem.set_bgm_volume, 0.5), "set_bgm_volume() must not crash in headless mode")
+assert(pcall(AudioSystem.set_sfx_volume, 0.5), "set_sfx_volume() must not crash in headless mode")
+assert(pcall(AudioSystem.set_enabled, false), "set_enabled(false) must not crash in headless mode")
+assert(AudioSystem.is_enabled() == false, "set_enabled(false) must still update the flag in headless mode")
+assert(pcall(AudioSystem.set_enabled, true), "set_enabled(true) must not crash in headless mode")
+assert(AudioSystem.is_enabled() == true, "set_enabled(true) must still update the flag in headless mode")
+AudioSystem.set_bgm_volume(1.0)
+AudioSystem.set_sfx_volume(1.0)
 
-print("  -> Passed: BGM streaming, loop, track switching, mute/unmute, volume control, and headless verified.")
+print("  -> Passed: BGM streaming, loop, track switching, pause/mute/unmute state, volume control, missing file and headless verified.")
 
 print("\n>>> ALL CLIENT INTEGRATION TESTS PASSED SUCCESSFULLY! <<<")

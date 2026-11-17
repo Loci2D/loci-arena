@@ -1923,6 +1923,7 @@ end
 
 function love.quit()
     print("[Client] Closing connection...")
+    AudioSystem.stop_bgm()
     if loci.quit then
         loci.quit()
     end

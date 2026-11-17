@@ -47,8 +47,11 @@ local audio_enabled = true
 
 -- BGM state
 local bgm_sources = {}
-local current_bgm = nil
-local bgm_was_playing_before_mute = false
+local current_bgm = nil          -- fonte (Source) da faixa atual
+local current_bgm_name = nil     -- nome lógico da faixa atual (chave do BGM_CATALOG)
+local bgm_user_paused = false    -- true se o usuário chamou pause_bgm() (sobrevive a mute/unmute)
+local bgm_saved_position = nil   -- posição (s) guardada ao mutar, restaurada ao desmutar
+local bgm_missing_logged = {}    -- evita repetir o log de faixa ausente a cada tentativa
 
 -- Volume independente (0.0 a 1.0)
 local sfx_volume = 1.0
@@ -116,12 +119,35 @@ local function load_sound(sound_key, entry)
     return generate_placeholder_sound(entry.freq, entry.duration)
 end
 
+local function is_source_playing(source)
+    if source and type(source.isPlaying) == "function" then
+        local ok, playing = pcall(source.isPlaying, source)
+        return ok and playing == true
+    end
+    return false
+end
+
+--- Inicia a BGM atual; se havia uma posição guardada (mute), continua dela.
+local function start_current_bgm()
+    if not current_bgm or type(current_bgm.play) ~= "function" then
+        return
+    end
+    pcall(current_bgm.play, current_bgm)
+    if bgm_saved_position and type(current_bgm.seek) == "function" then
+        pcall(current_bgm.seek, current_bgm, bgm_saved_position)
+    end
+    bgm_saved_position = nil
+end
+
 --- Carrega todos os efeitos sonoros cadastrados (com fallback procedural caso o .wav falte).
 function audio_system.init()
     sounds = {}
     bgm_sources = {}
     current_bgm = nil
-    bgm_was_playing_before_mute = false
+    current_bgm_name = nil
+    bgm_user_paused = false
+    bgm_saved_position = nil
+    bgm_missing_logged = {}
 
     if not has_audio_backend() then
         print("[Audio] Backend de áudio indisponível (modo headless); SFX desabilitado com segurança")
@@ -215,25 +241,32 @@ function audio_system.is_enabled()
     return audio_enabled
 end
 
+--- Ativa/desativa todo o áudio (tecla M). Ao mutar, SFX e BGM são interrompidos; a BGM
+--- guarda a posição e volta do mesmo ponto ao desmutar (se não tiver sido pausada pelo usuário).
 function audio_system.set_enabled(enabled)
     local was_enabled = audio_enabled
     audio_enabled = not not enabled
 
-    if not has_audio_backend() then
+    if audio_enabled == was_enabled or not has_audio_backend() then
         return audio_enabled
     end
 
     if not audio_enabled then
-        -- Mudo: pausar BGM específico (preservando posição)
-        if current_bgm and type(current_bgm.pause) == "function" then
-            pcall(current_bgm.pause, current_bgm)
+        -- Mudo: guardar a posição da BGM e cortar TODO o áudio (inclui SFX em andamento).
+        -- love.audio.stop() zera a posição das fontes, por isso salvamos antes.
+        if current_bgm and type(current_bgm.tell) == "function" then
+            local ok, pos = pcall(current_bgm.tell, current_bgm)
+            if ok then
+                bgm_saved_position = pos
+            end
         end
-        -- Marcar estado da BGM para retomar ao desmutar
-        bgm_was_playing_before_mute = (current_bgm ~= nil)
+        if type(love.audio.stop) == "function" then
+            pcall(love.audio.stop)
+        end
     else
-        -- Desmutar: retomar BGM se estava tocando antes
-        if bgm_was_playing_before_mute and current_bgm then
-            pcall(current_bgm.play, current_bgm)
+        -- Desmutar: retomar a BGM, exceto se o usuário a pausou explicitamente.
+        if current_bgm and not bgm_user_paused then
+            start_current_bgm()
         end
     end
 
@@ -246,7 +279,14 @@ end
 
 -- ========== BGM API ==========
 
---- Reproduz uma faixa de BGM em loop (para a anterior se estiver tocando).
+--- Registra (ou substitui) uma faixa no catálogo de BGM. Deve ser chamada antes de init().
+--- entry = { file = "arquivo.ogg", volume = 0.0..1.0 }
+function audio_system.register_bgm(track_name, entry)
+    BGM_CATALOG[track_name] = entry
+end
+
+--- Reproduz uma faixa de BGM em loop (para a anterior se for outra faixa).
+--- Com o áudio mutado, apenas registra a faixa: ela começa a tocar quando for desmutado.
 function audio_system.play_bgm(track_name)
     if not has_audio_backend() then
         return false
@@ -254,77 +294,88 @@ function audio_system.play_bgm(track_name)
 
     local bgm = bgm_sources[track_name]
     if not bgm then
-        print(string.format("[Audio] BGM '%s' não encontrado", track_name))
+        if not bgm_missing_logged[track_name] then
+            bgm_missing_logged[track_name] = true
+            print(string.format("[Audio] BGM '%s' indisponível - nada será tocado", tostring(track_name)))
+        end
         return false
     end
 
-    -- Parar BGM anterior se estiver tocando
     if current_bgm and current_bgm ~= bgm then
-        pcall(current_bgm.stop, current_bgm)
+        if type(current_bgm.stop) == "function" then
+            pcall(current_bgm.stop, current_bgm)
+        end
+        bgm_saved_position = nil
     end
 
     current_bgm = bgm
-    bgm_was_playing_before_mute = true
+    current_bgm_name = track_name
+    bgm_user_paused = false
 
-    if type(bgm.play) == "function" then
-        pcall(bgm.play, bgm)
+    if audio_enabled and not is_source_playing(bgm) then
+        start_current_bgm()
         print(string.format("[Audio] BGM '%s' iniciado", track_name))
-        return true
     end
-    return false
+    return true
 end
 
---- Para a BGM atual.
+--- Para a BGM atual e esquece a faixa.
 function audio_system.stop_bgm()
-    if current_bgm and type(current_bgm.stop) == "function" then
-        pcall(current_bgm.stop, current_bgm)
-        current_bgm = nil
-        bgm_was_playing_before_mute = false
+    if current_bgm then
+        if type(current_bgm.stop) == "function" then
+            pcall(current_bgm.stop, current_bgm)
+        end
         print("[Audio] BGM parado")
     end
+    current_bgm = nil
+    current_bgm_name = nil
+    bgm_user_paused = false
+    bgm_saved_position = nil
 end
 
---- Pausa a BGM atual (preserva posição).
+--- Pausa a BGM atual (preserva posição). A pausa explícita sobrevive a mute/unmute.
 function audio_system.pause_bgm()
-    if current_bgm and type(current_bgm.pause) == "function" then
-        pcall(current_bgm.pause, current_bgm)
-        print("[Audio] BGM pausado")
+    if not current_bgm then
+        return
     end
+    bgm_user_paused = true
+    if type(current_bgm.pause) == "function" then
+        pcall(current_bgm.pause, current_bgm)
+    end
+    print("[Audio] BGM pausado")
 end
 
---- Retoma a BGM pausada.
+--- Retoma a BGM pausada (continua em silêncio se o áudio estiver mutado).
 function audio_system.resume_bgm()
-    if current_bgm and type(current_bgm.play) == "function" then
-        pcall(current_bgm.play, current_bgm)
+    if not current_bgm then
+        return
+    end
+    bgm_user_paused = false
+    if audio_enabled then
+        start_current_bgm()
         print("[Audio] BGM retomado")
     end
 end
 
 --- Retorna a faixa de BGM atual (nome ou nil).
 function audio_system.get_current_bgm()
-    for name, src in pairs(bgm_sources) do
-        if src == current_bgm then
-            return name
-        end
-    end
-    return nil
+    return current_bgm_name
 end
 
 -- ========== Volume Control ==========
 
---- Define o volume de SFX (0.0 a 1.0).
+--- Define o volume de SFX (0.0 a 1.0). Vale para os próximos SFX tocados.
 function audio_system.set_sfx_volume(vol)
     sfx_volume = math.max(0.0, math.min(1.0, vol or 1.0))
 end
 
---- Define o volume de BGM (0.0 a 1.0).
+--- Define o volume de BGM (0.0 a 1.0) e aplica imediatamente à faixa atual.
 function audio_system.set_bgm_volume(vol)
     bgm_volume = math.max(0.0, math.min(1.0, vol or 1.0))
-    -- Aplicar volume imediatamente ao BGM atual
     if current_bgm and type(current_bgm.setVolume) == "function" then
-        local entry = BGM_CATALOG[audio_system.get_current_bgm()]
+        local entry = BGM_CATALOG[current_bgm_name]
         if entry then
-            pcall(current_bgm.setVolume, current_bgm, entry.volume * bgm_volume)
+            pcall(current_bgm.setVolume, current_bgm, (entry.volume or 1.0) * bgm_volume)
         end
     end
 end
