@@ -547,17 +547,9 @@ function love.load(arg)
         end
         AudioSystem.play_skill(audio_skill, ability_id)
 
+        local has_sprite_anim = false
         if entity then
-            sprite_anim.trigger_action(entity.id, skill_name, ability_id, dx, dy, character_name)
-        end
-
-        local lifetime = 0.35
-        if skill_name == "fireball" then
-            lifetime = 0.40
-        elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
-            lifetime = 0.45 -- Whirlwind Dash
-        elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
-            lifetime = 0.60 -- Blade Throw
+            has_sprite_anim = sprite_anim.trigger_action(entity.id, skill_name, ability_id, dx, dy, character_name) == true
         end
 
         -- Rastrear cooldown local pelo nome real da skill (ou fallback se skills_list ainda não chegou)
@@ -582,17 +574,29 @@ function love.load(arg)
             end
         end
 
-        table.insert(visual_fx, {
-            x = entity and entity.x or 0,
-            y = entity and entity.y or 0,
-            dir_x = dx,
-            dir_y = dy,
-            ability_id = ability_id,
-            skill_name = skill_name,
-            character_name = character_name,
-            lifetime = lifetime,
-            max_lifetime = lifetime
-        })
+        -- Fallback procedural apenas para personagens/habilidades sem animação de sprite
+        if not has_sprite_anim then
+            local lifetime = 0.35
+            if skill_name == "fireball" then
+                lifetime = 0.40
+            elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
+                lifetime = 0.45 -- Whirlwind Dash
+            elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
+                lifetime = 0.60 -- Blade Throw
+            end
+
+            table.insert(visual_fx, {
+                x = entity and entity.x or 0,
+                y = entity and entity.y or 0,
+                dir_x = dx,
+                dir_y = dy,
+                ability_id = ability_id,
+                skill_name = skill_name,
+                character_name = character_name,
+                lifetime = lifetime,
+                max_lifetime = lifetime
+            })
+        end
     end
 
     loci.on_intent_rejected = function(reason)
@@ -1190,6 +1194,131 @@ local function draw_respawn_timer()
     love.graphics.setColor(1, 1, 1, 1)
 end
 
+local function draw_procedural_skill_fx(fx)
+    local progress = fx.lifetime / fx.max_lifetime
+    local inv_prog = 1.0 - progress
+    local fx_start_x = fx.x * VISUAL_SCALE
+    local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
+
+    -- Mapeamento de VFX desacoplado por skill_name (com fallback por ability_id / character_name)
+    local char_name = string.lower(tostring(fx.character_name or "default"))
+    local skill_name = fx.skill_name
+    if not skill_name then
+        if fx.ability_id == 1 then
+            skill_name = (char_name == "mage") and "fireball" or "slash"
+        elseif fx.ability_id == 2 then
+            skill_name = "fury_reward"
+        elseif fx.ability_id == 3 then
+            skill_name = "whirlwind_dash"
+        elseif fx.ability_id == 4 then
+            skill_name = "blade_throw"
+        end
+    end
+
+    if skill_name == "fireball" then
+        -- Fireball: projétil até range * 0.7 (210px) seguido de explosão na área real (aoe_radius = 60px)
+        local max_dist = 210
+        local travel_t = math.min(1.0, inv_prog / 0.5)
+        local travel_dist = max_dist * travel_t
+        local fireball_x = fx_start_x + fx.dir_x * travel_dist
+        local fireball_y = fx_start_y + fx.dir_y * travel_dist
+
+        if inv_prog <= 0.5 then
+            local radius = 18 + 8 * travel_t
+            love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.4)
+            love.graphics.setLineWidth(3)
+            love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
+
+            love.graphics.setColor(1.0, 0.55, 0.1, progress * 0.9)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius)
+            love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.75)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
+            love.graphics.setColor(1.0, 1.0, 0.85, progress * 0.6)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
+        else
+            local blast_t = (inv_prog - 0.5) / 0.5
+            local blast_alpha = 1.0 - blast_t
+            local blast_r = 20 + 40 * blast_t
+
+            love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
+            love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
+            love.graphics.setColor(1.0, 0.75, 0.2, blast_alpha * 0.55)
+            love.graphics.circle("fill", fireball_x, fireball_y, blast_r * 0.55)
+            love.graphics.setColor(1.0, 0.35, 0.05, blast_alpha * 0.9)
+            love.graphics.setLineWidth(3)
+            love.graphics.circle("line", fireball_x, fireball_y, blast_r)
+        end
+    elseif skill_name == "slash" then
+        local angle = math.atan2(fx.dir_y, fx.dir_x)
+        local radius = 45 * (0.8 + 0.4 * inv_prog)
+        love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
+        love.graphics.setLineWidth(4)
+        love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius, angle - 0.8, angle + 0.8)
+        love.graphics.setColor(0.3, 0.7, 1.0, progress * 0.5)
+        love.graphics.setLineWidth(8)
+        love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
+    elseif skill_name == "fury_reward" then
+        local hit_dist = 60
+        local hit_x = fx_start_x + fx.dir_x * hit_dist
+        local hit_y = fx_start_y + fx.dir_y * hit_dist
+        local r = 50 * (0.5 + 0.8 * inv_prog)
+        love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", hit_x, hit_y, r)
+        love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
+        love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
+    elseif skill_name == "whirlwind_dash" then
+        local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
+        local dash_world_dist = (160 / VISUAL_SCALE) * inv_prog
+        local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
+        local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
+        local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
+        local curr_x = clamped_wx * VISUAL_SCALE
+        local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
+        local r = 65 * (0.7 + 0.5 * inv_prog)
+        local spin_angle = inv_prog * math.pi * 5
+        love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", curr_x, curr_y, r)
+        love.graphics.setColor(1.0, 0.9, 0.5, progress * 0.6)
+        for i = 0, 3 do
+            local a = spin_angle + (i * math.pi / 2)
+            love.graphics.line(
+                curr_x, curr_y,
+                curr_x + math.cos(a) * r,
+                curr_y + math.sin(a) * r
+            )
+        end
+    elseif skill_name == "blade_throw" then
+        local max_dist = 260
+        local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
+        local blade_x = fx_start_x + fx.dir_x * travel_dist
+        local blade_y = fx_start_y + fx.dir_y * travel_dist
+
+        love.graphics.setColor(0.4, 0.8, 1.0, progress * 0.7)
+        love.graphics.setLineWidth(2)
+        love.graphics.line(fx_start_x, fx_start_y, blade_x, blade_y)
+
+        love.graphics.setColor(1.0, 1.0, 1.0, progress)
+        love.graphics.circle("fill", blade_x, blade_y, 7)
+        love.graphics.setColor(0.2, 0.6, 1.0, progress)
+        love.graphics.circle("line", blade_x, blade_y, 7)
+
+        if inv_prog > 0.45 then
+            local shock_r = 55 * ((inv_prog - 0.45) / 0.55)
+            love.graphics.setColor(1.0, 0.9, 0.2, progress * 0.9)
+            love.graphics.setLineWidth(3)
+            love.graphics.circle("line", blade_x, blade_y, shock_r)
+        end
+    else
+        local fx_end_x = fx_start_x + fx.dir_x * 50 * VISUAL_SCALE
+        local fx_end_y = fx_start_y + fx.dir_y * 50 * VISUAL_SCALE
+        love.graphics.setColor(1, 0.85, 0.2, progress)
+        love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
+        love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
+    end
+end
+
 function love.draw()
     push:start()
 
@@ -1214,145 +1343,9 @@ function love.draw()
     -- Draw background grid & physical collision boundaries
     draw_arena_grid()
 
-    -- Draw transient visual effects (Animações e Áreas de Contato)
+    -- Draw transient procedural fallback effects (apenas para personagens/skills sem sprite animado)
     for _, fx in ipairs(visual_fx) do
-        local progress = fx.lifetime / fx.max_lifetime
-        local inv_prog = 1.0 - progress
-        local fx_start_x = fx.x * VISUAL_SCALE
-        local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
-
-        -- Mapeamento de VFX desacoplado por skill_name (com fallback por ability_id / character_name)
-        local char_name = string.lower(tostring(fx.character_name or "default"))
-        local skill_name = fx.skill_name
-        if not skill_name then
-            if fx.ability_id == 1 then
-                skill_name = (char_name == "mage") and "fireball" or "slash"
-            elseif fx.ability_id == 2 then
-                skill_name = "fury_reward"
-            elseif fx.ability_id == 3 then
-                skill_name = "whirlwind_dash"
-            elseif fx.ability_id == 4 then
-                skill_name = "blade_throw"
-            end
-        end
-
-        if skill_name == "fireball" then
-            -- Fireball: projétil até range * 0.7 (210px) seguido de explosão na área real (aoe_radius = 60px)
-            local max_dist = 210
-            local travel_t = math.min(1.0, inv_prog / 0.5)
-            local travel_dist = max_dist * travel_t
-            local fireball_x = fx_start_x + fx.dir_x * travel_dist
-            local fireball_y = fx_start_y + fx.dir_y * travel_dist
-
-            if inv_prog <= 0.5 then
-                local radius = 18 + 8 * travel_t
-                -- Rastro de fogo
-                love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.4)
-                love.graphics.setLineWidth(3)
-                love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
-
-                -- Núcleo da bola de fogo em voo
-                love.graphics.setColor(1.0, 0.55, 0.1, progress * 0.9)
-                love.graphics.circle("fill", fireball_x, fireball_y, radius)
-                love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.75)
-                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
-                love.graphics.setColor(1.0, 1.0, 0.85, progress * 0.6)
-                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
-            else
-                -- Explosão expansiva até o raio real da AoE (60px)
-                local blast_t = (inv_prog - 0.5) / 0.5
-                local blast_alpha = 1.0 - blast_t
-                local blast_r = 20 + 40 * blast_t
-
-                love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
-                love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
-                love.graphics.setColor(1.0, 0.75, 0.2, blast_alpha * 0.55)
-                love.graphics.circle("fill", fireball_x, fireball_y, blast_r * 0.55)
-                love.graphics.setColor(1.0, 0.35, 0.05, blast_alpha * 0.9)
-                love.graphics.setLineWidth(3)
-                love.graphics.circle("line", fireball_x, fireball_y, blast_r)
-            end
-
-        elseif skill_name == "slash" then
-            -- Slash: Arco cortante frontal metálico/azul claro
-            local angle = math.atan2(fx.dir_y, fx.dir_x)
-            local radius = 45 * (0.8 + 0.4 * inv_prog)
-            love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
-            love.graphics.setLineWidth(4)
-            love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius, angle - 0.8, angle + 0.8)
-            love.graphics.setColor(0.3, 0.7, 1.0, progress * 0.5)
-            love.graphics.setLineWidth(8)
-            love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
-
-        elseif skill_name == "fury_reward" then
-            -- Fury Reward: Impacto carmesim/fogo com onda de choque
-            local hit_dist = 60 -- (7.5 unidades no mundo * VISUAL_SCALE = 60px na tela)
-            local hit_x = fx_start_x + fx.dir_x * hit_dist
-            local hit_y = fx_start_y + fx.dir_y * hit_dist
-            local r = 50 * (0.5 + 0.8 * inv_prog)
-            love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
-            love.graphics.setLineWidth(3)
-            love.graphics.circle("line", hit_x, hit_y, r)
-            love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
-            love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
-
-        elseif skill_name == "whirlwind_dash" then
-            -- Whirlwind Dash: Círculo 360º de corte giratório dourado com lâminas
-            local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
-            local dash_world_dist = (160 / VISUAL_SCALE) * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades no mundo)
-            local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
-            local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
-            local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
-            local curr_x = clamped_wx * VISUAL_SCALE
-            local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
-            local r = 65 * (0.7 + 0.5 * inv_prog)
-            local spin_angle = inv_prog * math.pi * 5
-            love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
-            love.graphics.setLineWidth(3)
-            love.graphics.circle("line", curr_x, curr_y, r)
-            love.graphics.setColor(1.0, 0.9, 0.5, progress * 0.6)
-            for i = 0, 3 do
-                local a = spin_angle + (i * math.pi / 2)
-                love.graphics.line(
-                    curr_x, curr_y,
-                    curr_x + math.cos(a) * r,
-                    curr_y + math.sin(a) * r
-                )
-            end
-
-        elseif skill_name == "blade_throw" then
-            -- Blade Throw: Espada viajando até o alvo + impacto expansivo de Stun
-            local max_dist = 260
-            local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
-            local blade_x = fx_start_x + fx.dir_x * travel_dist
-            local blade_y = fx_start_y + fx.dir_y * travel_dist
-            
-            -- Rastro de energia do arremesso
-            love.graphics.setColor(0.4, 0.8, 1.0, progress * 0.7)
-            love.graphics.setLineWidth(2)
-            love.graphics.line(fx_start_x, fx_start_y, blade_x, blade_y)
-
-            -- Lâmina em voo
-            love.graphics.setColor(1.0, 1.0, 1.0, progress)
-            love.graphics.circle("fill", blade_x, blade_y, 7)
-            love.graphics.setColor(0.2, 0.6, 1.0, progress)
-            love.graphics.circle("line", blade_x, blade_y, 7)
-
-            -- Onda de choque de Stun na área de impacto
-            if inv_prog > 0.45 then
-                local shock_r = 55 * ((inv_prog - 0.45) / 0.55)
-                love.graphics.setColor(1.0, 0.9, 0.2, progress * 0.9)
-                love.graphics.setLineWidth(3)
-                love.graphics.circle("line", blade_x, blade_y, shock_r)
-            end
-        else
-            -- Efeito padrão
-            local fx_end_x = fx_start_x + fx.dir_x * 50 * VISUAL_SCALE
-            local fx_end_y = fx_start_y + fx.dir_y * 50 * VISUAL_SCALE
-            love.graphics.setColor(1, 0.85, 0.2, progress)
-            love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
-            love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
-        end
+        draw_procedural_skill_fx(fx)
     end
 
     -- Draw all network entities
@@ -1686,8 +1679,8 @@ function draw_entity(ent, is_me)
         )
     end
 
-    -- Se morto, desenhar X de morte centrado no corpo
-    if is_dead then
+    -- Se morto e sem animação própria de morte, desenhar X procedural centrado no corpo
+    if is_dead and not sprite_anim.has_state(char_name, "death") then
         local cy = py - (sprite_h / 2) * scale
         local cross_size = 12 * scale
         love.graphics.setColor(1, 0, 0, 0.85)

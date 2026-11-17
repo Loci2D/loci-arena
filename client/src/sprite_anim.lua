@@ -867,13 +867,23 @@ function SpriteAnim.on_character_changed(entity_id, new_char)
     end
 end
 
--- Disparo de habilidade/ataque
+-- Verifica se o personagem possui frames ou rotações configuradas para um estado (ex: "death")
+function SpriteAnim.has_state(char_name, state_name)
+    local sprite_set = SpriteAnim.load_character(char_name)
+    if not sprite_set or not sprite_set.has_animations then return false end
+    local state = find_state_entry(sprite_set, state_name)
+    if not state then return false end
+    if state.has_frames then return true end
+    return state.rotations ~= nil and next(state.rotations) ~= nil
+end
+
+-- Disparo de habilidade/ataque; retorna true se uma animação de sprite foi iniciada
 function SpriteAnim.trigger_action(entity_id, skill_name, ability_id, dir_x, dir_y, char_name)
     local state = SpriteAnim.get_entity_state(entity_id, char_name)
-    if not state or state.is_dead or state.character_name == "" then return end
+    if not state or state.is_dead or state.character_name == "" then return false end
 
     local sprite_set = SpriteAnim.load_character(state.character_name)
-    if not sprite_set or not sprite_set.has_animations then return end
+    if not sprite_set or not sprite_set.has_animations then return false end
 
     local anim_map = sprite_set.anim_map
     local mapped_state = nil
@@ -887,7 +897,8 @@ function SpriteAnim.trigger_action(entity_id, skill_name, ability_id, dir_x, dir
         mapped_state = anim_map.skills[ability_id]
     end
 
-    if mapped_state and sprite_set.states[mapped_state] then
+    local target_state = mapped_state and sprite_set.states[mapped_state]
+    if target_state and (target_state.has_frames or (target_state.rotations and next(target_state.rotations) ~= nil)) then
         state.current_state = "attack"
         state.current_action = mapped_state
         state.frame_index = 1
@@ -902,7 +913,10 @@ function SpriteAnim.trigger_action(entity_id, skill_name, ability_id, dir_x, dir
                 state.facing = -1
             end
         end
+        return true
     end
+
+    return false
 end
 
 -- Reação quando um aliado morre (ex: passiva da Arya "aliado_morre")

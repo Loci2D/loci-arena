@@ -173,7 +173,12 @@ run_test("SpriteAnim.trigger_action initializes before update and preserves aim 
     SpriteAnim.clear_cache()
 
     -- Cast before any SpriteAnim.update call for entity 10, aiming north while moving south
-    SpriteAnim.trigger_action(10, "slash", 1, 0, -1, "arya")
+    assert(SpriteAnim.trigger_action(10, "slash", 1, 0, -1, "arya") == true,
+        "trigger_action must return true when sprite animation starts")
+    assert(SpriteAnim.trigger_action(12, "fireball", 1, 1, 0, "mage") == false,
+        "trigger_action must return false when character has no sprite animation")
+    assert(SpriteAnim.has_state("arya", "death") == true)
+    assert(SpriteAnim.has_state("mage", "death") == false)
     SpriteAnim.update(0.05, 10, {
         character_name = "arya",
         direction = "south",
