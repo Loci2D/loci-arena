@@ -105,7 +105,7 @@ run_test("create_character initializes attributes, falls back to default, and av
     assert(env.props[1].max_hp == "5500" and env.props[1].hp == "5500")
     assert(env.props[1].phys_def == "130" and env.props[1].mag_def == "50")
     assert(env.props[1].mana == "100" and env.props[1].max_mana == "100")
-    assert(env.props[1].move_speed == "3.2")
+    assert(env.props[1].move_speed == "2.2")
     assert(env.props[1].hp_regen == "20" and env.props[1].mana_regen == "10")
     assert(env.props[1].skills_list == "slash,fury_reward,whirlwind_dash,blade_throw")
     assert(env.props[1].fury_active == "false")
@@ -120,7 +120,21 @@ run_test("create_character initializes attributes, falls back to default, and av
     assert(CF.create_character(2, "unknown_hero_xyz") == true)
     assert(env.props[2].character_name == "default")
     assert(env.props[2].max_hp == "5000")
+    assert(env.props[2].move_speed == "2")
     assert(env.props[2].skills_list == "slash")
+
+    -- Archetype speeds: mage=2.0, warrior=1.9
+    assert(CF.create_character(3, "mage") == true and env.props[3].move_speed == "2")
+    assert(CF.create_character(4, "warrior") == true and env.props[4].move_speed == "1.9")
+
+    -- Missing move_speed falls back to 2.0
+    package.preload["data.characters.no_speed_mock"] = function()
+        return { name = "NoSpeed", attributes = { max_hp = 3000 }, skills = { "slash" } }
+    end
+    assert(CF.create_character(5, "no_speed_mock") == true)
+    assert(env.props[5].move_speed == "2", "missing move_speed must fall back to 2.0, got " .. tostring(env.props[5].move_speed))
+    package.preload["data.characters.no_speed_mock"] = nil
+    package.loaded["data.characters.no_speed_mock"] = nil
 end)
 
 run_test("has_skill and get_skill_by_slot handle valid, missing, and out-of-range slots", function()

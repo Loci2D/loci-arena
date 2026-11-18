@@ -245,6 +245,25 @@ keys_down = {}
 love.update(0.016)
 print("  -> Passed: Crowd control locks and recovers displacement.")
 
+-- Verify SDK default_move_speed and fallback prediction use 2.0 (not legacy 3.0)
+assert(loci.netcode and loci.netcode.default_move_speed == 2.0,
+    "love.load must configure loci.netcode.default_move_speed = 2.0, got " .. tostring(loci.netcode and loci.netcode.default_move_speed))
+local saved_speed = my_ent.move_speed
+local saved_prop_speed = my_ent.properties.move_speed
+my_ent.move_speed = nil
+my_ent.properties.move_speed = nil
+my_ent.x = 0.0
+keys_down = { d = true }
+love.update(0.016)
+love.update(0.1) -- 2.0 units/tick * 30 Hz * 0.1s = 6.0 units
+assert(math.abs(my_ent.x - 6.0) < 0.01,
+    string.format("fallback prediction without move_speed must move at 2.0 un/tick (6.0 in 0.1s), got %.4f", my_ent.x))
+keys_down = {}
+love.update(0.016)
+my_ent.move_speed = saved_speed
+my_ent.properties.move_speed = saved_prop_speed
+my_ent.x = 0.0
+
 print("[Test 4] Testing Dash Processing (dashing_until) & Border Clamp via love.update...")
 my_ent.x = 0.0
 my_ent.y = 0.0

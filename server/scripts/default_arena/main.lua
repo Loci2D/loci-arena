@@ -3,8 +3,8 @@
 -- Rules, physics modifications, damage and game mechanics must be handled here.
 
 -- Movement speed in units per tick.
--- At 30 Hz server tick rate: 5.0 units/tick = 150 units (pixels) per second.
-local SPEED = 3.0
+-- At 30 Hz server tick rate: 2.0 units/tick = 60 units/s (480 px/s with VISUAL_SCALE = 8).
+local SPEED = 2.0
 
 -- Limites seguros da arena e projeção de velocidade nas bordas (via VFS nativo do Loci2D)
 local ArenaBounds = require("core.arena_bounds")

@@ -257,11 +257,11 @@ local function predict_local_movement(ent, dx, dy, dt)
     if len > 0 then
         local ndx = in_dx / len
         local ndy = in_dy / len
-        local default_speed = (loci.netcode and loci.netcode.default_move_speed) or 3.0
+        local default_speed = (loci.netcode and loci.netcode.default_move_speed) or 2.0
         local raw_speed = (ent.get and (ent:get("move_speed") or ent:get("speed")))
             or (ent.properties and (ent.properties.move_speed or ent.properties.speed))
             or default_speed
-        local move_speed = tonumber(raw_speed) or 3.0
+        local move_speed = tonumber(raw_speed) or 2.0
         local tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0
         local speed_sec = move_speed * tick_rate
 
@@ -394,8 +394,11 @@ function love.load(arg)
     connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
     connection_status = connected_status_label
 
-    if loci.netcode and os.getenv("LOCI_AUTO_EXPORT_CSV") == "1" then
-        loci.netcode.auto_export_csv_on_quit = true
+    if loci.netcode then
+        loci.netcode.default_move_speed = 2.0
+        if os.getenv("LOCI_AUTO_EXPORT_CSV") == "1" then
+            loci.netcode.auto_export_csv_on_quit = true
+        end
     end
 
     -- Inicializar placeholders padronizados de 32x32px
@@ -1847,7 +1850,7 @@ function draw_character_sheet(sw, sh, my_entity)
     local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
     local phys_def = tonumber(my_entity:get("phys_def", 0)) or 0
     local mag_def = tonumber(my_entity:get("mag_def", 0)) or 0
-    local move_speed = tonumber(my_entity:get("move_speed", 3.0)) or 3.0
+    local move_speed = tonumber(my_entity:get("move_speed", 2.0)) or 2.0
     local hp_regen = tonumber(my_entity:get("hp_regen", 0)) or 0
     local mana_regen = tonumber(my_entity:get("mana_regen", 0)) or 0
     local fragile = tostring(my_entity:get("fragile", "0")) == "1"
