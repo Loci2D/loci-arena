@@ -67,13 +67,14 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK & NDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK 25.2.9519653
+      - name: Install Android NDK 25.2.9519653 & Build Tools
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "ndk;25.2.9519653" "build-tools;34.0.0"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n1)"
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "ndk;25.2.9519653" "build-tools;34.0.0" "platforms;android-34"
 
       - name: Download Loci2D Love2D SDK
         run: ./scripts/setup_sdk.sh --download
