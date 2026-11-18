@@ -15,7 +15,8 @@ local SKILL_BUTTON_CONFIGS = {
         radius = 75,
         color_bg = {0.4, 0.2, 0.2, 0.6},
         color_pressed = {0.8, 0.3, 0.3, 0.9},
-        support_aiming = false  -- Botão 1: apenas quick cast
+        support_aiming = false,  -- Botão 1: quick cast
+        hold_to_cast = true      -- Manter pressionado = ataque contínuo até o release
     },
     {
         skill_id = 2,
@@ -258,8 +259,10 @@ function ActionButton:handle_move(x, y, touch_id)
                 self.aim_dy = 0
             end
         else
-            -- Comportamento original para botões sem aiming: cancela se sair do raio
-            if not self:hit_test(x, y) then
+            -- Comportamento original para botões sem aiming: cancela se sair do raio.
+            -- Exceção: botões hold_to_cast (ataque básico) permanecem ativos até o release,
+            -- permitindo ataque contínuo mesmo com o dedo arrastando para fora do botão.
+            if not self.config.hold_to_cast and not self:hit_test(x, y) then
                 self.active = false
                 self.touch_id = nil
             end
