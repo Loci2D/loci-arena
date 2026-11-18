@@ -12,18 +12,16 @@ local function get_coords(pos)
     return 0, 0
 end
 
-local VISUAL_SCALE = (CombatSystem.CONST and CombatSystem.CONST.VISUAL_SCALE) or 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
-
 return {
     id = "fireball",
     name = "Fireball",
     description = "Bola de fogo explosiva com dano mágico em área",
     mana_cost = 35,
     cooldown = 45, -- 1.5s a 30Hz
-    range = 480 / VISUAL_SCALE,     -- 60.0 unidades no mundo (480px na tela) - aumentado significativamente
+    range = 64.0,                   -- unidades do mundo (cabe na tela: +-80 na horizontal)
     damage = 500,
     damage_type = CombatSystem.DamageType.MAGICAL,
-    aoe_radius = 120 / VISUAL_SCALE, -- 15.0 unidades no mundo (120px na tela) - aumentado significativamente
+    aoe_radius = 9.0,               -- unidades do mundo
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         -- Normaliza vetor de mira

@@ -333,7 +333,7 @@ do
     print("  OK Diagonal wall sliding and corner clamping")
 end
 
--- Test C: Whirlwind Dash (5.0 un/tick, 4 ticks) — stationary, near wall, at wall, diagonal
+-- Test C: Whirlwind Dash (dash_speed/dash_duration_ticks vem de data/skills/whirlwind_dash.lua) — stationary, near wall, at wall, diagonal
 do
     -- Stationary caster near right wall (player_intents[1] == nil)
     local h = create_server_harness()
@@ -453,13 +453,14 @@ do
     local p1 = h1.spawn_player(1, 0.0, 0.0, 3.2)
     h1.move_intent(1, 1, 0) -- start walking +X
     h1.step_tick()
-    assert(h1.action_intent(1, 3, 1, 0)) -- start whirlwind_dash (4 ticks: until tick 5)
+    assert(h1.action_intent(1, 3, 1, 0)) -- start whirlwind_dash (dash_duration_ticks ticks)
     h1.step_tick() -- tick 2 (mid-dash)
     assert(h1.move_intent(1, 0, 0)) -- player releases WASD during dash!
-    assert_near(p1.vx, 5.0, 1e-5, "Dash velocity stays active mid-dash after key release")
+    local ww_data = require("data.skills.whirlwind_dash")
+    assert_near(p1.vx, ww_data.dash_speed, 1e-5, "Dash velocity stays active mid-dash after key release")
 
-    -- Advance past dash end (ticks 3..8)
-    for _ = 1, 6 do
+    -- Advance past dash end (dash_duration_ticks + 2 more ticks of margin)
+    for _ = 1, ww_data.dash_duration_ticks + 4 do
         h1.step_tick()
     end
     local x_after_dash = p1.x
@@ -476,8 +477,9 @@ do
     assert(h2.action_intent(1, 3, 1, 0))
     h2.step_tick() -- tick 2 (mid-dash)
     assert(h2.move_intent(1, -1, 0)) -- switch intent to -X mid-dash
-    assert_near(p2.vx, 5.0, 1e-5, "Dash continues forward until duration expires")
-    for _ = 1, 5 do
+    local ww_data2 = require("data.skills.whirlwind_dash")
+    assert_near(p2.vx, ww_data2.dash_speed, 1e-5, "Dash continues forward until duration expires")
+    for _ = 1, ww_data2.dash_duration_ticks + 1 do
         h2.step_tick()
     end
     assert(p2.vx < -3.0, "Post-dash velocity switches to updated West intent instead of stale East intent")

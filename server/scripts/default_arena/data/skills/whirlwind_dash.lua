@@ -13,20 +13,18 @@ local function get_coords(pos)
     return 0, 0
 end
 
-local VISUAL_SCALE = (CombatSystem.CONST and CombatSystem.CONST.VISUAL_SCALE) or 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
-
 return {
     id = "whirlwind_dash",
     name = "Investida Giratória",
     description = "Avança na direção da mira, desferindo um giro de 360º com dano físico em área.",
     mana_cost = 25,
     cooldown = 180, -- 6 segundos a 30Hz
-    range = 280 / VISUAL_SCALE,     -- 35.0 unidades no mundo (280px na tela) - aumentado significativamente
-    dash_duration_ticks = 4,        -- ~0.13s a 30Hz para uma investida rápida
-    dash_speed = (280 / VISUAL_SCALE) / 4, -- 8.75 unidades/tick (desloca 35.0 unidades em 4 ticks)
+    range = 40.0,                   -- unidades do mundo (~0,5 s de caminhada)
+    dash_duration_ticks = 6,        -- 0.2s a 30Hz (velocidade ~2x a de andar, em vez de 3x com 4 ticks)
+    dash_speed = 40.0 / 6,          -- ~6.67 unidades/tick (desloca 40.0 unidades em 6 ticks)
     damage = 450,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 120 / VISUAL_SCALE, -- 15.0 unidades no mundo (120px na tela) - aumentado significativamente
+    aoe_radius = 10.0,              -- unidades do mundo
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         -- Normaliza direção da mira
@@ -48,7 +46,7 @@ return {
         local dash_duration_ticks = skill_data.dash_duration_ticks or 4
         Loci.Commands.set_property(entity_id, "dashing_until", tostring(current_tick + dash_duration_ticks))
 
-        local dash_speed = skill_data.dash_speed or (skill_data.range / dash_duration_ticks) -- Desloca exatamente os 20.0 unidades de alcance (160px na tela)
+        local dash_speed = skill_data.dash_speed or (skill_data.range / dash_duration_ticks) -- Desloca exatamente o alcance da habilidade durante a investida
         local proj_vx, proj_vy = ArenaBounds.project_velocity(caster_x, caster_y, aim_x * dash_speed, aim_y * dash_speed)
         Loci.Commands.set_velocity(entity_id, {
             x = proj_vx,

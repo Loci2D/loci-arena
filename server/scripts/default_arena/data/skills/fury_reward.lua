@@ -11,18 +11,16 @@ local function get_coords(pos)
     return 0, 0
 end
 
-local VISUAL_SCALE = (CombatSystem.CONST and CombatSystem.CONST.VISUAL_SCALE) or 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
-
 return {
     id = "fury_reward",
     name = "Recompensa da Fúria",
     description = "Golpe físico devastador de médio alcance, ativado após um aliado morrer.",
     mana_cost = 0,
     cooldown = 150, -- 5.0s a 30Hz (em 1v1/sem aliados; em times é ativado pela passiva de morte de aliado)
-    range = 240 / VISUAL_SCALE,    -- 30.0 unidades no mundo (240px na tela) - aumentado significativamente
+    range = 24.0,      -- unidades do mundo (~3 alturas de personagem)
     damage = 500,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 100 / VISUAL_SCALE, -- 12.5 unidades no mundo (100px na tela) - aumentado significativamente
+    aoe_radius = 9.0,  -- unidades do mundo
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         local caster_team = Loci.get_entity_property(entity_id, "team") or "1"

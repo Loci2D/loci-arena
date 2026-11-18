@@ -2,7 +2,7 @@
 -- Covers slash, fireball, blade_throw, fury_reward, shield, whirlwind_dash AoE damage,
 -- on_action CC/death/slot guards, character swap (999), and end-to-end duel + KDA + passive + respawn.
 
-package.path = "./server/scripts/default_arena/?.lua;./?.lua;" .. package.path
+package.path = "./server/scripts/default_arena/?.lua;./client/src/?.lua;./?.lua;" .. package.path
 
 local function assert_near(actual, expected, eps, msg)
     eps = eps or 1e-4
@@ -173,11 +173,12 @@ run_test("slash deals physical damage once to enemies in front, sparing allies a
     local CF = env.CharacterFactory
 
     -- Caster (arya, team 1) at (0, 0), aim (0, 0) defaults to (+1, 0)
-    -- Slash range=10.0, aoe_radius=5.625, sample points at x=2.5 and x=5.0
+    -- Slash range=16.0, aoe_radius=7.0, sample points at x=4.0 and x=8.0 (reach: x in [-3, 15])
     env.spawn_entity(1, "arya", "1", 0, 0)
     local enemy_front = env.spawn_entity(2, "default", "2", 3.5, 0) -- inside BOTH sample circles
     local ally_front = env.spawn_entity(3, "default", "1", 3.5, 0)  -- same team -> spared
     local enemy_behind = env.spawn_entity(4, "default", "2", -6.0, 0) -- behind caster -> spared
+    local enemy_far = env.spawn_entity(5, "default", "2", 20.0, 0)  -- beyond the melee reach (15) -> spared
 
     local initial_hp = tonumber(enemy_front.props.hp)
     with_fixed_random(0.99, function()
@@ -190,17 +191,18 @@ run_test("slash deals physical damage once to enemies in front, sparing allies a
     assert_near(tonumber(enemy_front.props.hp), initial_hp - expected_dmg, 1e-4, "enemy hit once by slash")
     assert(ally_front.props.hp == "5000", "ally must not take friendly fire from slash")
     assert(enemy_behind.props.hp == "5000", "enemy behind caster must not be hit")
+    assert(enemy_far.props.hp == "5000", "slash is melee: enemy beyond ~2 character heights must not be hit")
 end)
 
 run_test("fireball deals magical AoE damage at 70% range and spares allies", function()
     local env = make_server_env(false)
     local CF = env.CharacterFactory
 
-    -- Fireball range=37.5 -> explosion center at 0.7 * 37.5 = 26.25, aoe_radius=7.5
+    -- Fireball range=64.0 -> explosion center at 0.7 * 64 = 44.8, aoe_radius=9.0
     env.spawn_entity(1, "mage", "1", 0, 0)
-    local enemy_in = env.spawn_entity(2, "warrior", "2", 28, 2)   -- dist from (26.25,0) < 7.5
-    local ally_in = env.spawn_entity(3, "default", "1", 26, 0)    -- same team -> spared
-    local enemy_out = env.spawn_entity(4, "warrior", "2", 40, 0)  -- dist 13.75 > 7.5 -> spared
+    local enemy_in = env.spawn_entity(2, "warrior", "2", 46, 2)   -- dist from (44.8,0) ~ 2.3 < 9
+    local ally_in = env.spawn_entity(3, "default", "1", 44, 0)    -- same team -> spared
+    local enemy_out = env.spawn_entity(4, "warrior", "2", 60, 0)  -- dist 15.2 > 9 -> spared
 
     with_fixed_random(0.99, function()
         local ok = CF.execute_skill(1, "fireball", 10, 0)
@@ -223,7 +225,7 @@ run_test("blade_throw stops at first enemy, stuns AoE targets, and disarms caste
     local ally_path = env.spawn_entity(2, "default", "1", 6, 0)    -- ally in flight path must NOT stop blade
     local enemy_hit = env.spawn_entity(3, "default", "2", 12, 0)   -- first enemy at d=12 -> impact at x=12
     enemy_hit.vx, enemy_hit.vy = 2.0, 1.0
-    local enemy_splash = env.spawn_entity(4, "default", "2", 16, 0) -- within aoe_radius=6.875 of x=12
+    local enemy_splash = env.spawn_entity(4, "default", "2", 16, 0) -- within aoe_radius=8.0 of x=12
     local enemy_far = env.spawn_entity(5, "default", "2", 25, 0)   -- beyond impact AoE -> unharmed
 
     with_fixed_random(0.99, function()
@@ -293,7 +295,7 @@ run_test("shield and whirlwind_dash apply defensive shield and AoE physical dama
     with_fixed_random(0.99, function()
         assert(CF.execute_skill(1, "whirlwind_dash", 1, 0) == true)
     end)
-    assert(caster.props.dashing_until == "54")
+    assert(caster.props.dashing_until == "56", "dash lasts 6 ticks (50 + 6)")
     local expected_dmg = 450 * (100 / 180)
     assert_near(tonumber(enemy.props.hp), 5000 - expected_dmg, 1e-4)
 end)
@@ -363,7 +365,7 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     local env = make_server_env(true)
     local p1 = env.join_player(1, 0, 0)     -- Team 1 (Arya)
     local p2 = env.join_player(2, 10, 0)    -- Team 2 (Arya)
-    local p3 = env.join_player(3, 35, 0)    -- Team 1 (Arya)
+    local p3 = env.join_player(3, 55, 0)    -- Team 1 (Arya)
 
     assert(p1.props.team == "1" and p2.props.team == "2" and p3.props.team == "1")
 
@@ -389,7 +391,7 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     -- 3. Low-HP p3 gets eliminated by p2's fireball -> KDA updates + p1 (allied Arya) gets passive paralysis + fury
     p3.props.hp = "100"
     with_fixed_random(0.99, function()
-        assert(on_action(2, 1, 1, 0) == true) -- fireball hits p3 at x=35 (10 + 26.25 = 36.25)
+        assert(on_action(2, 1, 1, 0) == true) -- fireball hits p3 at x=55 (10 + 0.7 * 64 = 54.8)
     end)
     assert(p3.props.hp == "0" and p3.props.is_dead == "true")
     assert(p3.props.deaths == "1" and p2.props.kills == "1")
@@ -418,6 +420,43 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     assert(env.entities[3] == nil)
     local p4 = env.join_player(4, -10, 0)
     assert(p4.props.team == "1", "team balancing should allocate p4 to team 1 after p3 left")
+end)
+
+run_test("server publishes skill_ranges from data/skills and the client defaults never drift from it", function()
+    local env = make_server_env(false)
+    local SkillRanges = require("skill_ranges")
+    SkillRanges.reset()
+
+    -- Cada personagem publica alcance:raio das próprias skills (somente as que têm alcance)
+    local expected_by_char = {
+        arya = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" },
+        mage = { "fireball" },
+    }
+    local id = 0
+    for char_name, skills in pairs(expected_by_char) do
+        id = id + 1
+        local ent = env.spawn_entity(id, char_name, "1", 0, 0)
+        local published = SkillRanges.parse(ent.props.skill_ranges)
+        for _, skill_name in ipairs(skills) do
+            local data = require("data.skills." .. skill_name)
+            assert(published[skill_name], char_name .. " must publish skill_ranges for " .. skill_name)
+            assert_near(published[skill_name].range, data.range, 1e-3, skill_name .. " published range")
+            assert_near(published[skill_name].aoe, data.aoe_radius, 1e-3, skill_name .. " published aoe")
+        end
+    end
+
+    -- Skill sem alcance (shield) não entra na propriedade
+    local built = SkillRanges.parse(env.CharacterFactory.build_skill_ranges({ "slash", "shield", "nao_existe" }))
+    assert(built.slash and built.shield == nil and built.nao_existe == nil,
+        "skills without range (shield) or unknown skills must not be published")
+    assert(env.CharacterFactory.build_skill_ranges({}) == "", "no skills -> empty string")
+
+    -- Anti-deriva: os padrões embutidos no cliente têm que ser iguais aos data/skills/*.lua
+    for name, def in pairs(SkillRanges.DEFAULTS) do
+        local data = require("data.skills." .. name)
+        assert_near(def.range, data.range, 1e-3, "client default range drifted from server for " .. name)
+        assert_near(def.aoe, data.aoe_radius, 1e-3, "client default aoe drifted from server for " .. name)
+    end
 end)
 
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))
