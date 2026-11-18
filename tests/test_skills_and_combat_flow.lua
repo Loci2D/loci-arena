@@ -463,6 +463,25 @@ run_test("server publishes skill_ranges from data/skills and the client defaults
         assert_near(def.range, data.range, 1e-3, "client default range drifted from server for " .. name)
         assert_near(def.aoe, data.aoe_radius, 1e-3, "client default aoe drifted from server for " .. name)
     end
+
+    -- Convenção única de escala: ArenaBounds, CombatSystem e SkillRanges.SCALE devem concordar
+    local ArenaBounds = require("core.arena_bounds")
+    assert_near(SkillRanges.SCALE.PLAYER_COLLIDER_RADIUS, ArenaBounds.PLAYER_COLLIDER_RADIUS, 1e-6,
+        "client collider radius must match ArenaBounds.PLAYER_COLLIDER_RADIUS")
+    assert_near(SkillRanges.SCALE.VISUAL_SCALE, env.CombatSystem.CONST.VISUAL_SCALE, 1e-6,
+        "client VISUAL_SCALE must match CombatSystem.CONST.VISUAL_SCALE")
+
+    local char_height_u = (SkillRanges.SCALE.SPRITE_BASE_SIZE * SkillRanges.SCALE.SPRITE_SCALE) / SkillRanges.SCALE.VISUAL_SCALE
+    assert_near(char_height_u, 8.0, 1e-6, "reference visual character height must be 8.0u (64px)")
+    local collider_diameter_u = ArenaBounds.PLAYER_COLLIDER_RADIUS * 2.0
+    for name, _ in pairs(SkillRanges.DEFAULTS) do
+        local geom = SkillRanges.get_detection_geometry(name)
+        assert(geom, "detection geometry missing for " .. name)
+        local max_front_reach = geom.distances[#geom.distances] + geom.aoe
+        assert(max_front_reach > collider_diameter_u * 2.5,
+            string.format("%s effective front reach (%.2fu) must extend well beyond collider diameter (%.2fu)",
+                name, max_front_reach, collider_diameter_u))
+    end
 end)
 
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

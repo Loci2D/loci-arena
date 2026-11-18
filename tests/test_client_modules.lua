@@ -327,4 +327,35 @@ run_test("VirtualJoystick top HUD bar emits KDA/swap/mute/disconnect without mov
     assert(kda_ui.toggle() == was_visible, "kda_ui.toggle restores state")
 end)
 
+-- ---------------------------------------------------------------------------
+-- 8. Convenção única de escala e geometria de detecção (SkillRanges)
+-- ---------------------------------------------------------------------------
+run_test("SkillRanges exposes canonical scale constants, focal aim_distance and detection geometry", function()
+    package.loaded["skill_ranges"] = nil
+    local SkillRanges = require("skill_ranges")
+    SkillRanges.reset()
+
+    assert(SkillRanges.SCALE.VISUAL_SCALE == 8, "VISUAL_SCALE must be 8 px/u")
+    assert_near(SkillRanges.SCALE.PLAYER_COLLIDER_RADIUS, 2.0, 1e-9, "PLAYER_COLLIDER_RADIUS")
+    assert(SkillRanges.SCALE.SPRITE_BASE_SIZE == 32 and SkillRanges.SCALE.SPRITE_SCALE == 2, "64px visual sprite convention")
+    assert_near(SkillRanges.SCALE.BODY_CENTER_OFFSET_U, 4.0, 1e-9, "BODY_CENTER_OFFSET_U = 4.0u")
+
+    -- Fireball focal aim_distance tracks explosion center (0.7 * 64 = 44.8u), not 64u
+    assert_near(SkillRanges.aim_distance("fireball"), 44.8, 1e-6, "fireball focal aim_distance")
+    assert_near(SkillRanges.aim_distance("whirlwind_dash"), 40.0, 1e-6, "dash focal aim_distance")
+    assert_near(SkillRanges.aim_distance("blade_throw"), 56.0, 1e-6, "blade_throw focal aim_distance")
+
+    -- Detection geometry reflects exact server sample points
+    local slash_geom = SkillRanges.get_detection_geometry("slash")
+    assert(slash_geom and #slash_geom.distances == 2, "slash has 2 sample circles")
+    assert_near(slash_geom.distances[1], 4.0, 1e-6, "slash sample 1 (0.25 * 16)")
+    assert_near(slash_geom.distances[2], 8.0, 1e-6, "slash sample 2 (0.5 * 16)")
+    assert_near(slash_geom.aoe, 7.0, 1e-6, "slash aoe radius")
+
+    local fury_geom = SkillRanges.get_detection_geometry("fury_reward")
+    assert(fury_geom and #fury_geom.distances == 2, "fury_reward has 2 sample circles")
+    assert_near(fury_geom.distances[1], 4.8, 1e-6, "fury sample 1 (0.2 * 24)")
+    assert_near(fury_geom.distances[2], 12.0, 1e-6, "fury sample 2 (0.5 * 24)")
+end)
+
 print(string.format("\n>>> Phase 4: All %d Client Module unit tests passed! <<<", passed))

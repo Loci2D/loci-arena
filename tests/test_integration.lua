@@ -291,12 +291,49 @@ end
 
 love.keypressed("f3") -- Toggle debug overlay ON
 reset_draw_captures()
+local debug_circles = {}
+local debug_rects = {}
+local orig_circle = _G.love.graphics.circle
+local orig_rect = _G.love.graphics.rectangle
+_G.love.graphics.circle = function(mode, x, y, r, ...)
+    table.insert(debug_circles, { mode = mode, x = x, y = y, r = r })
+    return orig_circle(mode, x, y, r, ...)
+end
+_G.love.graphics.rectangle = function(mode, x, y, w, h, ...)
+    table.insert(debug_rects, { mode = mode, x = x, y = y, w = w, h = h })
+    return orig_rect(mode, x, y, w, h, ...)
+end
 love.draw()
+_G.love.graphics.circle = orig_circle
+_G.love.graphics.rectangle = orig_rect
+
 assert(contains_text(captured_prints, "Ping: 42 ms"), "F3 overlay must display real Ping metric")
 assert(contains_text(captured_prints, "Jitter:"), "F3 overlay must display Jitter metric")
 assert(contains_text(captured_prints, "Loss:"), "F3 overlay must display Packet Loss metric")
 assert(contains_text(captured_prints, "Tick Rate:"), "F3 overlay must display Tick Rate metric")
 assert(contains_text(captured_prints, "Touch UI:"), "F3 overlay must preserve Touch UI status")
+assert(contains_text(captured_prints, "Scale: 1u=8px"), "F3 overlay must display canonical scale convention")
+assert(contains_text(captured_prints, "Sprite: 64px (2x)"), "F3 overlay must display sprite scale")
+
+local found_collider_circle = false
+for _, c in ipairs(debug_circles) do
+    if c.mode == "line" and math.abs(c.r - 16.0) < 0.01 then
+        found_collider_circle = true
+        break
+    end
+end
+assert(found_collider_circle, "F3 spatial overlay must draw physical collider circle (r = 2.0u * 8 = 16px)")
+
+local found_sprite_box = false
+for _, r in ipairs(debug_rects) do
+    if r.mode == "line" and math.abs(r.w - 64.0) < 0.01 and math.abs(r.h - 64.0) < 0.01 then
+        found_sprite_box = true
+        break
+    end
+end
+assert(found_sprite_box, "F3 spatial overlay must draw 64x64px sprite bounding box")
+
+love.keypressed("f3") -- Toggle debug overlay OFF again before subsequent tests
 
 love.keypressed("f5")
 assert(math.abs(loci.netcode.simulate_latency - 0.050) < 1e-6, "F5 #1 should set simulated latency to 50ms")
@@ -809,5 +846,38 @@ AudioSystem.set_bgm_volume(1.0)
 AudioSystem.set_sfx_volume(1.0)
 
 print("  -> Passed: BGM streaming, loop, track switching, pause/mute/unmute state, volume control, missing file and headless verified.")
+
+print("[Test 10] Testing Ground Aim Indicator Pivot & Focal Distance Alignment...")
+local virtual_joystick = require("virtual_joystick")
+virtual_joystick.reset()
+my_ent.x = 10.0
+my_ent.y = 20.0
+my_ent.properties.is_dead = false
+my_ent.properties.character_name = "arya"
+my_ent.properties.skills_list = "slash,fury_reward,whirlwind_dash,blade_throw"
+my_ent.properties.skill_ranges = "slash=16:7,fury_reward=24:9,whirlwind_dash=40:10,blade_throw=56:8"
+
+assert(virtual_joystick.handle_touchpress("t_aim_ground", 1024, 489.6) == true)
+assert(virtual_joystick.handle_touchmove("t_aim_ground", 1024 + 60, 489.6) == true)
+local aim_lines = {}
+local orig_line = _G.love.graphics.line
+_G.love.graphics.line = function(x1, y1, x2, y2, ...)
+    table.insert(aim_lines, { x1 = x1, y1 = y1, x2 = x2, y2 = y2 })
+    return orig_line(x1, y1, x2, y2, ...)
+end
+love.draw()
+_G.love.graphics.line = orig_line
+virtual_joystick.handle_touchrelease("t_aim_ground")
+virtual_joystick.pop_release_events()
+
+local found_ground_aim = false
+for _, ln in ipairs(aim_lines) do
+    if math.abs(ln.x1 - 80.0) < 0.05 and math.abs(ln.y1 - 160.0) < 0.05 and math.abs(ln.x2 - 400.0) < 0.1 then
+        found_ground_aim = true
+        break
+    end
+end
+assert(found_ground_aim, "Ground aim indicator must originate at feet/collider pivot (80, 160) and span 40u=320px to (400, 160)")
+print("  -> Passed: Ground aim indicator originates at physical collider pivot.")
 
 print("\n>>> ALL CLIENT INTEGRATION TESTS PASSED SUCCESSFULLY! <<<")
