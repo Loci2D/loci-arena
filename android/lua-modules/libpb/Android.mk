@@ -1,0 +1,11 @@
+LOCAL_PATH := $(call my-dir)
+
+include $(CLEAR_VARS)
+
+LOCAL_MODULE := libpb
+LOCAL_MODULE_FILENAME := libpb
+LOCAL_SRC_FILES := pb.c
+LOCAL_CFLAGS := -O2 -DLUA_USE_POSIX
+LOCAL_SHARED_LIBRARIES := liblove
+
+include $(BUILD_SHARED_LIBRARY)
