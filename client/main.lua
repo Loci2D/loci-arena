@@ -60,13 +60,13 @@ local show_touch_controls = true
 local font_hud_small = nil
 local font_hud_normal = nil
 
--- Sprites e texturas de personagens (padrão 32x32px)
-local SPRITE_BASE_SIZE = 32
--- 🔍 ZOOM DO PERSONAGEM: ajuste SPRITE_SCALE para controlar o tamanho visual na tela.
+-- Sprites e texturas de personagens (convenção única definida em SkillRanges.SCALE)
+local SPRITE_BASE_SIZE = SkillRanges.SCALE.SPRITE_BASE_SIZE
+-- 🔍 ZOOM DO PERSONAGEM: ajuste SPRITE_SCALE em SkillRanges.SCALE para controlar o tamanho visual na tela.
 --   1 = 32px  (tamanho nativo do sprite, compacto)
---   2 = 64px  (atual — bom equilíbrio visual para arena)
+--   2 = 64px  (atual — perspectiva 2.5D: 8u de altura visual sobre colisor de 4u de diâmetro)
 --   4 = 128px (equivalente ao sprite 16x16 antigo multiplicado por 8)
-local SPRITE_SCALE = 2
+local SPRITE_SCALE = SkillRanges.SCALE.SPRITE_SCALE
 local placeholder_canvases = {}
 
 local function create_character_placeholder(r, g, b, accent_r, accent_g, accent_b)
@@ -141,7 +141,7 @@ local shake_intensity = 0
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
-local VISUAL_SCALE = 8 -- Pixels per Meter (escala para desenho)
+local VISUAL_SCALE = SkillRanges.SCALE.VISUAL_SCALE -- Pixels per Meter (escala única do projeto)
 
 -- Server authoritative arena boundaries: [-500, +500] (1000x1000 pixels)
 local ARENA_MIN = -500
@@ -154,7 +154,7 @@ local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 -- Espelha intencionalmente `server/scripts/default_arena/core/arena_bounds.lua`
 -- porque o cliente Love2D e o VFS sandbox do servidor não compartilham módulos Lua;
 -- manter sincronizado se o mapa ou o raio do colisor mudarem.
-local PLAYER_COLLIDER_RADIUS = 2.0
+local PLAYER_COLLIDER_RADIUS = SkillRanges.SCALE.PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MIN_X = ARENA_MIN + PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MAX_X = ARENA_MAX - PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MIN_Y = ARENA_MIN + PLAYER_COLLIDER_RADIUS
@@ -1584,7 +1584,13 @@ function love.draw()
         draw_entity(ent, my_entity and (ent.id == my_entity.id))
     end
 
-    -- Draw aim indicator (drag-to-aim) enquanto botões 3 ou 4 estão aiming ou cancelando
+    -- Overlay espacial de debug (F3): compara colisor físico (2.0u), bounding box do sprite (64px),
+    -- pivô (pés vs centro do corpo) e áreas reais de detecção das skills equipadas.
+    if show_debug_overlay then
+        draw_spatial_debug_overlay(entities, my_entity)
+    end
+
+    -- Draw aim indicator (drag-to-aim) no plano do chão (pivô do colisor físico)
     if my_entity and show_touch_controls then
         -- Habilidade padrão de cada slot de mira (usada se skills_list ainda não chegou)
         local DEFAULT_AIM_SKILLS = { [3] = "whirlwind_dash", [4] = "blade_throw" }
@@ -1594,9 +1600,9 @@ function love.draw()
                 local aim_dx, aim_dy = virtual_joystick.get_aim_vector(slot)
                 if math.abs(aim_dx) > 0.01 or math.abs(aim_dy) > 0.01 then
                     local player_x = my_entity.x * VISUAL_SCALE
-                    local player_y = (my_entity.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Centro do corpo a partir dos pés do modelo escalado
+                    local player_y = my_entity.y * VISUAL_SCALE -- Origem no chão (centro do colisor físico / pés)
                     local aim_skill = get_entity_skill_by_slot(my_entity, slot) or DEFAULT_AIM_SKILLS[slot]
-                    local aim_length = SkillRanges.range(aim_skill, 200 / VISUAL_SCALE) * VISUAL_SCALE
+                    local aim_length = SkillRanges.aim_distance(aim_skill, 200 / VISUAL_SCALE) * VISUAL_SCALE
                     local end_x = player_x + aim_dx * aim_length
                     local end_y = player_y + aim_dy * aim_length
 
@@ -1972,9 +1978,132 @@ function draw_entity(ent, is_me)
     end
 end
 
+local DEBUG_SKILL_COLORS = {
+    [1] = { 0.35, 0.95, 0.45 },
+    [2] = { 1.00, 0.45, 0.25 },
+    [3] = { 0.85, 0.45, 1.00 },
+    [4] = { 0.35, 0.80, 1.00 },
+}
+
+local DEBUG_INV_SQRT2 = math.sqrt(0.5)
+local DEBUG_DIR_VECTORS = {
+    ["east"]       = {  1.0,              0.0 },
+    ["south-east"] = {  DEBUG_INV_SQRT2,  DEBUG_INV_SQRT2 },
+    ["south"]      = {  0.0,              1.0 },
+    ["south-west"] = { -DEBUG_INV_SQRT2,  DEBUG_INV_SQRT2 },
+    ["west"]       = { -1.0,              0.0 },
+    ["north-west"] = { -DEBUG_INV_SQRT2, -DEBUG_INV_SQRT2 },
+    ["north"]      = {  0.0,             -1.0 },
+    ["north-east"] = {  DEBUG_INV_SQRT2, -DEBUG_INV_SQRT2 },
+}
+
+local function get_debug_facing_vector(ent)
+    if not ent then return 1.0, 0.0 end
+    local st = procedural_anim.get_state(ent.id)
+    if st and st.direction and DEBUG_DIR_VECTORS[st.direction] then
+        local v = DEBUG_DIR_VECTORS[st.direction]
+        return v[1], v[2]
+    end
+    return (st and st.facing == -1) and -1.0 or 1.0, 0.0
+end
+
+function draw_spatial_debug_overlay(entities, my_entity)
+    local prev_lw = love.graphics.getLineWidth and love.graphics.getLineWidth() or 1
+    local prev_font = love.graphics.getFont and love.graphics.getFont() or nil
+    if font_hud_small then
+        love.graphics.setFont(font_hud_small)
+    end
+
+    local collider_px = PLAYER_COLLIDER_RADIUS * VISUAL_SCALE
+    local sprite_box_w = SPRITE_BASE_SIZE * SPRITE_SCALE
+    local sprite_box_h = SPRITE_BASE_SIZE * SPRITE_SCALE
+    local body_offset_y = sprite_box_h / 2
+
+    for _, ent in ipairs(entities or {}) do
+        if should_clamp_entity(ent) and ent.x and ent.y then
+            local px = ent.x * VISUAL_SCALE
+            local py = ent.y * VISUAL_SCALE
+
+            -- 1. Colisor físico real no chão (raio 2.0u = 16px, diâmetro 32px)
+            love.graphics.setLineWidth(1.5)
+            love.graphics.setColor(0.2, 0.95, 0.45, 0.30)
+            love.graphics.circle("fill", px, py, collider_px)
+            love.graphics.setColor(0.2, 1.0, 0.5, 0.90)
+            love.graphics.circle("line", px, py, collider_px)
+
+            -- 2. Caixa visual do sprite (64x64px ancorada nos pés)
+            love.graphics.setLineWidth(1)
+            love.graphics.setColor(1.0, 0.85, 0.25, 0.65)
+            love.graphics.rectangle("line", px - sprite_box_w / 2, py - sprite_box_h, sprite_box_w, sprite_box_h)
+
+            -- 3. Pivô pés/colisor (verde) vs centro visual do corpo (magenta)
+            love.graphics.setColor(0.85, 0.35, 0.95, 0.75)
+            love.graphics.line(px, py, px, py - body_offset_y)
+            love.graphics.setColor(0.2, 1.0, 0.5, 1.0)
+            love.graphics.line(px - 4, py, px + 4, py)
+            love.graphics.line(px, py - 4, px, py + 4)
+            love.graphics.setColor(1.0, 0.35, 0.9, 1.0)
+            love.graphics.line(px - 4, py - body_offset_y, px + 4, py - body_offset_y)
+            love.graphics.line(px, py - body_offset_y - 4, px, py - body_offset_y + 4)
+        end
+    end
+
+    -- 4. Círculos e arcos de detecção das skills do jogador local na direção do facing
+    if my_entity and my_entity.x and my_entity.y then
+        local px = my_entity.x * VISUAL_SCALE
+        local py = my_entity.y * VISUAL_SCALE
+        local fdx, fdy = get_debug_facing_vector(my_entity)
+        local angle = math.atan2(fdy, fdx)
+        local char_name = string.lower(tostring((my_entity.get and my_entity:get("character_name", "default")) or "default"))
+        local raw_list = (my_entity.get and my_entity:get("skills_list", "")) or ""
+
+        for slot = 1, 4 do
+            local skill_name = get_entity_skill_by_slot(my_entity, slot)
+            if not skill_name and raw_list == "" and slot == 1 then
+                skill_name = (char_name == "mage") and "fireball" or "slash"
+            end
+            local geom = skill_name and SkillRanges.get_detection_geometry(skill_name)
+            if geom then
+                local c = DEBUG_SKILL_COLORS[slot] or { 1, 1, 1 }
+                local range_px = geom.range * VISUAL_SCALE
+                local aoe_px = geom.aoe * VISUAL_SCALE
+
+                -- Arco frontal do alcance nominal (range)
+                love.graphics.setLineWidth(1)
+                love.graphics.setColor(c[1], c[2], c[3], 0.40)
+                if love.graphics.arc then
+                    love.graphics.arc("line", "open", px, py, range_px, angle - 0.55, angle + 0.55)
+                end
+
+                -- Círculos exatos de amostragem / AoE no servidor
+                for _, dist_u in ipairs(geom.distances) do
+                    local sx = px + fdx * (dist_u * VISUAL_SCALE)
+                    local sy = py + fdy * (dist_u * VISUAL_SCALE)
+                    love.graphics.setColor(c[1], c[2], c[3], 0.12)
+                    love.graphics.circle("fill", sx, sy, aoe_px)
+                    love.graphics.setColor(c[1], c[2], c[3], 0.75)
+                    love.graphics.circle("line", sx, sy, aoe_px)
+                end
+
+                -- Linha guia do centro do colisor até o ponto focal da mira
+                local aim_px = geom.aim_distance * VISUAL_SCALE
+                love.graphics.setColor(c[1], c[2], c[3], 0.65)
+                love.graphics.line(px, py, px + fdx * aim_px, py + fdy * aim_px)
+            end
+        end
+    end
+
+    love.graphics.setLineWidth(prev_lw)
+    if prev_font then
+        love.graphics.setFont(prev_font)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+end
+
 function draw_debug(sw, sh)
-    local box_w = 275
-    local box_h = 258
+    local prev_lw = love.graphics.getLineWidth and love.graphics.getLineWidth() or 1
+    local box_w = 295
+    local box_h = 296
     love.graphics.setColor(0, 0, 0, 0.80)
     love.graphics.rectangle("fill", sw - (box_w + 10), 10, box_w, box_h, 6, 6)
     love.graphics.setColor(0.2, 0.8, 0.4, 0.85)
@@ -2011,7 +2140,7 @@ function draw_debug(sw, sh)
     love.graphics.print(string.format("Loss: %.1f%%", loss), lx, cur_y); cur_y = cur_y + 18
     love.graphics.print(string.format("Tick Rate: %.1f Hz", tick_hz), lx, cur_y); cur_y = cur_y + 18
 
-    -- Atalhos de Diagnóstico
+    -- Atalhos de Diagnóstico e Escala
     cur_y = cur_y + 4
     love.graphics.setColor(0.85, 0.85, 0.4, 1)
     local sim_lat = (loci.netcode and loci.netcode.simulate_latency) or 0
@@ -2023,7 +2152,13 @@ function draw_debug(sw, sh)
         love.graphics.print("Sim: OFF [F5:Lat F6:Loss]", lx, cur_y); cur_y = cur_y + 18
     end
     love.graphics.setColor(0.7, 0.7, 0.7, 1)
-    love.graphics.print("Export CSV: [F4]", lx, cur_y)
+    love.graphics.print("Export CSV: [F4]", lx, cur_y); cur_y = cur_y + 18
+    love.graphics.setColor(0.35, 0.95, 0.65, 1)
+    love.graphics.print(string.format("Scale: 1u=%dpx | Col r=%.1fu (%dpx)", VISUAL_SCALE, PLAYER_COLLIDER_RADIUS, PLAYER_COLLIDER_RADIUS * 2 * VISUAL_SCALE), lx, cur_y); cur_y = cur_y + 18
+    love.graphics.print(string.format("Sprite: %dpx (%dx) | Hitbox Overlay ON", SPRITE_BASE_SIZE * SPRITE_SCALE, SPRITE_SCALE), lx, cur_y)
+
+    love.graphics.setLineWidth(prev_lw)
+    love.graphics.setColor(1, 1, 1, 1)
 end
 
 function draw_character_sheet(sw, sh, my_entity)
