@@ -333,7 +333,12 @@ do
     print("  OK Diagonal wall sliding and corner clamping")
 end
 
--- Test C: Whirlwind Dash (5.0 un/tick, 4 ticks) — stationary, near wall, at wall, diagonal
+-- Raio da AoE do dash (fonte: servidor), reaproveitado depois no teste de VFX do cliente
+local WW_AOE_RADIUS = require("data.skills.whirlwind_dash").aoe_radius
+local FURY_DATA = require("data.skills.fury_reward")
+local BLADE_DATA = require("data.skills.blade_throw")
+
+-- Test C: Whirlwind Dash (dash_speed/dash_duration_ticks vem de data/skills/whirlwind_dash.lua) — stationary, near wall, at wall, diagonal
 do
     -- Stationary caster near right wall (player_intents[1] == nil)
     local h = create_server_harness()
@@ -453,13 +458,14 @@ do
     local p1 = h1.spawn_player(1, 0.0, 0.0, 3.2)
     h1.move_intent(1, 1, 0) -- start walking +X
     h1.step_tick()
-    assert(h1.action_intent(1, 3, 1, 0)) -- start whirlwind_dash (4 ticks: until tick 5)
+    assert(h1.action_intent(1, 3, 1, 0)) -- start whirlwind_dash (dash_duration_ticks ticks)
     h1.step_tick() -- tick 2 (mid-dash)
     assert(h1.move_intent(1, 0, 0)) -- player releases WASD during dash!
-    assert_near(p1.vx, 5.0, 1e-5, "Dash velocity stays active mid-dash after key release")
+    local ww_data = require("data.skills.whirlwind_dash")
+    assert_near(p1.vx, ww_data.dash_speed, 1e-5, "Dash velocity stays active mid-dash after key release")
 
-    -- Advance past dash end (ticks 3..8)
-    for _ = 1, 6 do
+    -- Advance past dash end (dash_duration_ticks + 2 more ticks of margin)
+    for _ = 1, ww_data.dash_duration_ticks + 4 do
         h1.step_tick()
     end
     local x_after_dash = p1.x
@@ -476,8 +482,9 @@ do
     assert(h2.action_intent(1, 3, 1, 0))
     h2.step_tick() -- tick 2 (mid-dash)
     assert(h2.move_intent(1, -1, 0)) -- switch intent to -X mid-dash
-    assert_near(p2.vx, 5.0, 1e-5, "Dash continues forward until duration expires")
-    for _ = 1, 5 do
+    local ww_data2 = require("data.skills.whirlwind_dash")
+    assert_near(p2.vx, ww_data2.dash_speed, 1e-5, "Dash continues forward until duration expires")
+    for _ = 1, ww_data2.dash_duration_ticks + 1 do
         h2.step_tick()
     end
     assert(p2.vx < -3.0, "Post-dash velocity switches to updated West intent instead of stale East intent")
@@ -784,6 +791,8 @@ end
 
 -- Client Test F4: whirlwind_dash VFX coordinates clamped inside arena bounds (NE & SW corners)
 do
+    -- VFX do dash em inv_prog = 0.8: raio = aoe_radius * VISUAL_SCALE * (0.7 + 0.3 * inv_prog)
+    local dash_vfx_r = WW_AOE_RADIUS * 8.0 * (0.7 + 0.3 * 0.8)
     -- Northeast corner (+498, -498)
     local c1 = create_client_harness()
     c1.push_snapshot(1, 100, {
@@ -792,13 +801,13 @@ do
     local me1 = c1.loci.get_my_entity()
     c1.loci.on_action_cast(me1, 3, math.sqrt(0.5), -math.sqrt(0.5))
     c1.advance_time(0.36)
-    love.update(0.36) -- inv_prog = 0.8 -> dist=16*0.707=11.31 -> raw=(501.31,-509.31), r=65*(0.7+0.4)=71.5
+    love.update(0.36) -- inv_prog = 0.8 -> dist = range*0.8*0.707 -> raw fora da arena -> clampado; r = dash_vfx_r
     for i = #c1.drawn_ops, 1, -1 do c1.drawn_ops[i] = nil end
     love.draw()
 
     local found_ne = false
     for _, op in ipairs(c1.drawn_ops) do
-        if op.kind == "circle" and op.mode == "line" and math.abs(op.r - 71.5) < 0.05 then
+        if op.kind == "circle" and op.mode == "line" and math.abs(op.r - dash_vfx_r) < 0.05 then
             found_ne = true
             assert_near(op.x, 498.0 * 8.0, 1e-2, "NE Dash VFX X clamped to +498*8")
             assert_near(op.y, (-498.0 * 8.0) - 32.0, 1e-2, "NE Dash VFX Y clamped to -498*8 - body_offset")
@@ -820,7 +829,7 @@ do
 
     local found_sw = false
     for _, op in ipairs(c2.drawn_ops) do
-        if op.kind == "circle" and op.mode == "line" and math.abs(op.r - 71.5) < 0.05 then
+        if op.kind == "circle" and op.mode == "line" and math.abs(op.r - dash_vfx_r) < 0.05 then
             found_sw = true
             assert_near(op.x, -498.0 * 8.0, 1e-2, "SW Dash VFX X clamped to -498*8")
             assert_near(op.y, (498.0 * 8.0) - 32.0, 1e-2, "SW Dash VFX Y clamped to +498*8 - body_offset")
@@ -828,6 +837,63 @@ do
     end
     assert(found_sw, "Expected SW whirlwind_dash circle VFX draw call")
     print("  OK whirlwind_dash VFX coordinates clamped inside safe bounds")
+end
+
+-- Client Test F4b: VFX de fury_reward e blade_throw acompanham o alcance e a AoE do servidor
+do
+    local c = create_client_harness()
+    c.push_snapshot(1, 100, {
+        { id = 1, name = "LocalHero", x = 0.0, y = 0.0, vx = 0, vy = 0 }
+    })
+    local me = c.loci.get_my_entity()
+
+    local function circle_ops(mode)
+        local found = {}
+        for _, op in ipairs(c.drawn_ops) do
+            if op.kind == "circle" and op.mode == mode then table.insert(found, op) end
+        end
+        return found
+    end
+
+    -- Fury Reward (habilidade 2, lifetime 0.35s): em inv_prog = 0.8 a onda de choque fica em
+    -- 0.5 * range a frente (ponto focal do servidor) com raio aoe * (0.5 + 0.5 * 0.8)
+    c.loci.on_action_cast(me, 2, 1, 0)
+    c.advance_time(0.28)
+    love.update(0.28)
+    for i = #c.drawn_ops, 1, -1 do c.drawn_ops[i] = nil end
+    love.draw()
+    local fury_r = FURY_DATA.aoe_radius * 8.0 * (0.5 + 0.5 * 0.8)
+    local fury_found = false
+    for _, op in ipairs(circle_ops("line")) do
+        if math.abs(op.r - fury_r) < 0.05 then
+            fury_found = true
+            assert_near(op.x, FURY_DATA.range * 0.5 * 8.0, 1e-2, "Fury VFX focal point is 0.5 * server range ahead")
+        end
+    end
+    assert(fury_found, "Expected fury_reward shockwave circle sized by the server aoe_radius")
+
+    -- Blade Throw (habilidade 4, lifetime 0.60s): em inv_prog = 0.8 a lamina chegou ao alcance maximo
+    -- e o choque do Stun tem raio aoe * (0.8 - 0.45) / 0.55
+    local c2 = create_client_harness()
+    c2.push_snapshot(1, 100, {
+        { id = 1, name = "LocalHero", x = 0.0, y = 0.0, vx = 0, vy = 0 }
+    })
+    local me2 = c2.loci.get_my_entity()
+    c2.loci.on_action_cast(me2, 4, 1, 0)
+    c2.advance_time(0.48)
+    love.update(0.48)
+    for i = #c2.drawn_ops, 1, -1 do c2.drawn_ops[i] = nil end
+    love.draw()
+    local shock_r = BLADE_DATA.aoe_radius * 8.0 * ((0.8 - 0.45) / 0.55)
+    local blade_found = false
+    for _, op in ipairs(c2.drawn_ops) do
+        if op.kind == "circle" and op.mode == "line" and math.abs(op.r - shock_r) < 0.05 then
+            blade_found = true
+            assert_near(op.x, BLADE_DATA.range * 8.0, 1e-2, "Blade VFX reaches the server range")
+        end
+    end
+    assert(blade_found, "Expected blade_throw stun shockwave sized by the server aoe_radius")
+    print("  OK fury_reward and blade_throw VFX follow the server range and aoe_radius")
 end
 
 -- Client Test F5: Inward reconciliation error preserved while pushing against wall (review item 1)

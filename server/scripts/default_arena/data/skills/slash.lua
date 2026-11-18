@@ -12,18 +12,16 @@ local function get_coords(pos)
     return 0, 0
 end
 
-local VISUAL_SCALE = (CombatSystem.CONST and CombatSystem.CONST.VISUAL_SCALE) or 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
-
 return {
     id = "slash",
     name = "Slash",
     description = "Ataque corporal com dano físico em área frontal",
     mana_cost = 10,
     cooldown = 15, -- 0.5s a 30Hz
-    range = 80 / VISUAL_SCALE,     -- 10.0 unidades no mundo (80px na tela)
+    range = 16.0,      -- unidades do mundo (~2 alturas de personagem, corpo a corpo)
     damage = 350,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 45 / VISUAL_SCALE, -- 5.625 unidades no mundo (45px na tela)
+    aoe_radius = 7.0,  -- unidades do mundo
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         -- Normaliza vetor de mira

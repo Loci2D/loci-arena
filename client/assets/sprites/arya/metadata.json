@@ -1,0 +1,1077 @@
+{
+  "group_id": "e2d28866-e10e-4ca8-93c1-84f8a4937246",
+  "states": [
+    {
+      "character": {
+        "id": "81298d8d-89ae-42b8-8461-e6e2c5751b01",
+        "name": "correndo",
+        "prompt": "Ayra",
+        "size": {
+          "width": 44,
+          "height": 40
+        },
+        "template_id": "mannequin",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-06T19:47:47.635763+00:00"
+      },
+      "folder": "correndo",
+      "frames": {
+        "rotations": {
+          "south": "correndo/rotations/south.png",
+          "south-east": "correndo/rotations/south-east.png",
+          "east": "correndo/rotations/east.png",
+          "north-east": "correndo/rotations/north-east.png",
+          "north": "correndo/rotations/north.png",
+          "north-west": "correndo/rotations/north-west.png",
+          "west": "correndo/rotations/west.png",
+          "south-west": "correndo/rotations/south-west.png"
+        },
+        "animations": {
+          "ela_correndo": {
+            "north-east": [
+              "correndo/animations/north-east/frame_000.png",
+              "correndo/animations/north-east/frame_001.png",
+              "correndo/animations/north-east/frame_002.png",
+              "correndo/animations/north-east/frame_003.png",
+              "correndo/animations/north-east/frame_004.png",
+              "correndo/animations/north-east/frame_005.png",
+              "correndo/animations/north-east/frame_006.png",
+              "correndo/animations/north-east/frame_007.png",
+              "correndo/animations/north-east/frame_008.png"
+            ],
+            "east": [
+              "correndo/animations/east/frame_000.png",
+              "correndo/animations/east/frame_001.png",
+              "correndo/animations/east/frame_002.png",
+              "correndo/animations/east/frame_003.png",
+              "correndo/animations/east/frame_004.png",
+              "correndo/animations/east/frame_005.png",
+              "correndo/animations/east/frame_006.png",
+              "correndo/animations/east/frame_007.png",
+              "correndo/animations/east/frame_008.png"
+            ],
+            "west": [
+              "correndo/animations/west/frame_000.png",
+              "correndo/animations/west/frame_001.png",
+              "correndo/animations/west/frame_002.png",
+              "correndo/animations/west/frame_003.png",
+              "correndo/animations/west/frame_004.png",
+              "correndo/animations/west/frame_005.png",
+              "correndo/animations/west/frame_006.png",
+              "correndo/animations/west/frame_007.png",
+              "correndo/animations/west/frame_008.png"
+            ],
+            "north": [
+              "correndo/animations/north/frame_000.png",
+              "correndo/animations/north/frame_001.png",
+              "correndo/animations/north/frame_002.png",
+              "correndo/animations/north/frame_003.png",
+              "correndo/animations/north/frame_004.png",
+              "correndo/animations/north/frame_005.png",
+              "correndo/animations/north/frame_006.png",
+              "correndo/animations/north/frame_007.png",
+              "correndo/animations/north/frame_008.png"
+            ],
+            "south": [
+              "correndo/animations/south/frame_000.png",
+              "correndo/animations/south/frame_001.png",
+              "correndo/animations/south/frame_002.png",
+              "correndo/animations/south/frame_003.png",
+              "correndo/animations/south/frame_004.png",
+              "correndo/animations/south/frame_005.png",
+              "correndo/animations/south/frame_006.png",
+              "correndo/animations/south/frame_007.png",
+              "correndo/animations/south/frame_008.png"
+            ],
+            "north-west": [
+              "correndo/animations/north-west/frame_000.png",
+              "correndo/animations/north-west/frame_001.png",
+              "correndo/animations/north-west/frame_002.png",
+              "correndo/animations/north-west/frame_003.png",
+              "correndo/animations/north-west/frame_004.png",
+              "correndo/animations/north-west/frame_005.png",
+              "correndo/animations/north-west/frame_006.png",
+              "correndo/animations/north-west/frame_007.png",
+              "correndo/animations/north-west/frame_008.png"
+            ],
+            "south-west": [
+              "correndo/animations/south-west/frame_000.png",
+              "correndo/animations/south-west/frame_001.png",
+              "correndo/animations/south-west/frame_002.png",
+              "correndo/animations/south-west/frame_003.png",
+              "correndo/animations/south-west/frame_004.png",
+              "correndo/animations/south-west/frame_005.png",
+              "correndo/animations/south-west/frame_006.png",
+              "correndo/animations/south-west/frame_007.png",
+              "correndo/animations/south-west/frame_008.png"
+            ],
+            "south-east": [
+              "correndo/animations/south-east/frame_000.png",
+              "correndo/animations/south-east/frame_001.png",
+              "correndo/animations/south-east/frame_002.png",
+              "correndo/animations/south-east/frame_003.png",
+              "correndo/animations/south-east/frame_004.png",
+              "correndo/animations/south-east/frame_005.png",
+              "correndo/animations/south-east/frame_006.png",
+              "correndo/animations/south-east/frame_007.png",
+              "correndo/animations/south-east/frame_008.png"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "character": {
+        "id": "84bcee92-3f7a-4eac-ab80-e5917920a940",
+        "name": "andando",
+        "prompt": "Ayra",
+        "size": {
+          "width": 44,
+          "height": 40
+        },
+        "template_id": "mannequin",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-06T19:48:01.820750+00:00"
+      },
+      "folder": "andando",
+      "frames": {
+        "rotations": {
+          "south": "andando/rotations/south.png",
+          "south-east": "andando/rotations/south-east.png",
+          "east": "andando/rotations/east.png",
+          "north-east": "andando/rotations/north-east.png",
+          "north": "andando/rotations/north.png",
+          "north-west": "andando/rotations/north-west.png",
+          "west": "andando/rotations/west.png",
+          "south-west": "andando/rotations/south-west.png"
+        },
+        "animations": {
+          "ela_andando": {
+            "north-west": [
+              "andando/animations/north-west/frame_000.png",
+              "andando/animations/north-west/frame_001.png",
+              "andando/animations/north-west/frame_002.png",
+              "andando/animations/north-west/frame_003.png",
+              "andando/animations/north-west/frame_004.png",
+              "andando/animations/north-west/frame_005.png",
+              "andando/animations/north-west/frame_006.png",
+              "andando/animations/north-west/frame_007.png",
+              "andando/animations/north-west/frame_008.png"
+            ],
+            "south-east": [
+              "andando/animations/south-east/frame_000.png",
+              "andando/animations/south-east/frame_001.png",
+              "andando/animations/south-east/frame_002.png",
+              "andando/animations/south-east/frame_003.png",
+              "andando/animations/south-east/frame_004.png",
+              "andando/animations/south-east/frame_005.png",
+              "andando/animations/south-east/frame_006.png",
+              "andando/animations/south-east/frame_007.png",
+              "andando/animations/south-east/frame_008.png"
+            ],
+            "west": [
+              "andando/animations/west/frame_000.png",
+              "andando/animations/west/frame_001.png",
+              "andando/animations/west/frame_002.png",
+              "andando/animations/west/frame_003.png",
+              "andando/animations/west/frame_004.png",
+              "andando/animations/west/frame_005.png",
+              "andando/animations/west/frame_006.png",
+              "andando/animations/west/frame_007.png",
+              "andando/animations/west/frame_008.png"
+            ],
+            "north": [
+              "andando/animations/north/frame_000.png",
+              "andando/animations/north/frame_001.png",
+              "andando/animations/north/frame_002.png",
+              "andando/animations/north/frame_003.png",
+              "andando/animations/north/frame_004.png",
+              "andando/animations/north/frame_005.png",
+              "andando/animations/north/frame_006.png",
+              "andando/animations/north/frame_007.png",
+              "andando/animations/north/frame_008.png"
+            ],
+            "north-east": [
+              "andando/animations/north-east/frame_000.png",
+              "andando/animations/north-east/frame_001.png",
+              "andando/animations/north-east/frame_002.png",
+              "andando/animations/north-east/frame_003.png",
+              "andando/animations/north-east/frame_004.png",
+              "andando/animations/north-east/frame_005.png",
+              "andando/animations/north-east/frame_006.png",
+              "andando/animations/north-east/frame_007.png",
+              "andando/animations/north-east/frame_008.png"
+            ],
+            "south-west": [
+              "andando/animations/south-west/frame_000.png",
+              "andando/animations/south-west/frame_001.png",
+              "andando/animations/south-west/frame_002.png",
+              "andando/animations/south-west/frame_003.png",
+              "andando/animations/south-west/frame_004.png",
+              "andando/animations/south-west/frame_005.png",
+              "andando/animations/south-west/frame_006.png",
+              "andando/animations/south-west/frame_007.png",
+              "andando/animations/south-west/frame_008.png"
+            ],
+            "south": [
+              "andando/animations/south/frame_000.png",
+              "andando/animations/south/frame_001.png",
+              "andando/animations/south/frame_002.png",
+              "andando/animations/south/frame_003.png",
+              "andando/animations/south/frame_004.png",
+              "andando/animations/south/frame_005.png",
+              "andando/animations/south/frame_006.png",
+              "andando/animations/south/frame_007.png",
+              "andando/animations/south/frame_008.png"
+            ],
+            "east": [
+              "andando/animations/east/frame_000.png",
+              "andando/animations/east/frame_001.png",
+              "andando/animations/east/frame_002.png",
+              "andando/animations/east/frame_003.png",
+              "andando/animations/east/frame_004.png",
+              "andando/animations/east/frame_005.png",
+              "andando/animations/east/frame_006.png",
+              "andando/animations/east/frame_007.png",
+              "andando/animations/east/frame_008.png"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "character": {
+        "id": "f261843c-7a60-4db9-a69f-965776f8ed93",
+        "name": "Rota\u00e7\u00e3o",
+        "prompt": "Ayra",
+        "size": {
+          "width": 44,
+          "height": 40
+        },
+        "template_id": "mannequin",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-06T20:59:32.231712+00:00"
+      },
+      "folder": "Rotacao",
+      "frames": {
+        "rotations": {
+          "south": "Rotacao/rotations/south.png",
+          "south-east": "Rotacao/rotations/south-east.png",
+          "east": "Rotacao/rotations/east.png",
+          "north-east": "Rotacao/rotations/north-east.png",
+          "north": "Rotacao/rotations/north.png",
+          "north-west": "Rotacao/rotations/north-west.png",
+          "west": "Rotacao/rotations/west.png",
+          "south-west": "Rotacao/rotations/south-west.png"
+        },
+        "animations": {}
+      }
+    },
+    {
+      "character": {
+        "id": "13f0d44b-1d38-4b01-aac4-2d174e0b6e91",
+        "name": "Habilidade 1",
+        "prompt": "Ayra",
+        "size": {
+          "width": 44,
+          "height": 40
+        },
+        "template_id": "mannequin",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-10T18:21:10.726397+00:00"
+      },
+      "folder": "Habilidade_1",
+      "frames": {
+        "rotations": {
+          "south": "Habilidade_1/rotations/south.png",
+          "south-east": "Habilidade_1/rotations/south-east.png",
+          "east": "Habilidade_1/rotations/east.png",
+          "north-east": "Habilidade_1/rotations/north-east.png",
+          "north": "Habilidade_1/rotations/north.png",
+          "north-west": "Habilidade_1/rotations/north-west.png",
+          "west": "Habilidade_1/rotations/west.png",
+          "south-west": "Habilidade_1/rotations/south-west.png"
+        },
+        "animations": {
+          "ela_correndo": {
+            "north": [
+              "Habilidade_1/animations/north/frame_000.png",
+              "Habilidade_1/animations/north/frame_001.png",
+              "Habilidade_1/animations/north/frame_002.png",
+              "Habilidade_1/animations/north/frame_003.png",
+              "Habilidade_1/animations/north/frame_004.png",
+              "Habilidade_1/animations/north/frame_005.png",
+              "Habilidade_1/animations/north/frame_006.png",
+              "Habilidade_1/animations/north/frame_007.png",
+              "Habilidade_1/animations/north/frame_008.png"
+            ],
+            "south": [
+              "Habilidade_1/animations/south/frame_000.png",
+              "Habilidade_1/animations/south/frame_001.png",
+              "Habilidade_1/animations/south/frame_002.png",
+              "Habilidade_1/animations/south/frame_003.png",
+              "Habilidade_1/animations/south/frame_004.png",
+              "Habilidade_1/animations/south/frame_005.png",
+              "Habilidade_1/animations/south/frame_006.png",
+              "Habilidade_1/animations/south/frame_007.png",
+              "Habilidade_1/animations/south/frame_008.png"
+            ],
+            "south-west": [
+              "Habilidade_1/animations/south-west/frame_000.png",
+              "Habilidade_1/animations/south-west/frame_001.png",
+              "Habilidade_1/animations/south-west/frame_002.png",
+              "Habilidade_1/animations/south-west/frame_003.png",
+              "Habilidade_1/animations/south-west/frame_004.png",
+              "Habilidade_1/animations/south-west/frame_005.png",
+              "Habilidade_1/animations/south-west/frame_006.png",
+              "Habilidade_1/animations/south-west/frame_007.png",
+              "Habilidade_1/animations/south-west/frame_008.png"
+            ],
+            "east": [
+              "Habilidade_1/animations/east/frame_000.png",
+              "Habilidade_1/animations/east/frame_001.png",
+              "Habilidade_1/animations/east/frame_002.png",
+              "Habilidade_1/animations/east/frame_003.png",
+              "Habilidade_1/animations/east/frame_004.png",
+              "Habilidade_1/animations/east/frame_005.png",
+              "Habilidade_1/animations/east/frame_006.png",
+              "Habilidade_1/animations/east/frame_007.png",
+              "Habilidade_1/animations/east/frame_008.png"
+            ],
+            "north-east": [
+              "Habilidade_1/animations/north-east/frame_000.png",
+              "Habilidade_1/animations/north-east/frame_001.png",
+              "Habilidade_1/animations/north-east/frame_002.png",
+              "Habilidade_1/animations/north-east/frame_003.png",
+              "Habilidade_1/animations/north-east/frame_004.png",
+              "Habilidade_1/animations/north-east/frame_005.png",
+              "Habilidade_1/animations/north-east/frame_006.png",
+              "Habilidade_1/animations/north-east/frame_007.png",
+              "Habilidade_1/animations/north-east/frame_008.png"
+            ],
+            "south-east": [
+              "Habilidade_1/animations/south-east/frame_000.png",
+              "Habilidade_1/animations/south-east/frame_001.png",
+              "Habilidade_1/animations/south-east/frame_002.png",
+              "Habilidade_1/animations/south-east/frame_003.png",
+              "Habilidade_1/animations/south-east/frame_004.png",
+              "Habilidade_1/animations/south-east/frame_005.png",
+              "Habilidade_1/animations/south-east/frame_006.png",
+              "Habilidade_1/animations/south-east/frame_007.png",
+              "Habilidade_1/animations/south-east/frame_008.png"
+            ],
+            "west": [
+              "Habilidade_1/animations/west/frame_000.png",
+              "Habilidade_1/animations/west/frame_001.png",
+              "Habilidade_1/animations/west/frame_002.png",
+              "Habilidade_1/animations/west/frame_003.png",
+              "Habilidade_1/animations/west/frame_004.png",
+              "Habilidade_1/animations/west/frame_005.png",
+              "Habilidade_1/animations/west/frame_006.png",
+              "Habilidade_1/animations/west/frame_007.png",
+              "Habilidade_1/animations/west/frame_008.png"
+            ],
+            "north-west": [
+              "Habilidade_1/animations/north-west/frame_000.png",
+              "Habilidade_1/animations/north-west/frame_001.png",
+              "Habilidade_1/animations/north-west/frame_002.png",
+              "Habilidade_1/animations/north-west/frame_003.png",
+              "Habilidade_1/animations/north-west/frame_004.png",
+              "Habilidade_1/animations/north-west/frame_005.png",
+              "Habilidade_1/animations/north-west/frame_006.png",
+              "Habilidade_1/animations/north-west/frame_007.png",
+              "Habilidade_1/animations/north-west/frame_008.png"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "character": {
+        "id": "085d4a33-e91b-4664-b37b-853142148738",
+        "name": "Habilidade 2",
+        "prompt": "Ayra",
+        "size": {
+          "width": 44,
+          "height": 40
+        },
+        "template_id": "mannequin",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-10T19:04:29.938894+00:00"
+      },
+      "folder": "Habilidade_2",
+      "frames": {
+        "rotations": {
+          "south": "Habilidade_2/rotations/south.png",
+          "south-east": "Habilidade_2/rotations/south-east.png",
+          "east": "Habilidade_2/rotations/east.png",
+          "north-east": "Habilidade_2/rotations/north-east.png",
+          "north": "Habilidade_2/rotations/north.png",
+          "north-west": "Habilidade_2/rotations/north-west.png",
+          "west": "Habilidade_2/rotations/west.png",
+          "south-west": "Habilidade_2/rotations/south-west.png"
+        },
+        "animations": {
+          "ela_andando": {
+            "west": [
+              "Habilidade_2/animations/west/frame_000.png",
+              "Habilidade_2/animations/west/frame_001.png",
+              "Habilidade_2/animations/west/frame_002.png",
+              "Habilidade_2/animations/west/frame_003.png",
+              "Habilidade_2/animations/west/frame_004.png",
+              "Habilidade_2/animations/west/frame_005.png",
+              "Habilidade_2/animations/west/frame_006.png",
+              "Habilidade_2/animations/west/frame_007.png",
+              "Habilidade_2/animations/west/frame_008.png"
+            ],
+            "south-east": [
+              "Habilidade_2/animations/south-east/frame_000.png",
+              "Habilidade_2/animations/south-east/frame_001.png",
+              "Habilidade_2/animations/south-east/frame_002.png",
+              "Habilidade_2/animations/south-east/frame_003.png",
+              "Habilidade_2/animations/south-east/frame_004.png",
+              "Habilidade_2/animations/south-east/frame_005.png",
+              "Habilidade_2/animations/south-east/frame_006.png",
+              "Habilidade_2/animations/south-east/frame_007.png",
+              "Habilidade_2/animations/south-east/frame_008.png"
+            ],
+            "north-east": [
+              "Habilidade_2/animations/north-east/frame_000.png",
+              "Habilidade_2/animations/north-east/frame_001.png",
+              "Habilidade_2/animations/north-east/frame_002.png",
+              "Habilidade_2/animations/north-east/frame_003.png",
+              "Habilidade_2/animations/north-east/frame_004.png",
+              "Habilidade_2/animations/north-east/frame_005.png",
+              "Habilidade_2/animations/north-east/frame_006.png",
+              "Habilidade_2/animations/north-east/frame_007.png",
+              "Habilidade_2/animations/north-east/frame_008.png"
+            ],
+            "south": [
+              "Habilidade_2/animations/south/frame_000.png",
+              "Habilidade_2/animations/south/frame_001.png",
+              "Habilidade_2/animations/south/frame_002.png",
+              "Habilidade_2/animations/south/frame_003.png",
+              "Habilidade_2/animations/south/frame_004.png",
+              "Habilidade_2/animations/south/frame_005.png",
+              "Habilidade_2/animations/south/frame_006.png",
+              "Habilidade_2/animations/south/frame_007.png",
+              "Habilidade_2/animations/south/frame_008.png"
+            ],
+            "north-west": [
+              "Habilidade_2/animations/north-west/frame_000.png",
+              "Habilidade_2/animations/north-west/frame_001.png",
+              "Habilidade_2/animations/north-west/frame_002.png",
+              "Habilidade_2/animations/north-west/frame_003.png",
+              "Habilidade_2/animations/north-west/frame_004.png",
+              "Habilidade_2/animations/north-west/frame_005.png",
+              "Habilidade_2/animations/north-west/frame_006.png",
+              "Habilidade_2/animations/north-west/frame_007.png",
+              "Habilidade_2/animations/north-west/frame_008.png"
+            ],
+            "south-west": [
+              "Habilidade_2/animations/south-west/frame_000.png",
+              "Habilidade_2/animations/south-west/frame_001.png",
+              "Habilidade_2/animations/south-west/frame_002.png",
+              "Habilidade_2/animations/south-west/frame_003.png",
+              "Habilidade_2/animations/south-west/frame_004.png",
+              "Habilidade_2/animations/south-west/frame_005.png",
+              "Habilidade_2/animations/south-west/frame_006.png",
+              "Habilidade_2/animations/south-west/frame_007.png",
+              "Habilidade_2/animations/south-west/frame_008.png"
+            ],
+            "east": [
+              "Habilidade_2/animations/east/frame_000.png",
+              "Habilidade_2/animations/east/frame_001.png",
+              "Habilidade_2/animations/east/frame_002.png",
+              "Habilidade_2/animations/east/frame_003.png",
+              "Habilidade_2/animations/east/frame_004.png",
+              "Habilidade_2/animations/east/frame_005.png",
+              "Habilidade_2/animations/east/frame_006.png",
+              "Habilidade_2/animations/east/frame_007.png",
+              "Habilidade_2/animations/east/frame_008.png"
+            ],
+            "north": [
+              "Habilidade_2/animations/north/frame_000.png",
+              "Habilidade_2/animations/north/frame_001.png",
+              "Habilidade_2/animations/north/frame_002.png",
+              "Habilidade_2/animations/north/frame_003.png",
+              "Habilidade_2/animations/north/frame_004.png",
+              "Habilidade_2/animations/north/frame_005.png",
+              "Habilidade_2/animations/north/frame_006.png",
+              "Habilidade_2/animations/north/frame_007.png",
+              "Habilidade_2/animations/north/frame_008.png"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "character": {
+        "id": "29d54697-8b08-4be1-987f-638ed3d45510",
+        "name": "Habilidade 3",
+        "prompt": "Ayra",
+        "size": {
+          "width": 44,
+          "height": 40
+        },
+        "template_id": "mannequin",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-10T19:34:23.726436+00:00"
+      },
+      "folder": "Habilidade_3",
+      "frames": {
+        "rotations": {
+          "south": "Habilidade_3/rotations/south.png",
+          "south-east": "Habilidade_3/rotations/south-east.png",
+          "east": "Habilidade_3/rotations/east.png",
+          "north-east": "Habilidade_3/rotations/north-east.png",
+          "north": "Habilidade_3/rotations/north.png",
+          "north-west": "Habilidade_3/rotations/north-west.png",
+          "west": "Habilidade_3/rotations/west.png",
+          "south-west": "Habilidade_3/rotations/south-west.png"
+        },
+        "animations": {
+          "ela_caindo_no_chao_chorando": {
+            "north-east": [
+              "Habilidade_3/animations/north-east/frame_000.png",
+              "Habilidade_3/animations/north-east/frame_001.png",
+              "Habilidade_3/animations/north-east/frame_002.png",
+              "Habilidade_3/animations/north-east/frame_003.png",
+              "Habilidade_3/animations/north-east/frame_004.png",
+              "Habilidade_3/animations/north-east/frame_005.png",
+              "Habilidade_3/animations/north-east/frame_006.png",
+              "Habilidade_3/animations/north-east/frame_007.png",
+              "Habilidade_3/animations/north-east/frame_008.png"
+            ],
+            "north-west": [
+              "Habilidade_3/animations/north-west/frame_000.png",
+              "Habilidade_3/animations/north-west/frame_001.png",
+              "Habilidade_3/animations/north-west/frame_002.png",
+              "Habilidade_3/animations/north-west/frame_003.png",
+              "Habilidade_3/animations/north-west/frame_004.png",
+              "Habilidade_3/animations/north-west/frame_005.png",
+              "Habilidade_3/animations/north-west/frame_006.png",
+              "Habilidade_3/animations/north-west/frame_007.png",
+              "Habilidade_3/animations/north-west/frame_008.png"
+            ],
+            "west": [
+              "Habilidade_3/animations/west/frame_000.png",
+              "Habilidade_3/animations/west/frame_001.png",
+              "Habilidade_3/animations/west/frame_002.png",
+              "Habilidade_3/animations/west/frame_003.png",
+              "Habilidade_3/animations/west/frame_004.png",
+              "Habilidade_3/animations/west/frame_005.png",
+              "Habilidade_3/animations/west/frame_006.png",
+              "Habilidade_3/animations/west/frame_007.png",
+              "Habilidade_3/animations/west/frame_008.png"
+            ],
+            "south-west": [
+              "Habilidade_3/animations/south-west/frame_000.png",
+              "Habilidade_3/animations/south-west/frame_001.png",
+              "Habilidade_3/animations/south-west/frame_002.png",
+              "Habilidade_3/animations/south-west/frame_003.png",
+              "Habilidade_3/animations/south-west/frame_004.png",
+              "Habilidade_3/animations/south-west/frame_005.png",
+              "Habilidade_3/animations/south-west/frame_006.png",
+              "Habilidade_3/animations/south-west/frame_007.png",
+              "Habilidade_3/animations/south-west/frame_008.png"
+            ],
+            "south": [
+              "Habilidade_3/animations/south/frame_000.png",
+              "Habilidade_3/animations/south/frame_001.png",
+              "Habilidade_3/animations/south/frame_002.png",
+              "Habilidade_3/animations/south/frame_003.png",
+              "Habilidade_3/animations/south/frame_004.png",
+              "Habilidade_3/animations/south/frame_005.png",
+              "Habilidade_3/animations/south/frame_006.png",
+              "Habilidade_3/animations/south/frame_007.png",
+              "Habilidade_3/animations/south/frame_008.png"
+            ],
+            "east": [
+              "Habilidade_3/animations/east/frame_000.png",
+              "Habilidade_3/animations/east/frame_001.png",
+              "Habilidade_3/animations/east/frame_002.png",
+              "Habilidade_3/animations/east/frame_003.png",
+              "Habilidade_3/animations/east/frame_004.png",
+              "Habilidade_3/animations/east/frame_005.png",
+              "Habilidade_3/animations/east/frame_006.png",
+              "Habilidade_3/animations/east/frame_007.png",
+              "Habilidade_3/animations/east/frame_008.png"
+            ],
+            "north": [
+              "Habilidade_3/animations/north/frame_000.png",
+              "Habilidade_3/animations/north/frame_001.png",
+              "Habilidade_3/animations/north/frame_002.png",
+              "Habilidade_3/animations/north/frame_003.png",
+              "Habilidade_3/animations/north/frame_004.png",
+              "Habilidade_3/animations/north/frame_005.png",
+              "Habilidade_3/animations/north/frame_006.png",
+              "Habilidade_3/animations/north/frame_007.png",
+              "Habilidade_3/animations/north/frame_008.png"
+            ],
+            "south-east": [
+              "Habilidade_3/animations/south-east/frame_000.png",
+              "Habilidade_3/animations/south-east/frame_001.png",
+              "Habilidade_3/animations/south-east/frame_002.png",
+              "Habilidade_3/animations/south-east/frame_003.png",
+              "Habilidade_3/animations/south-east/frame_004.png",
+              "Habilidade_3/animations/south-east/frame_005.png",
+              "Habilidade_3/animations/south-east/frame_006.png",
+              "Habilidade_3/animations/south-east/frame_007.png",
+              "Habilidade_3/animations/south-east/frame_008.png"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "character": {
+        "id": "024b56b9-71d5-4e4c-8876-160a868b560c",
+        "name": "Habilidade 4",
+        "prompt": "Ayra",
+        "size": {
+          "width": 44,
+          "height": 40
+        },
+        "template_id": "mannequin",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-10T19:50:12.873962+00:00"
+      },
+      "folder": "Habilidade_4",
+      "frames": {
+        "rotations": {
+          "south": "Habilidade_4/rotations/south.png",
+          "south-east": "Habilidade_4/rotations/south-east.png",
+          "east": "Habilidade_4/rotations/east.png",
+          "north-east": "Habilidade_4/rotations/north-east.png",
+          "north": "Habilidade_4/rotations/north.png",
+          "north-west": "Habilidade_4/rotations/north-west.png",
+          "west": "Habilidade_4/rotations/west.png",
+          "south-west": "Habilidade_4/rotations/south-west.png"
+        },
+        "animations": {
+          "apos_isso_ela_pega_sua_espada_devolta_e_acende_uma": {
+            "south-east": [
+              "Habilidade_4/animations/south-east/frame_000.png",
+              "Habilidade_4/animations/south-east/frame_001.png",
+              "Habilidade_4/animations/south-east/frame_002.png",
+              "Habilidade_4/animations/south-east/frame_003.png",
+              "Habilidade_4/animations/south-east/frame_004.png",
+              "Habilidade_4/animations/south-east/frame_005.png",
+              "Habilidade_4/animations/south-east/frame_006.png",
+              "Habilidade_4/animations/south-east/frame_007.png",
+              "Habilidade_4/animations/south-east/frame_008.png"
+            ],
+            "west": [
+              "Habilidade_4/animations/west/frame_000.png",
+              "Habilidade_4/animations/west/frame_001.png",
+              "Habilidade_4/animations/west/frame_002.png",
+              "Habilidade_4/animations/west/frame_003.png",
+              "Habilidade_4/animations/west/frame_004.png",
+              "Habilidade_4/animations/west/frame_005.png",
+              "Habilidade_4/animations/west/frame_006.png",
+              "Habilidade_4/animations/west/frame_007.png",
+              "Habilidade_4/animations/west/frame_008.png"
+            ],
+            "north": [
+              "Habilidade_4/animations/north/frame_000.png",
+              "Habilidade_4/animations/north/frame_001.png",
+              "Habilidade_4/animations/north/frame_002.png",
+              "Habilidade_4/animations/north/frame_003.png",
+              "Habilidade_4/animations/north/frame_004.png",
+              "Habilidade_4/animations/north/frame_005.png",
+              "Habilidade_4/animations/north/frame_006.png",
+              "Habilidade_4/animations/north/frame_007.png",
+              "Habilidade_4/animations/north/frame_008.png"
+            ],
+            "south": [
+              "Habilidade_4/animations/south/frame_000.png",
+              "Habilidade_4/animations/south/frame_001.png",
+              "Habilidade_4/animations/south/frame_002.png",
+              "Habilidade_4/animations/south/frame_003.png",
+              "Habilidade_4/animations/south/frame_004.png",
+              "Habilidade_4/animations/south/frame_005.png",
+              "Habilidade_4/animations/south/frame_006.png",
+              "Habilidade_4/animations/south/frame_007.png",
+              "Habilidade_4/animations/south/frame_008.png"
+            ],
+            "north-east": [
+              "Habilidade_4/animations/north-east/frame_000.png",
+              "Habilidade_4/animations/north-east/frame_001.png",
+              "Habilidade_4/animations/north-east/frame_002.png",
+              "Habilidade_4/animations/north-east/frame_003.png",
+              "Habilidade_4/animations/north-east/frame_004.png",
+              "Habilidade_4/animations/north-east/frame_005.png",
+              "Habilidade_4/animations/north-east/frame_006.png",
+              "Habilidade_4/animations/north-east/frame_007.png",
+              "Habilidade_4/animations/north-east/frame_008.png"
+            ],
+            "north-west": [
+              "Habilidade_4/animations/north-west/frame_000.png",
+              "Habilidade_4/animations/north-west/frame_001.png",
+              "Habilidade_4/animations/north-west/frame_002.png",
+              "Habilidade_4/animations/north-west/frame_003.png",
+              "Habilidade_4/animations/north-west/frame_004.png",
+              "Habilidade_4/animations/north-west/frame_005.png",
+              "Habilidade_4/animations/north-west/frame_006.png",
+              "Habilidade_4/animations/north-west/frame_007.png",
+              "Habilidade_4/animations/north-west/frame_008.png"
+            ],
+            "south-west": [
+              "Habilidade_4/animations/south-west/frame_000.png",
+              "Habilidade_4/animations/south-west/frame_001.png",
+              "Habilidade_4/animations/south-west/frame_002.png",
+              "Habilidade_4/animations/south-west/frame_003.png",
+              "Habilidade_4/animations/south-west/frame_004.png",
+              "Habilidade_4/animations/south-west/frame_005.png",
+              "Habilidade_4/animations/south-west/frame_006.png",
+              "Habilidade_4/animations/south-west/frame_007.png",
+              "Habilidade_4/animations/south-west/frame_008.png"
+            ],
+            "east": [
+              "Habilidade_4/animations/east/frame_000.png",
+              "Habilidade_4/animations/east/frame_001.png",
+              "Habilidade_4/animations/east/frame_002.png",
+              "Habilidade_4/animations/east/frame_003.png",
+              "Habilidade_4/animations/east/frame_004.png",
+              "Habilidade_4/animations/east/frame_005.png",
+              "Habilidade_4/animations/east/frame_006.png",
+              "Habilidade_4/animations/east/frame_007.png",
+              "Habilidade_4/animations/east/frame_008.png"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "character": {
+        "id": "e21a26f6-ef70-4574-b39d-150530848cd9",
+        "name": "aliado morre",
+        "prompt": "Ayra",
+        "size": {
+          "width": 44,
+          "height": 40
+        },
+        "template_id": "mannequin",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-10T20:00:41.750761+00:00"
+      },
+      "folder": "aliado_morre",
+      "frames": {
+        "rotations": {
+          "south": "aliado_morre/rotations/south.png",
+          "south-east": "aliado_morre/rotations/south-east.png",
+          "east": "aliado_morre/rotations/east.png",
+          "north-east": "aliado_morre/rotations/north-east.png",
+          "north": "aliado_morre/rotations/north.png",
+          "north-west": "aliado_morre/rotations/north-west.png",
+          "west": "aliado_morre/rotations/west.png",
+          "south-west": "aliado_morre/rotations/south-west.png"
+        },
+        "animations": {
+          "apos_isso_ela_pega_sua_espada_devolta_e_acende_uma": {
+            "west": [
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/west/frame_000.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/west/frame_001.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/west/frame_002.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/west/frame_003.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/west/frame_004.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/west/frame_005.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/west/frame_006.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/west/frame_007.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/west/frame_008.png"
+            ],
+            "south": [
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south/frame_000.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south/frame_001.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south/frame_002.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south/frame_003.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south/frame_004.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south/frame_005.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south/frame_006.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south/frame_007.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south/frame_008.png"
+            ],
+            "south-west": [
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-west/frame_000.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-west/frame_001.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-west/frame_002.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-west/frame_003.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-west/frame_004.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-west/frame_005.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-west/frame_006.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-west/frame_007.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-west/frame_008.png"
+            ],
+            "north-west": [
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-west/frame_000.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-west/frame_001.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-west/frame_002.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-west/frame_003.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-west/frame_004.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-west/frame_005.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-west/frame_006.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-west/frame_007.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-west/frame_008.png"
+            ],
+            "north-east": [
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-east/frame_000.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-east/frame_001.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-east/frame_002.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-east/frame_003.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-east/frame_004.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-east/frame_005.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-east/frame_006.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-east/frame_007.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north-east/frame_008.png"
+            ],
+            "east": [
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/east/frame_000.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/east/frame_001.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/east/frame_002.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/east/frame_003.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/east/frame_004.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/east/frame_005.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/east/frame_006.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/east/frame_007.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/east/frame_008.png"
+            ],
+            "north": [
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north/frame_000.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north/frame_001.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north/frame_002.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north/frame_003.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north/frame_004.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north/frame_005.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north/frame_006.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north/frame_007.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/north/frame_008.png"
+            ],
+            "south-east": [
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-east/frame_000.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-east/frame_001.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-east/frame_002.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-east/frame_003.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-east/frame_004.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-east/frame_005.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-east/frame_006.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-east/frame_007.png",
+              "aliado_morre/animations/apos_isso_ela_pega_sua_espada_devolta_e_acende_uma/south-east/frame_008.png"
+            ]
+          },
+          "ela_caindo_no_chao_chorando": {
+            "west": [
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/west/frame_000.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/west/frame_001.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/west/frame_002.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/west/frame_003.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/west/frame_004.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/west/frame_005.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/west/frame_006.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/west/frame_007.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/west/frame_008.png"
+            ],
+            "north-west": [
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-west/frame_000.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-west/frame_001.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-west/frame_002.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-west/frame_003.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-west/frame_004.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-west/frame_005.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-west/frame_006.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-west/frame_007.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-west/frame_008.png"
+            ],
+            "east": [
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/east/frame_000.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/east/frame_001.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/east/frame_002.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/east/frame_003.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/east/frame_004.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/east/frame_005.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/east/frame_006.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/east/frame_007.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/east/frame_008.png"
+            ],
+            "south": [
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south/frame_000.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south/frame_001.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south/frame_002.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south/frame_003.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south/frame_004.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south/frame_005.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south/frame_006.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south/frame_007.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south/frame_008.png"
+            ],
+            "north-east": [
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-east/frame_000.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-east/frame_001.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-east/frame_002.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-east/frame_003.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-east/frame_004.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-east/frame_005.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-east/frame_006.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-east/frame_007.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north-east/frame_008.png"
+            ],
+            "south-west": [
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-west/frame_000.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-west/frame_001.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-west/frame_002.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-west/frame_003.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-west/frame_004.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-west/frame_005.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-west/frame_006.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-west/frame_007.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-west/frame_008.png"
+            ],
+            "south-east": [
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-east/frame_000.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-east/frame_001.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-east/frame_002.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-east/frame_003.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-east/frame_004.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-east/frame_005.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-east/frame_006.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-east/frame_007.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/south-east/frame_008.png"
+            ],
+            "north": [
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north/frame_000.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north/frame_001.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north/frame_002.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north/frame_003.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north/frame_004.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north/frame_005.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north/frame_006.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north/frame_007.png",
+              "aliado_morre/animations/ela_caindo_no_chao_chorando/north/frame_008.png"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "character": {
+        "id": "f318a3ad-c7bb-4352-9174-bf661854a3a4",
+        "name": "Morte",
+        "prompt": "Ayra",
+        "size": {
+          "width": 44,
+          "height": 40
+        },
+        "template_id": "mannequin",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-10T20:46:25.391248+00:00"
+      },
+      "folder": "morte",
+      "frames": {
+        "rotations": {},
+        "animations": {
+          "ela_caindo_no_chao_morta_apos_levar_um_golpe_fatal": {
+            "west": [
+              "morte/west/frame_000.png",
+              "morte/west/frame_001.png",
+              "morte/west/frame_002.png",
+              "morte/west/frame_003.png",
+              "morte/west/frame_004.png",
+              "morte/west/frame_005.png",
+              "morte/west/frame_006.png",
+              "morte/west/frame_007.png",
+              "morte/west/frame_008.png"
+            ],
+            "south-east": [
+              "morte/south-east/frame_000.png",
+              "morte/south-east/frame_001.png",
+              "morte/south-east/frame_002.png",
+              "morte/south-east/frame_003.png",
+              "morte/south-east/frame_004.png",
+              "morte/south-east/frame_005.png",
+              "morte/south-east/frame_006.png",
+              "morte/south-east/frame_007.png",
+              "morte/south-east/frame_008.png"
+            ],
+            "south": [
+              "morte/south/frame_000.png",
+              "morte/south/frame_001.png",
+              "morte/south/frame_002.png",
+              "morte/south/frame_003.png",
+              "morte/south/frame_004.png",
+              "morte/south/frame_005.png",
+              "morte/south/frame_006.png",
+              "morte/south/frame_007.png",
+              "morte/south/frame_008.png"
+            ],
+            "north-west": [
+              "morte/north-west/frame_000.png",
+              "morte/north-west/frame_001.png",
+              "morte/north-west/frame_002.png",
+              "morte/north-west/frame_003.png",
+              "morte/north-west/frame_004.png",
+              "morte/north-west/frame_005.png",
+              "morte/north-west/frame_006.png",
+              "morte/north-west/frame_007.png",
+              "morte/north-west/frame_008.png"
+            ],
+            "north": [
+              "morte/north/frame_000.png",
+              "morte/north/frame_001.png",
+              "morte/north/frame_002.png",
+              "morte/north/frame_003.png",
+              "morte/north/frame_004.png",
+              "morte/north/frame_005.png",
+              "morte/north/frame_006.png",
+              "morte/north/frame_007.png",
+              "morte/north/frame_008.png"
+            ],
+            "north-east": [
+              "morte/north-east/frame_000.png",
+              "morte/north-east/frame_001.png",
+              "morte/north-east/frame_002.png",
+              "morte/north-east/frame_003.png",
+              "morte/north-east/frame_004.png",
+              "morte/north-east/frame_005.png",
+              "morte/north-east/frame_006.png",
+              "morte/north-east/frame_007.png",
+              "morte/north-east/frame_008.png"
+            ],
+            "south-west": [
+              "morte/south-west/frame_000.png",
+              "morte/south-west/frame_001.png",
+              "morte/south-west/frame_002.png",
+              "morte/south-west/frame_003.png",
+              "morte/south-west/frame_004.png",
+              "morte/south-west/frame_005.png",
+              "morte/south-west/frame_006.png",
+              "morte/south-west/frame_007.png",
+              "morte/south-west/frame_008.png"
+            ],
+            "east": [
+              "morte/east/frame_000.png",
+              "morte/east/frame_001.png",
+              "morte/east/frame_002.png",
+              "morte/east/frame_003.png",
+              "morte/east/frame_004.png",
+              "morte/east/frame_005.png",
+              "morte/east/frame_006.png",
+              "morte/east/frame_007.png",
+              "morte/east/frame_008.png"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "export_version": "3.1",
+  "export_date": "2026-11-11T16:10:55.668778"
+}

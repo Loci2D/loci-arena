@@ -126,6 +126,21 @@ function CharacterFactory.load_skill(skill_name)
     return data
 end
 
+-- Monta a propriedade `skill_ranges` ("slash=16:7,fireball=64:9"): alcance e raio da AoE
+-- (em unidades do mundo) de cada habilidade que tem alcance. É assim que o cliente conhece os
+-- valores autoritativos sem precisar dos arquivos do servidor (indicador de mira e VFX).
+-- Habilidades sem alcance (ex.: shield) ou inexistentes são omitidas.
+function CharacterFactory.build_skill_ranges(skill_names)
+    local parts = {}
+    for _, skill_name in ipairs(skill_names or {}) do
+        local skill = CharacterFactory.load_skill(skill_name)
+        if skill and type(skill.range) == "number" and type(skill.aoe_radius) == "number" then
+            table.insert(parts, string.format("%s=%g:%g", skill_name, skill.range, skill.aoe_radius))
+        end
+    end
+    return table.concat(parts, ",")
+end
+
 -- Instancia os atributos e habilidades do personagem em uma entidade
 function CharacterFactory.create_character(entity_id, character_name)
     character_name = character_name or "default"
@@ -151,7 +166,7 @@ function CharacterFactory.create_character(entity_id, character_name)
     local mag_def = attrs.mag_def or 50
     local mana = attrs.mana or 100
     local max_mana = attrs.max_mana or mana
-    local move_speed = attrs.move_speed or 3.0
+    local move_speed = attrs.move_speed or 2.0
 
     -- 1. Inicializa atributos base no CombatSystem
     CombatSystem.init_entity(entity_id, max_hp, phys_def, mag_def)
@@ -176,6 +191,7 @@ function CharacterFactory.create_character(entity_id, character_name)
     -- 3. Lista de habilidades
     local skills_list = char_data.skills or {}
     Loci.Commands.set_property(entity_id, "skills_list", table.concat(skills_list, ","))
+    Loci.Commands.set_property(entity_id, "skill_ranges", CharacterFactory.build_skill_ranges(skills_list))
 
     -- 4. Inicializa tabela de cooldowns local
     entity_cooldowns[entity_id] = {}
@@ -222,12 +238,12 @@ function CharacterFactory.on_entity_die(dead_entity_id)
             
             -- Passiva da Arya: Protetora Tática / Adrenalina
             if string.lower(char_name or "") == "arya" and team and team == dead_team then
-                -- 1 segundo de paralisia = 30 ticks
-                Loci.Commands.set_property(entity_id, "paralyzed_until", tostring(current_tick + 30))
+                -- 3 segundos de paralisia = 90 ticks
+                Loci.Commands.set_property(entity_id, "paralyzed_until", tostring(current_tick + 90))
                 -- Ativa a Fúria
                 Loci.Commands.set_property(entity_id, "fury_active", "true")
                 if Loci and Loci.Log then
-                    Loci.Log.info("[Arya] Aliado morreu! " .. tostring(entity_id) .. " em choque térmico/emocional por 1s. Fúria ativada.")
+                    Loci.Log.info("[Arya] Aliado morreu! " .. tostring(entity_id) .. " em choque térmico/emocional por 3s. Fúria ativada.")
                 end
             end
         end

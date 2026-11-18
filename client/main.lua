@@ -16,8 +16,10 @@ local push = require("src.push")
 local kda_ui = require("kda_ui")
 local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
+local sprite_anim = require("src.sprite_anim")
 local MovementSync = require("src.movement_sync")
 local AudioSystem = require("src.audio_system")
+local SkillRanges = require("src.skill_ranges")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -55,7 +57,6 @@ local SPRITE_BASE_SIZE = 32
 --   2 = 64px  (atual — bom equilíbrio visual para arena)
 --   4 = 128px (equivalente ao sprite 16x16 antigo multiplicado por 8)
 local SPRITE_SCALE = 2
-local character_sprites = {}
 local placeholder_canvases = {}
 
 local function create_character_placeholder(r, g, b, accent_r, accent_g, accent_b)
@@ -105,88 +106,6 @@ local function init_placeholders()
     placeholder_canvases["me"] = create_character_placeholder(0.2, 0.6, 0.95, 0.3, 0.9, 1.0)
     placeholder_canvases["enemy"] = create_character_placeholder(0.9, 0.3, 0.25, 1.0, 0.85, 0.2)
     placeholder_canvases["dead"] = create_character_placeholder(0.35, 0.35, 0.38, 0.5, 0.5, 0.5)
-end
-
-local DIRECTIONS_8 = {
-    "east", "south-east", "south", "south-west",
-    "west", "north-west", "north", "north-east"
-}
-
-local function load_character_sprite(character_name)
-    if not character_name or character_name == "" then return nil end
-    local key = string.lower(character_name)
-    if character_sprites[key] ~= nil then
-        local cached = character_sprites[key]
-        return (cached ~= false and cached) or nil
-    end
-
-    local found_info = nil
-
-    -- 1. Tenta carregar pasta com conjunto de 8 direções do Pixelab (ex: assets/sprites/arya/south.png)
-    local dir_folder_candidates = {
-        "assets/sprites/" .. key,
-        "client/assets/sprites/" .. key
-    }
-    for _, folder in ipairs(dir_folder_candidates) do
-        if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(folder .. "/south.png") then
-            local rot_images = {}
-            local loaded_any = false
-            for _, dir in ipairs(DIRECTIONS_8) do
-                local p = folder .. "/" .. dir .. ".png"
-                if love.filesystem.getInfo(p) then
-                    local ok, img = pcall(love.graphics.newImage, p)
-                    if ok and img then
-                        img:setFilter("nearest", "nearest")
-                        rot_images[dir] = img
-                        loaded_any = true
-                    end
-                end
-            end
-            if loaded_any then
-                local def_img = rot_images["south"] or rot_images["east"]
-                found_info = {
-                    has_rotations = true,
-                    rotations = rot_images,
-                    image = def_img,
-                    width = def_img and def_img:getWidth() or SPRITE_BASE_SIZE,
-                    height = def_img and def_img:getHeight() or SPRITE_BASE_SIZE
-                }
-                print(string.format("[Client] Loaded 8-direction sprite set for '%s' from %s/", character_name, folder))
-                break
-            end
-        end
-    end
-
-    -- 2. Fallback: carregar PNG único (ex: assets/sprites/arya.png)
-    if not found_info then
-        local possible_paths = {
-            "assets/sprites/" .. key .. ".png",
-            "assets/sprites/" .. character_name .. ".png",
-            "client/assets/sprites/" .. key .. ".png"
-        }
-
-        for _, path in ipairs(possible_paths) do
-            if love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(path) then
-                local ok_img, img = pcall(love.graphics.newImage, path)
-                if ok_img and img then
-                    img:setFilter("nearest", "nearest")
-                    local w = img:getWidth()
-                    local h = img:getHeight()
-                    print(string.format("[Client] Loaded character sprite '%s' (%dx%d) for '%s'", path, w, h, character_name))
-                    found_info = {
-                        has_rotations = false,
-                        image = img,
-                        width = w,
-                        height = h
-                    }
-                    break
-                end
-            end
-        end
-    end
-
-    character_sprites[key] = found_info or false
-    return found_info
 end
 
 local function get_entity_skill_by_slot(entity, slot_index)
@@ -338,11 +257,11 @@ local function predict_local_movement(ent, dx, dy, dt)
     if len > 0 then
         local ndx = in_dx / len
         local ndy = in_dy / len
-        local default_speed = (loci.netcode and loci.netcode.default_move_speed) or 3.0
+        local default_speed = (loci.netcode and loci.netcode.default_move_speed) or 2.0
         local raw_speed = (ent.get and (ent:get("move_speed") or ent:get("speed")))
             or (ent.properties and (ent.properties.move_speed or ent.properties.speed))
             or default_speed
-        local move_speed = tonumber(raw_speed) or 3.0
+        local move_speed = tonumber(raw_speed) or 2.0
         local tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0
         local speed_sec = move_speed * tick_rate
 
@@ -439,8 +358,18 @@ function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
 
-    push:setupScreen(GAME_WIDTH, GAME_HEIGHT, 1280, 720, {
-        fullscreen = false,
+    local os_name = (love.system and love.system.getOS and love.system.getOS()) or ""
+    local is_mobile = (os_name == "Android" or os_name == "iOS")
+    local win_w, win_h = GAME_WIDTH, GAME_HEIGHT
+    if love.graphics and love.graphics.getDimensions then
+        local gw, gh = love.graphics.getDimensions()
+        if gw and gh and gw > 0 and gh > 0 then
+            win_w, win_h = gw, gh
+        end
+    end
+
+    push:setupScreen(GAME_WIDTH, GAME_HEIGHT, win_w, win_h, {
+        fullscreen = is_mobile,
         resizable = true,
         pixelperfect = false
     })
@@ -475,15 +404,18 @@ function love.load(arg)
     connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
     connection_status = connected_status_label
 
-    if loci.netcode and os.getenv("LOCI_AUTO_EXPORT_CSV") == "1" then
-        loci.netcode.auto_export_csv_on_quit = true
+    if loci.netcode then
+        loci.netcode.default_move_speed = 2.0
+        if os.getenv("LOCI_AUTO_EXPORT_CSV") == "1" then
+            loci.netcode.auto_export_csv_on_quit = true
+        end
     end
 
     -- Inicializar placeholders padronizados de 32x32px
     init_placeholders()
 
-    -- Pré-carregar sprites disponíveis em assets/sprites/ (padrão 32x32px)
-    load_character_sprite("arya")
+    -- Pré-carregar metadados de sprites disponíveis em assets/sprites/
+    sprite_anim.load_character("arya")
 
     -- Registrar predição local com clamp nos limites da arena antes da reconciliação.
     -- Nota: durante dash ativo (`dashing_until`), o SDK desvia para o ramo próprio e não chama
@@ -495,11 +427,18 @@ function love.load(arg)
     -- Event hooks
     loci.on_entity_spawned = function(entity)
         print(string.format("[Event] Entity spawned: ID %s at (%.1f, %.1f)", tostring(entity.id), entity.x, entity.y))
+
+        -- Iniciar BGM quando o jogador local spawnar
+        local my_entity = loci.get_my_entity()
+        if my_entity and entity.id == my_entity.id then
+            AudioSystem.play_bgm("arena")
+        end
     end
 
     loci.on_entity_despawned = function(entity_id)
         print("[Event] Entity despawned: ID " .. tostring(entity_id))
         procedural_anim.clear_state(entity_id)
+        sprite_anim.clear_entity_state(entity_id)
     end
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
@@ -566,9 +505,12 @@ function love.load(arg)
                 })
             end
         elseif key == "is_dead" then
+            local dead = (new_val == true or new_val == "true")
+            if entity then
+                sprite_anim.set_dead(entity.id, dead)
+            end
             local my_entity = loci.get_my_entity()
             if entity and my_entity and entity.id == my_entity.id then
-                local dead = (new_val == true or new_val == "true")
                 local was_dead = (old_val == true or old_val == "true")
                 if dead and not was_dead then
                     AudioSystem.play("death")
@@ -582,7 +524,17 @@ function love.load(arg)
                     respawn_state.active = false
                 end
             end
+        elseif key == "fury_active" then
+            if (new_val == true or new_val == "true") and entity then
+                local cname = (entity.get and entity:get("character_name"))
+                    or entity.character_name
+                    or (entity.properties and entity.properties["character_name"])
+                sprite_anim.trigger_ally_death(entity.id, cname)
+            end
         elseif key == "character_name" then
+            if entity then
+                sprite_anim.on_character_changed(entity.id, new_val)
+            end
             local my_entity = loci.get_my_entity()
             if entity and my_entity and entity.id == my_entity.id then
                 reset_cooldown_slots()
@@ -615,13 +567,9 @@ function love.load(arg)
         end
         AudioSystem.play_skill(audio_skill, ability_id)
 
-        local lifetime = 0.35
-        if skill_name == "fireball" then
-            lifetime = 0.40
-        elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
-            lifetime = 0.45 -- Whirlwind Dash
-        elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
-            lifetime = 0.60 -- Blade Throw
+        local has_sprite_anim = false
+        if entity then
+            has_sprite_anim = sprite_anim.trigger_action(entity.id, skill_name, ability_id, dx, dy, character_name) == true
         end
 
         -- Rastrear cooldown local pelo nome real da skill (ou fallback se skills_list ainda não chegou)
@@ -646,17 +594,29 @@ function love.load(arg)
             end
         end
 
-        table.insert(visual_fx, {
-            x = entity and entity.x or 0,
-            y = entity and entity.y or 0,
-            dir_x = dx,
-            dir_y = dy,
-            ability_id = ability_id,
-            skill_name = skill_name,
-            character_name = character_name,
-            lifetime = lifetime,
-            max_lifetime = lifetime
-        })
+        -- Fallback procedural apenas para personagens/habilidades sem animação de sprite
+        if not has_sprite_anim then
+            local lifetime = 0.35
+            if skill_name == "fireball" then
+                lifetime = 0.40
+            elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
+                lifetime = 0.45 -- Whirlwind Dash
+            elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
+                lifetime = 0.60 -- Blade Throw
+            end
+
+            table.insert(visual_fx, {
+                x = entity and entity.x or 0,
+                y = entity and entity.y or 0,
+                dir_x = dx,
+                dir_y = dy,
+                ability_id = ability_id,
+                skill_name = skill_name,
+                character_name = character_name,
+                lifetime = lifetime,
+                max_lifetime = lifetime
+            })
+        end
     end
 
     loci.on_intent_rejected = function(reason)
@@ -794,10 +754,23 @@ function love.update(dt)
         if speed > 0.05 then
             is_moving = true
         end
-        procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
+        local p_state = procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
+        local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
+        local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
+        sprite_anim.update(dt, ent.id, {
+            character_name = char_name,
+            direction = p_state and p_state.direction or "south",
+            facing = p_state and p_state.facing or 1,
+            is_moving = is_moving,
+            speed = speed,
+            is_dead = is_dead
+        })
     end
 
     if my_entity then
+        -- Alcances autoritativos publicados pelo servidor (indicador de mira e VFX)
+        SkillRanges.update(my_entity.get and my_entity:get("skill_ranges", "") or nil)
+
         if not clamped_my_entity and should_clamp_entity(my_entity) then
             clamp_entity_to_arena(my_entity, true, true)
         end
@@ -1098,6 +1071,24 @@ local function draw_hotbar(my_entity)
     local fury_value = my_entity:get("fury_active")
     local fury_active = fury_value == true or fury_value == "true"
 
+    -- Verificar se há aliados no time (espelha server/scripts/default_arena/data/skills/fury_reward.lua)
+    local has_allies = false
+    local my_team = tostring((my_entity.get and my_entity:get("team")) or my_entity.team or "1")
+    local all_entities = (loci.get_entities and loci.get_entities()) or {}
+    for _, other in ipairs(all_entities) do
+        if other.id ~= my_entity.id then
+            local ent_type = (other.get and other:get("entity_type")) or (other.properties and other.properties["entity_type"])
+            local is_player = (ent_type == nil) or (string.lower(tostring(ent_type)) == "player")
+            if is_player then
+                local other_team = (other.get and other:get("team")) or (other.properties and other.properties["team"])
+                if other_team ~= nil and tostring(other_team) == my_team then
+                    has_allies = true
+                    break
+                end
+            end
+        end
+    end
+
     local mana = tonumber(my_entity:get("mana", 0)) or 0
     local raw_skills_list = my_entity.get and my_entity:get("skills_list", "") or ""
     local char_name = string.lower(tostring((my_entity.get and my_entity:get("character_name", "default")) or "default"))
@@ -1137,10 +1128,13 @@ local function draw_hotbar(my_entity)
 
             local is_on_cooldown = cd_remaining > 0
             local no_mana = mana < (meta.mana_cost or 0)
+            local is_fury_locked = (skill_name == "fury_reward" and not fury_active and has_allies)
 
             -- Fundo do slot
             if cc_label then
                 love.graphics.setColor(0.55, 0.18, 0.18, 0.85)
+            elseif is_fury_locked then
+                love.graphics.setColor(0.12, 0.12, 0.16, 0.65)
             elseif is_on_cooldown then
                 love.graphics.setColor(0.25, 0.25, 0.35, 0.85)
             elseif no_mana then
@@ -1157,18 +1151,24 @@ local function draw_hotbar(my_entity)
                 love.graphics.setColor(1.0, 0.65, 0.15, 0.95)
             elseif cc_label then
                 love.graphics.setColor(0.95, 0.30, 0.30, 0.90)
+            elseif is_fury_locked then
+                love.graphics.setColor(0.32, 0.32, 0.38, 0.55)
             else
                 love.graphics.setColor(0.45, 0.45, 0.55, 0.70)
             end
             love.graphics.setLineWidth(2)
             love.graphics.rectangle("line", x, y, slot_width, slot_height, 4)
 
-            -- Nome da habilidade e estado (cooldown / falta de mana / pronta)
+            -- Nome da habilidade e estado (cooldown / falta de mana / bloqueada / pronta)
             love.graphics.setFont(font_hud_small)
-            love.graphics.setColor(1, 1, 1, is_on_cooldown and 0.65 or 0.95)
+            local label_alpha = (is_on_cooldown and 0.65) or (is_fury_locked and 0.45) or 0.95
+            love.graphics.setColor(1, 1, 1, label_alpha)
             love.graphics.print(meta.label, x + 5, y + 5)
 
-            if is_on_cooldown then
+            if is_fury_locked then
+                love.graphics.setColor(0.75, 0.45, 0.45, 0.9)
+                love.graphics.print("BLOQ.", x + 5, y + 20)
+            elseif is_on_cooldown then
                 love.graphics.setColor(0.95, 0.85, 0.4, 1)
                 love.graphics.print(string.format("%.1fs", cd_remaining), x + 5, y + 20)
             elseif no_mana then
@@ -1180,7 +1180,7 @@ local function draw_hotbar(my_entity)
             end
 
             -- Tecla
-            love.graphics.setColor(0.8, 0.8, 0.9, 0.85)
+            love.graphics.setColor(0.8, 0.8, 0.9, is_fury_locked and 0.45 or 0.85)
             love.graphics.print(entry.key, x + 5, y + slot_height - 17)
         end
     end
@@ -1217,6 +1217,135 @@ local function draw_respawn_timer()
     love.graphics.setColor(1, 1, 1, 1)
 end
 
+local function draw_procedural_skill_fx(fx)
+    local progress = fx.lifetime / fx.max_lifetime
+    local inv_prog = 1.0 - progress
+    local fx_start_x = fx.x * VISUAL_SCALE
+    local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
+
+    -- Mapeamento de VFX desacoplado por skill_name (com fallback por ability_id / character_name)
+    local char_name = string.lower(tostring(fx.character_name or "default"))
+    local skill_name = fx.skill_name
+    if not skill_name then
+        if fx.ability_id == 1 then
+            skill_name = (char_name == "mage") and "fireball" or "slash"
+        elseif fx.ability_id == 2 then
+            skill_name = "fury_reward"
+        elseif fx.ability_id == 3 then
+            skill_name = "whirlwind_dash"
+        elseif fx.ability_id == 4 then
+            skill_name = "blade_throw"
+        end
+    end
+
+    -- Alcance e raio da AoE da habilidade em pixels (unidades do mundo * VISUAL_SCALE)
+    local range_px = SkillRanges.range(skill_name, 0) * VISUAL_SCALE
+    local aoe_px = SkillRanges.aoe(skill_name, 0) * VISUAL_SCALE
+
+    if skill_name == "fireball" then
+        -- Fireball: projétil até range * 0.7 seguido de explosão na área real (aoe_radius)
+        local max_dist = range_px * 0.7
+        local travel_t = math.min(1.0, inv_prog / 0.5)
+        local travel_dist = max_dist * travel_t
+        local fireball_x = fx_start_x + fx.dir_x * travel_dist
+        local fireball_y = fx_start_y + fx.dir_y * travel_dist
+
+        if inv_prog <= 0.5 then
+            local radius = 18 + 8 * travel_t
+            love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.4)
+            love.graphics.setLineWidth(3)
+            love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
+
+            love.graphics.setColor(1.0, 0.55, 0.1, progress * 0.9)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius)
+            love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.75)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
+            love.graphics.setColor(1.0, 1.0, 0.85, progress * 0.6)
+            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
+        else
+            local blast_t = (inv_prog - 0.5) / 0.5
+            local blast_alpha = 1.0 - blast_t
+            local blast_r = aoe_px * (1 / 3 + 2 / 3 * blast_t) -- cresce até o raio real da AoE
+
+            love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
+            love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
+            love.graphics.setColor(1.0, 0.75, 0.2, blast_alpha * 0.55)
+            love.graphics.circle("fill", fireball_x, fireball_y, blast_r * 0.55)
+            love.graphics.setColor(1.0, 0.35, 0.05, blast_alpha * 0.9)
+            love.graphics.setLineWidth(3)
+            love.graphics.circle("line", fireball_x, fireball_y, blast_r)
+        end
+    elseif skill_name == "slash" then
+        local angle = math.atan2(fx.dir_y, fx.dir_x)
+        local radius = range_px * (0.6 + 0.4 * inv_prog) -- o arco abre até o alcance real do golpe
+        love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
+        love.graphics.setLineWidth(4)
+        love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius, angle - 0.8, angle + 0.8)
+        love.graphics.setColor(0.3, 0.7, 1.0, progress * 0.5)
+        love.graphics.setLineWidth(8)
+        love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
+    elseif skill_name == "fury_reward" then
+        local hit_dist = range_px * 0.5 -- ponto focal da onda de choque (igual ao do servidor: 0.5 * range)
+        local hit_x = fx_start_x + fx.dir_x * hit_dist
+        local hit_y = fx_start_y + fx.dir_y * hit_dist
+        local r = aoe_px * (0.5 + 0.5 * inv_prog) -- termina exatamente no raio real da AoE
+        love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", hit_x, hit_y, r)
+        love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
+        love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
+    elseif skill_name == "whirlwind_dash" then
+        local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
+        local dash_world_dist = SkillRanges.range("whirlwind_dash", 0) * inv_prog -- unidades do mundo
+        local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
+        local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
+        local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
+        local curr_x = clamped_wx * VISUAL_SCALE
+        local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
+        local r = aoe_px * (0.7 + 0.3 * inv_prog) -- termina exatamente no raio real da AoE
+        local spin_angle = inv_prog * math.pi * 5
+        love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", curr_x, curr_y, r)
+        love.graphics.setColor(1.0, 0.9, 0.5, progress * 0.6)
+        for i = 0, 3 do
+            local a = spin_angle + (i * math.pi / 2)
+            love.graphics.line(
+                curr_x, curr_y,
+                curr_x + math.cos(a) * r,
+                curr_y + math.sin(a) * r
+            )
+        end
+    elseif skill_name == "blade_throw" then
+        local max_dist = range_px
+        local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
+        local blade_x = fx_start_x + fx.dir_x * travel_dist
+        local blade_y = fx_start_y + fx.dir_y * travel_dist
+
+        love.graphics.setColor(0.4, 0.8, 1.0, progress * 0.7)
+        love.graphics.setLineWidth(2)
+        love.graphics.line(fx_start_x, fx_start_y, blade_x, blade_y)
+
+        love.graphics.setColor(1.0, 1.0, 1.0, progress)
+        love.graphics.circle("fill", blade_x, blade_y, 7)
+        love.graphics.setColor(0.2, 0.6, 1.0, progress)
+        love.graphics.circle("line", blade_x, blade_y, 7)
+
+        if inv_prog > 0.45 then
+            local shock_r = aoe_px * ((inv_prog - 0.45) / 0.55) -- termina no raio real do Stun em área
+            love.graphics.setColor(1.0, 0.9, 0.2, progress * 0.9)
+            love.graphics.setLineWidth(3)
+            love.graphics.circle("line", blade_x, blade_y, shock_r)
+        end
+    else
+        local fx_end_x = fx_start_x + fx.dir_x * 50 * VISUAL_SCALE
+        local fx_end_y = fx_start_y + fx.dir_y * 50 * VISUAL_SCALE
+        love.graphics.setColor(1, 0.85, 0.2, progress)
+        love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
+        love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
+    end
+end
+
 function love.draw()
     push:start()
 
@@ -1241,145 +1370,9 @@ function love.draw()
     -- Draw background grid & physical collision boundaries
     draw_arena_grid()
 
-    -- Draw transient visual effects (Animações e Áreas de Contato)
+    -- Draw transient procedural fallback effects (apenas para personagens/skills sem sprite animado)
     for _, fx in ipairs(visual_fx) do
-        local progress = fx.lifetime / fx.max_lifetime
-        local inv_prog = 1.0 - progress
-        local fx_start_x = fx.x * VISUAL_SCALE
-        local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
-
-        -- Mapeamento de VFX desacoplado por skill_name (com fallback por ability_id / character_name)
-        local char_name = string.lower(tostring(fx.character_name or "default"))
-        local skill_name = fx.skill_name
-        if not skill_name then
-            if fx.ability_id == 1 then
-                skill_name = (char_name == "mage") and "fireball" or "slash"
-            elseif fx.ability_id == 2 then
-                skill_name = "fury_reward"
-            elseif fx.ability_id == 3 then
-                skill_name = "whirlwind_dash"
-            elseif fx.ability_id == 4 then
-                skill_name = "blade_throw"
-            end
-        end
-
-        if skill_name == "fireball" then
-            -- Fireball: projétil até range * 0.7 (210px) seguido de explosão na área real (aoe_radius = 60px)
-            local max_dist = 210
-            local travel_t = math.min(1.0, inv_prog / 0.5)
-            local travel_dist = max_dist * travel_t
-            local fireball_x = fx_start_x + fx.dir_x * travel_dist
-            local fireball_y = fx_start_y + fx.dir_y * travel_dist
-
-            if inv_prog <= 0.5 then
-                local radius = 18 + 8 * travel_t
-                -- Rastro de fogo
-                love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.4)
-                love.graphics.setLineWidth(3)
-                love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
-
-                -- Núcleo da bola de fogo em voo
-                love.graphics.setColor(1.0, 0.55, 0.1, progress * 0.9)
-                love.graphics.circle("fill", fireball_x, fireball_y, radius)
-                love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.75)
-                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
-                love.graphics.setColor(1.0, 1.0, 0.85, progress * 0.6)
-                love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
-            else
-                -- Explosão expansiva até o raio real da AoE (60px)
-                local blast_t = (inv_prog - 0.5) / 0.5
-                local blast_alpha = 1.0 - blast_t
-                local blast_r = 20 + 40 * blast_t
-
-                love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
-                love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
-                love.graphics.setColor(1.0, 0.75, 0.2, blast_alpha * 0.55)
-                love.graphics.circle("fill", fireball_x, fireball_y, blast_r * 0.55)
-                love.graphics.setColor(1.0, 0.35, 0.05, blast_alpha * 0.9)
-                love.graphics.setLineWidth(3)
-                love.graphics.circle("line", fireball_x, fireball_y, blast_r)
-            end
-
-        elseif skill_name == "slash" then
-            -- Slash: Arco cortante frontal metálico/azul claro
-            local angle = math.atan2(fx.dir_y, fx.dir_x)
-            local radius = 45 * (0.8 + 0.4 * inv_prog)
-            love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
-            love.graphics.setLineWidth(4)
-            love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius, angle - 0.8, angle + 0.8)
-            love.graphics.setColor(0.3, 0.7, 1.0, progress * 0.5)
-            love.graphics.setLineWidth(8)
-            love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
-
-        elseif skill_name == "fury_reward" then
-            -- Fury Reward: Impacto carmesim/fogo com onda de choque
-            local hit_dist = 60 -- (7.5 unidades no mundo * VISUAL_SCALE = 60px na tela)
-            local hit_x = fx_start_x + fx.dir_x * hit_dist
-            local hit_y = fx_start_y + fx.dir_y * hit_dist
-            local r = 50 * (0.5 + 0.8 * inv_prog)
-            love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
-            love.graphics.setLineWidth(3)
-            love.graphics.circle("line", hit_x, hit_y, r)
-            love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
-            love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
-
-        elseif skill_name == "whirlwind_dash" then
-            -- Whirlwind Dash: Círculo 360º de corte giratório dourado com lâminas
-            local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
-            local dash_world_dist = (160 / VISUAL_SCALE) * inv_prog -- Desloca o efeito visual junto com o avanço (20 unidades no mundo)
-            local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
-            local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
-            local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
-            local curr_x = clamped_wx * VISUAL_SCALE
-            local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
-            local r = 65 * (0.7 + 0.5 * inv_prog)
-            local spin_angle = inv_prog * math.pi * 5
-            love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
-            love.graphics.setLineWidth(3)
-            love.graphics.circle("line", curr_x, curr_y, r)
-            love.graphics.setColor(1.0, 0.9, 0.5, progress * 0.6)
-            for i = 0, 3 do
-                local a = spin_angle + (i * math.pi / 2)
-                love.graphics.line(
-                    curr_x, curr_y,
-                    curr_x + math.cos(a) * r,
-                    curr_y + math.sin(a) * r
-                )
-            end
-
-        elseif skill_name == "blade_throw" then
-            -- Blade Throw: Espada viajando até o alvo + impacto expansivo de Stun
-            local max_dist = 260
-            local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
-            local blade_x = fx_start_x + fx.dir_x * travel_dist
-            local blade_y = fx_start_y + fx.dir_y * travel_dist
-            
-            -- Rastro de energia do arremesso
-            love.graphics.setColor(0.4, 0.8, 1.0, progress * 0.7)
-            love.graphics.setLineWidth(2)
-            love.graphics.line(fx_start_x, fx_start_y, blade_x, blade_y)
-
-            -- Lâmina em voo
-            love.graphics.setColor(1.0, 1.0, 1.0, progress)
-            love.graphics.circle("fill", blade_x, blade_y, 7)
-            love.graphics.setColor(0.2, 0.6, 1.0, progress)
-            love.graphics.circle("line", blade_x, blade_y, 7)
-
-            -- Onda de choque de Stun na área de impacto
-            if inv_prog > 0.45 then
-                local shock_r = 55 * ((inv_prog - 0.45) / 0.55)
-                love.graphics.setColor(1.0, 0.9, 0.2, progress * 0.9)
-                love.graphics.setLineWidth(3)
-                love.graphics.circle("line", blade_x, blade_y, shock_r)
-            end
-        else
-            -- Efeito padrão
-            local fx_end_x = fx_start_x + fx.dir_x * 50 * VISUAL_SCALE
-            local fx_end_y = fx_start_y + fx.dir_y * 50 * VISUAL_SCALE
-            love.graphics.setColor(1, 0.85, 0.2, progress)
-            love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
-            love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
-        end
+        draw_procedural_skill_fx(fx)
     end
 
     -- Draw all network entities
@@ -1391,11 +1384,8 @@ function love.draw()
 
     -- Draw aim indicator (drag-to-aim) enquanto botões 3 ou 4 estão aiming ou cancelando
     if my_entity and show_touch_controls then
-        -- Alcance no mundo de cada habilidade (em pixels visuais: range * VISUAL_SCALE)
-        local SKILL_RANGES = {
-            [3] = 160, -- Whirlwind Dash (20.0 * 8)
-            [4] = 260, -- Blade Throw (32.5 * 8)
-        }
+        -- Habilidade padrão de cada slot de mira (usada se skills_list ainda não chegou)
+        local DEFAULT_AIM_SKILLS = { [3] = "whirlwind_dash", [4] = "blade_throw" }
 
         for slot = 3, 4 do
             if virtual_joystick.is_aiming(slot) or virtual_joystick.is_skill_cancelled(slot) then
@@ -1403,7 +1393,8 @@ function love.draw()
                 if math.abs(aim_dx) > 0.01 or math.abs(aim_dy) > 0.01 then
                     local player_x = my_entity.x * VISUAL_SCALE
                     local player_y = (my_entity.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Centro do corpo a partir dos pés do modelo escalado
-                    local aim_length = SKILL_RANGES[slot] or 200
+                    local aim_skill = get_entity_skill_by_slot(my_entity, slot) or DEFAULT_AIM_SKILLS[slot]
+                    local aim_length = SkillRanges.range(aim_skill, 200 / VISUAL_SCALE) * VISUAL_SCALE
                     local end_x = player_x + aim_dx * aim_length
                     local end_y = player_y + aim_dy * aim_length
 
@@ -1420,7 +1411,7 @@ function love.draw()
                     love.graphics.line(player_x, player_y, end_x, end_y)
 
                     -- Círculo no final (indicando o alcance ou área de impacto)
-                    local circle_radius = (slot == 4) and 14 or 8
+                    local circle_radius = SkillRanges.aoe(aim_skill, 1) * VISUAL_SCALE -- raio real da AoE
                     if is_cancelled then
                         love.graphics.setColor(1.0, 0.2, 0.2, 0.3)
                         love.graphics.circle("fill", end_x, end_y, circle_radius)
@@ -1640,18 +1631,26 @@ function draw_entity(ent, is_me)
     local shield_value = tonumber(ent.shield or (ent.properties and ent.properties["shield"])) or 0
 
     local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
-    local sprite_info = load_character_sprite(char_name)
-
-    -- Dimensões do sprite / modelo (padrão 32x32px)
-    local sprite_w = (sprite_info and sprite_info.width) or SPRITE_BASE_SIZE
-    local sprite_h = (sprite_info and sprite_info.height) or SPRITE_BASE_SIZE
-
-    -- Escala de renderização: SPRITE_SCALE pixels por pixel do sprite (32px * 2 = 64px na tela)
-    local scale = SPRITE_SCALE
 
     -- Estado visual e de orientação da entidade (8 direções)
     local anim_state = procedural_anim.get_state(ent.id)
     local ent_dir = anim_state.direction or "south"
+
+    -- Obter frame animado, pivô real nos pés (ox, oy) e altura visual estável (visual_h)
+    local img_to_draw, ox, oy, has_8way, visual_h = sprite_anim.get_frame({
+        entity_id = ent.id,
+        character_name = char_name,
+        direction = ent_dir,
+        is_dead = is_dead,
+        is_moving = anim_state.is_moving
+    })
+
+    -- Dimensões visuais do sprite / modelo (ox = w/2, sprite_h = altura útil para HUD/barra de HP)
+    local sprite_w = ox and (ox * 2) or SPRITE_BASE_SIZE
+    local sprite_h = visual_h or oy or SPRITE_BASE_SIZE
+
+    -- Escala de renderização: SPRITE_SCALE pixels por pixel do sprite (32px * 2 = 64px na tela)
+    local scale = SPRITE_SCALE
 
     -- Sombra dos pés proporcional ao modelo de 32px ancorada na base (px, py)
     local shadow_radius_x = 13 * scale
@@ -1660,16 +1659,14 @@ function draw_entity(ent, is_me)
     local team = raw_team ~= nil and tostring(raw_team) or nil
     draw_team_shadow(px, py, shadow_radius_x, shadow_radius_y, team, is_dead)
 
-    -- Pivô nos pés (base central inferior: ox = 16, oy = 32 para modelos 32x32)
-    local ox = sprite_w / 2
-    local oy = sprite_h
+    -- Pivô nos pés (base central inferior: ox = w/2, oy = h)
+    ox = ox or (sprite_w / 2)
+    oy = oy or sprite_h
 
     local draw_x = px
     local draw_y = py -- Posição sólida e alinhada à grade de pixels (sem bobbing procedural)
 
-    if sprite_info then
-        -- Seleciona a imagem correta: rotação 8-way do Pixelab ou imagem padrão
-        local img_to_draw = (sprite_info.has_rotations and sprite_info.rotations[ent_dir]) or sprite_info.image
+    if img_to_draw then
         if is_dead then
             love.graphics.setColor(0.5, 0.5, 0.5, 0.75)
         else
@@ -1678,7 +1675,7 @@ function draw_entity(ent, is_me)
 
         -- Para imagem única sem rotações, espelha via facing; para 8 direções do Pixelab, desenha direto sem distorção
         local scale_x = scale
-        if not sprite_info.has_rotations then
+        if not has_8way then
             scale_x = scale * (anim_state.facing or 1)
         end
 
@@ -1707,8 +1704,8 @@ function draw_entity(ent, is_me)
         )
     end
 
-    -- Se morto, desenhar X de morte centrado no corpo
-    if is_dead then
+    -- Se morto e sem animação própria de morte, desenhar X procedural centrado no corpo
+    if is_dead and not sprite_anim.has_state(char_name, "death") then
         local cy = py - (sprite_h / 2) * scale
         local cross_size = 12 * scale
         love.graphics.setColor(1, 0, 0, 0.85)
@@ -1863,7 +1860,7 @@ function draw_character_sheet(sw, sh, my_entity)
     local max_mana = tonumber(my_entity:get("max_mana", 100)) or 100
     local phys_def = tonumber(my_entity:get("phys_def", 0)) or 0
     local mag_def = tonumber(my_entity:get("mag_def", 0)) or 0
-    local move_speed = tonumber(my_entity:get("move_speed", 3.0)) or 3.0
+    local move_speed = tonumber(my_entity:get("move_speed", 2.0)) or 2.0
     local hp_regen = tonumber(my_entity:get("hp_regen", 0)) or 0
     local mana_regen = tonumber(my_entity:get("mana_regen", 0)) or 0
     local fragile = tostring(my_entity:get("fragile", "0")) == "1"
@@ -1945,6 +1942,7 @@ end
 
 function love.quit()
     print("[Client] Closing connection...")
+    AudioSystem.stop_bgm()
     if loci.quit then
         loci.quit()
     end

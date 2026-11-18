@@ -70,6 +70,20 @@ Em outro terminal (ou múltiplos para testar mais de um jogador):
 ```
 *(Se o Love2D ou o Lua não estiverem instalados, o script executará `./scripts/setup_client.sh` para instalar automaticamente as dependências).*
 
+### 5. Rodar os Testes Automatizados
+Para executar todas as suítes de testes em Lua (combate, respawn, skills, netcode e cliente):
+```bash
+./scripts/run_tests.sh
+```
+*(Caso queira rodar apenas os testes unitários sem o SDK do cliente, use `./scripts/run_tests.sh --unit`).*
+
+### 6. Empacotamento `.love` e Build Android (APK)
+Para gerar o pacote `dist/game.love` localmente:
+```bash
+./scripts/package_love.sh
+```
+O planejamento de arquitetura mobile, compilação de `libpb.so` via NDK e pipeline de release do APK no GitHub Actions está documentado em [`docs/android-apk-architecture.md`](docs/android-apk-architecture.md).
+
 ---
 
 ## Controles Padrão

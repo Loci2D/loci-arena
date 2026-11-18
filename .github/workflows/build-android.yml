@@ -1,0 +1,205 @@
+name: Build Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Tipo de build Android (debug ou release)'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+      version_name:
+        description: 'Version name customizado (opcional)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build Android APK (love-android 11.5a)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine build metadata
+        id: meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION_NAME="${TAG#v}"
+            BUILD_TYPE="release"
+            IS_TAG="true"
+          else
+            BUILD_TYPE="${{ github.event.inputs.build_type || 'debug' }}"
+            SHORT_SHA="${GITHUB_SHA::7}"
+            VERSION_NAME="${{ github.event.inputs.version_name }}"
+            if [[ -z "$VERSION_NAME" ]]; then
+              VERSION_NAME="0.0.0-dev.${SHORT_SHA}"
+            fi
+            TAG="v${VERSION_NAME}"
+            IS_TAG="false"
+          fi
+          echo "build_type=${BUILD_TYPE}" >> "$GITHUB_OUTPUT"
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Build: type=${BUILD_TYPE}, version=${VERSION_NAME} (${{ github.run_number }})"
+
+      - name: Install utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl unzip zip
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK 25.2.9519653
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;25.2.9519653" "build-tools;34.0.0"
+
+      - name: Download Loci2D Love2D SDK
+        run: ./scripts/setup_sdk.sh --download
+
+      - name: Prepare pb.c and pb.h for Android NDK
+        id: pb-src
+        run: |
+          mkdir -p build-pb-src
+          if [[ -f client/loci2d/lib/src/pb.c && -f client/loci2d/lib/src/pb.h ]]; then
+            cp client/loci2d/lib/src/pb.c build-pb-src/
+            cp client/loci2d/lib/src/pb.h build-pb-src/
+            echo "[OK] Usando pb.c/pb.h do bundle do SDK."
+          else
+            SDK_VERSION="$(cat .loci2d-sdk-version | tr -d '[:space:]')"
+            echo "-> Bundle do SDK (${SDK_VERSION}) ainda nao inclui lib/src; baixando pb.c/pb.h de Loci2D/sdk-love2d..."
+            curl -fSL "https://raw.githubusercontent.com/Loci2D/sdk-love2d/${SDK_VERSION}/lib/src/pb.c" -o build-pb-src/pb.c
+            curl -fSL "https://raw.githubusercontent.com/Loci2D/sdk-love2d/${SDK_VERSION}/lib/src/pb.h" -o build-pb-src/pb.h
+          fi
+
+      - name: Package game.love
+        run: |
+          chmod +x scripts/package_love.sh
+          ./scripts/package_love.sh dist/game.love
+
+      - name: Checkout love2d/love-android (11.5a)
+        run: |
+          git clone --depth 1 --branch 11.5a --recurse-submodules --shallow-submodules \
+            https://github.com/love2d/love-android.git love-android
+
+      - name: Inject game.love, libpb module and app metadata
+        run: |
+          # 1. Embed game.love
+          mkdir -p love-android/app/src/embed/assets
+          cp dist/game.love love-android/app/src/embed/assets/game.love
+
+          # 2. Inject lua-protobuf (libpb.so) native module
+          mkdir -p love-android/love/src/jni/lua-modules/libpb
+          cp android/lua-modules/libpb/Android.mk love-android/love/src/jni/lua-modules/libpb/
+          cp build-pb-src/pb.c build-pb-src/pb.h love-android/love/src/jni/lua-modules/libpb/
+
+          # 3. Configure gradle.properties (replace app.name_byte_array with app.name)
+          sed -i '/^app\.name_byte_array=/d' love-android/gradle.properties
+          sed -i '/^app\.name=/d' love-android/gradle.properties
+          sed -i 's|^app\.application_id=.*|app.application_id=org.loci2d.arena|' love-android/gradle.properties
+          sed -i 's|^app\.orientation=.*|app.orientation=sensorLandscape|' love-android/gradle.properties
+          sed -i 's|^app\.version_code=.*|app.version_code=${{ steps.meta.outputs.version_code }}|' love-android/gradle.properties
+          sed -i 's|^app\.version_name=.*|app.version_name=${{ steps.meta.outputs.version_name }}|' love-android/gradle.properties
+          printf '\napp.name=Loci Arena\n' >> love-android/gradle.properties
+
+      - name: Build Debug APK
+        if: steps.meta.outputs.build_type == 'debug'
+        working-directory: love-android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleEmbedNoRecordDebug --no-daemon
+
+      - name: Build Release APK
+        if: steps.meta.outputs.build_type == 'release'
+        working-directory: love-android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleEmbedNoRecordRelease --no-daemon
+
+      - name: Collect & Sign APK
+        id: package-apk
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+        run: |
+          mkdir -p release-assets
+          VERSION_NAME="${{ steps.meta.outputs.version_name }}"
+          BUILD_TYPE="${{ steps.meta.outputs.build_type }}"
+
+          if [[ "$BUILD_TYPE" == "debug" ]]; then
+            SRC_APK="love-android/app/build/outputs/apk/embedNoRecord/debug/app-embed-noRecord-debug.apk"
+            OUT_APK="release-assets/loci-arena-${VERSION_NAME}-debug.apk"
+            cp "$SRC_APK" "$OUT_APK"
+          else
+            UNSIGNED_APK="love-android/app/build/outputs/apk/embedNoRecord/release/app-embed-noRecord-release-unsigned.apk"
+            ALIGNED_APK="release-assets/aligned.apk"
+            OUT_APK="release-assets/loci-arena-${VERSION_NAME}-release.apk"
+
+            if [[ -z "$ANDROID_KEYSTORE_BASE64" ]]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 secret nao configurado para build release."
+              exit 1
+            fi
+
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > keystore.jks
+            trap 'rm -f keystore.jks "$ALIGNED_APK"' EXIT
+
+            BUILD_TOOLS_DIR="$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 | sort -V | tail -n1)"
+            "$BUILD_TOOLS_DIR/zipalign" -f -p 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+            "$BUILD_TOOLS_DIR/apksigner" sign \
+              --ks keystore.jks \
+              --ks-pass "env:ANDROID_KEYSTORE_PASS" \
+              --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --key-pass "env:ANDROID_KEY_PASS" \
+              --out "$OUT_APK" \
+              "$ALIGNED_APK"
+            "$BUILD_TOOLS_DIR/apksigner" verify "$OUT_APK"
+          fi
+
+          (cd release-assets && sha256sum *.apk > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          echo "apk_path=${OUT_APK}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: loci-arena-apk-${{ steps.meta.outputs.version_name }}-${{ steps.meta.outputs.build_type }}
+          path: release-assets/*
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: steps.meta.outputs.is_tag == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          gh release create "$TAG" release-assets/* \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Loci Arena ${TAG}" \
+            --generate-notes || \
+          gh release upload "$TAG" release-assets/* \
+            --repo "${{ github.repository }}" \
+            --clobber
