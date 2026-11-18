@@ -20,6 +20,8 @@ local sprite_anim = require("src.sprite_anim")
 local MovementSync = require("src.movement_sync")
 local AudioSystem = require("src.audio_system")
 local SkillRanges = require("src.skill_ranges")
+local SessionStore = require("src.session_store")
+local ConnectScreen = require("src.ui.connect_screen")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -32,8 +34,16 @@ virtual_joystick.set_push(push)
 -- Connection config
 local SERVER_IP = os.getenv("LOCI_SERVER_IP") or "127.0.0.1"
 local SERVER_PORT = tonumber(os.getenv("LOCI_SERVER_PORT")) or 8080
+local CONNECT_TIMEOUT_SEC = 6.0
 
 -- UI & State variables
+local client_state = "in_game" -- "connect_screen" | "connecting" | "in_game"
+local is_mobile_os = false
+local current_server_ip = SERVER_IP
+local current_server_port = SERVER_PORT
+local current_player_name = nil
+local connect_started_at = 0
+local last_saved_session_token = nil
 local connection_status = "Connecting..."
 local connected_status_label = ""
 local is_connection_lost = false
@@ -354,12 +364,103 @@ local function get_active_cc(ent)
     return active_label, max_remaining
 end
 
+local function get_safe_top_virtual()
+    if love.window and love.window.getSafeArea and love.graphics and love.graphics.getDimensions then
+        local _, sy = love.window.getSafeArea()
+        local _, gh = love.graphics.getDimensions()
+        if sy and sy > 0 and gh and gh > 0 then
+            return math.max(14, math.floor((sy / gh) * GAME_HEIGHT) + 8)
+        end
+    end
+    return 14
+end
+
+local function start_network_connection(ip, port, player_name, resume_token, use_ui_flow)
+    current_server_ip = ip
+    current_server_port = tonumber(port) or 8080
+    current_player_name = player_name
+    last_saved_session_token = nil
+
+    SessionStore.save_connection(current_server_ip, current_server_port, current_player_name)
+
+    print(string.format("[Client] Connecting to %s:%d as '%s'...", current_server_ip, current_server_port, current_player_name))
+
+    local ok_connect
+    if resume_token and resume_token ~= "" and loci.resume then
+        ok_connect = loci.resume(current_server_ip, current_server_port, current_player_name, resume_token, "loci2d/lib/")
+        if not ok_connect then
+            ok_connect = loci.resume(current_server_ip, current_server_port, current_player_name, resume_token, "client/loci2d/lib/")
+        end
+    else
+        ok_connect = loci.connect(current_server_ip, current_server_port, current_player_name, "loci2d/lib/")
+        if not ok_connect then
+            ok_connect = loci.connect(current_server_ip, current_server_port, current_player_name, "client/loci2d/lib/")
+        end
+    end
+
+    if not ok_connect then
+        connection_status = "Connection error"
+        print("[Client] Failed to initialize connection to " .. current_server_ip .. ":" .. current_server_port)
+        if use_ui_flow then
+            client_state = "connect_screen"
+            ConnectScreen.set_status("Erro ao iniciar socket/schema para " .. current_server_ip .. ":" .. current_server_port, true, false)
+        end
+        return false
+    end
+
+    is_connection_lost = false
+    connected_status_label = "Connected to " .. current_server_ip .. ":" .. current_server_port .. " (" .. current_player_name .. ")"
+    connection_status = connected_status_label
+    if use_ui_flow then
+        client_state = "connecting"
+        connect_started_at = get_client_time()
+        ConnectScreen.set_status("Conectando a " .. current_server_ip .. ":" .. current_server_port .. "...", false, true)
+    else
+        client_state = "in_game"
+    end
+    return true
+end
+
+local function return_to_connect_screen(status_msg, is_error)
+    if loci.disconnect then
+        loci.disconnect("Returned to connect screen")
+    end
+    SessionStore.clear_session_token()
+    last_saved_session_token = nil
+    AudioSystem.stop_bgm()
+    virtual_joystick.reset()
+    kda_ui.hide()
+    is_connection_lost = false
+    connection_status = "Disconnected"
+    client_state = "connect_screen"
+    ConnectScreen.set_can_resume(false)
+    ConnectScreen.set_status(status_msg or "", is_error == true, false)
+end
+
+local function request_swap_hero()
+    local me = loci.get_my_entity()
+    local is_dead = me and (me.is_dead or (me.properties and me.properties["is_dead"] == "true"))
+    if is_dead then
+        print("[Client] Não é possível trocar de personagem enquanto estiver morto")
+        return
+    end
+
+    if connection_status:find("Connected") then
+        print("[Client] Solicitando troca de personagem...")
+        -- Servidor cicla automaticamente sem precisar do índice
+        loci.send_action(999, 0, 0)
+        movement_sync:mark_needs_resync()
+    else
+        print("[Client] Não conectado - não é possível trocar personagem")
+    end
+end
+
 function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
 
     local os_name = (love.system and love.system.getOS and love.system.getOS()) or ""
-    local is_mobile = (os_name == "Android" or os_name == "iOS")
+    is_mobile_os = (os_name == "Android" or os_name == "iOS")
     local win_w, win_h = GAME_WIDTH, GAME_HEIGHT
     if love.graphics and love.graphics.getDimensions then
         local gw, gh = love.graphics.getDimensions()
@@ -369,7 +470,7 @@ function love.load(arg)
     end
 
     push:setupScreen(GAME_WIDTH, GAME_HEIGHT, win_w, win_h, {
-        fullscreen = is_mobile,
+        fullscreen = is_mobile_os,
         resizable = true,
         pixelperfect = false
     })
@@ -380,29 +481,51 @@ function love.load(arg)
 
     -- Inicializar posições dos controles virtuais para a resolução do jogo
     virtual_joystick.update_with_game_dimensions(GAME_WIDTH, GAME_HEIGHT)
+    virtual_joystick.set_hud_state({ safe_top = get_safe_top_virtual() })
 
     -- Carregar efeitos sonoros (SFX) com fallback procedural para placeholders
     AudioSystem.init()
 
     local random_suffix = tostring(love.math and love.math.random(1000, 9999) or math.random(1000, 9999))
-    local player_name = "Player_" .. random_suffix
+    local default_name = "Player_" .. random_suffix
 
-    print(string.format("[Client] Connecting to %s:%d as '%s'...", SERVER_IP, SERVER_PORT, player_name))
-    
-    local ok_connect = loci.connect(SERVER_IP, SERVER_PORT, player_name, "loci2d/lib/")
-    if not ok_connect then
-        ok_connect = loci.connect(SERVER_IP, SERVER_PORT, player_name, "client/loci2d/lib/")
+    local force_connect_ui = (os.getenv("LOCI_CONNECT_UI") == "1")
+    if type(arg) == "table" then
+        for _, v in ipairs(arg) do
+            if v == "--connect-ui" then
+                force_connect_ui = true
+                break
+            end
+        end
     end
 
-    if not ok_connect then
-        connection_status = "Connection error"
-        print("[Client] Failed to initialize connection to " .. SERVER_IP .. ":" .. SERVER_PORT)
-        return
-    end
+    local saved_cfg = SessionStore.load()
+    local can_resume_saved = SessionStore.has_valid_token(saved_cfg, 30)
+    ConnectScreen.init({
+        initial_ip = (os.getenv("LOCI_SERVER_IP") or saved_cfg.last_ip or SERVER_IP),
+        initial_port = tonumber(os.getenv("LOCI_SERVER_PORT")) or saved_cfg.last_port or SERVER_PORT,
+        initial_name = saved_cfg.player_name or default_name,
+        can_resume = can_resume_saved,
+        on_connect = function(ip, port, name)
+            SessionStore.clear_session_token()
+            ConnectScreen.set_can_resume(false)
+            start_network_connection(ip, port, name, nil, true)
+        end,
+        on_resume = function(ip, port, name)
+            local cfg = SessionStore.load()
+            local token = (cfg.session_host == ip and cfg.session_port == tonumber(port)) and cfg.session_token or nil
+            start_network_connection(ip, port, name, token, true)
+        end,
+    })
 
-    is_connection_lost = false
-    connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
-    connection_status = connected_status_label
+    if is_mobile_os or force_connect_ui then
+        client_state = "connect_screen"
+    else
+        -- Fast-path desktop: conecta imediatamente sem abrir tela de IP
+        if not start_network_connection(SERVER_IP, SERVER_PORT, default_name, nil, false) then
+            return
+        end
+    end
 
     if loci.netcode then
         loci.netcode.default_move_speed = 2.0
@@ -665,10 +788,61 @@ local function update_movement(my_entity)
 end
 
 function love.update(dt)
+    if client_state == "connect_screen" then
+        return
+    end
+
     -- Process incoming network packets and smooth entity interpolation
     loci.update(dt)
-    
+
+    if loci.get_session_token then
+        local token = loci.get_session_token()
+        if token and token ~= "" and token ~= last_saved_session_token then
+            last_saved_session_token = token
+            SessionStore.save_session_token(current_server_ip, current_server_port, current_player_name, token)
+            ConnectScreen.set_can_resume(true)
+        end
+    end
+
     local my_entity = loci.get_my_entity()
+    if client_state == "connecting" then
+        if my_entity then
+            client_state = "in_game"
+            ConnectScreen.set_status("", false, false)
+        elseif (get_client_time() - connect_started_at) > CONNECT_TIMEOUT_SEC then
+            if loci.disconnect then
+                loci.disconnect("Connection timeout")
+            end
+            client_state = "connect_screen"
+            ConnectScreen.set_status(
+                string.format("Timeout ao conectar em %s:%d. Verifique IP/Wi-Fi.", current_server_ip, current_server_port),
+                true, false
+            )
+            return
+        else
+            return
+        end
+    end
+
+    if show_touch_controls then
+        virtual_joystick.set_hud_state({
+            audio_enabled = AudioSystem.is_enabled(),
+            kda_visible = kda_ui.is_visible(),
+        })
+        for _, hud_ev in ipairs(virtual_joystick.pop_hud_events()) do
+            if hud_ev == "kda" then
+                kda_ui.toggle()
+            elseif hud_ev == "swap_hero" then
+                request_swap_hero()
+            elseif hud_ev == "toggle_mute" then
+                AudioSystem.toggle_mute()
+            elseif hud_ev == "disconnect" then
+                return_to_connect_screen("Desconectado.", false)
+                return
+            end
+        end
+    end
+
     if my_entity then
         if is_connection_lost then
             is_connection_lost = false
@@ -814,6 +988,7 @@ end
 
 function love.resize(w, h)
     push:resize(w, h)
+    virtual_joystick.set_hud_state({ safe_top = get_safe_top_virtual() })
 end
 
 local function cast_ability_at_mouse(ability_id)
@@ -857,6 +1032,11 @@ local function cycle_netcode_preset(field, presets)
 end
 
 function love.keypressed(key)
+    if client_state ~= "in_game" then
+        ConnectScreen.keypressed(key)
+        return
+    end
+
     if key == "f3" then
         show_debug_overlay = not show_debug_overlay
     elseif key == "f4" then
@@ -896,44 +1076,41 @@ function love.keypressed(key)
         cast_ability_at_mouse(4)
     elseif key == "k" then
         -- Troca de personagem provisória (cicla: arya -> default -> mage -> warrior -> arya)
-        local me = loci.get_my_entity()
-        local is_dead = me and (me.is_dead or (me.properties and me.properties["is_dead"] == "true"))
-        if is_dead then
-            print("[Client] Não é possível trocar de personagem enquanto estiver morto")
-            return
-        end
-
-        if connection_status:find("Connected") then
-            print("[Client] Solicitando troca de personagem...")
-            -- Servidor cicla automaticamente sem precisar do índice
-            loci.send_action(999, 0, 0)
-            movement_sync:mark_needs_resync()
-        else
-            print("[Client] Não conectado - não é possível trocar personagem")
-        end
+        request_swap_hero()
     elseif key == "m" then
         local enabled = AudioSystem.toggle_mute()
         print("[Audio] Áudio " .. (enabled and "ativado" or "desativado (mudo)"))
     end
 end
 
+function love.textinput(text)
+    if client_state ~= "in_game" then
+        ConnectScreen.textinput(text)
+    end
+end
+
 function love.keyreleased(key)
+    if client_state ~= "in_game" then return end
     if key == "tab" then
         kda_ui.hide()
     end
 end
 
--- Touch handlers para joysticks virtuais
+-- Touch handlers para joysticks virtuais e tela de conexão
 function love.touchpressed(id, x, y, dx, dy, pressure)
-    if not show_touch_controls then return end
     local screen_w, screen_h = love.graphics.getDimensions()
     local real_x = x * screen_w
     local real_y = y * screen_h
+    if client_state ~= "in_game" then
+        local gx, gy = push:toGame(real_x, real_y)
+        return ConnectScreen.handle_press(gx, gy)
+    end
+    if not show_touch_controls then return end
     return virtual_joystick.handle_touchpress(id, real_x, real_y)
 end
 
 function love.touchmoved(id, x, y, dx, dy, pressure)
-    if not show_touch_controls then return end
+    if client_state ~= "in_game" or not show_touch_controls then return end
     local screen_w, screen_h = love.graphics.getDimensions()
     local real_x = x * screen_w
     local real_y = y * screen_h
@@ -941,29 +1118,48 @@ function love.touchmoved(id, x, y, dx, dy, pressure)
 end
 
 function love.touchreleased(id, x, y, dx, dy, pressure)
-    if not show_touch_controls then return end
+    if client_state ~= "in_game" or not show_touch_controls then return end
     return virtual_joystick.handle_touchrelease(id)
 end
 
 -- Suporte a mouse para testes no desktop (filtra istouch para evitar duplicação no mobile)
 function love.mousepressed(x, y, button, istouch, presses)
-    if istouch or not show_touch_controls then return end
+    if istouch then return end
+    if client_state ~= "in_game" then
+        if button == 1 then
+            local gx, gy = push:toGame(x, y)
+            return ConnectScreen.handle_press(gx, gy)
+        end
+        return false
+    end
+    if not show_touch_controls then return end
     if virtual_joystick.handle_mousepressed(x, y, button) then
         return true
     end
 end
 
 function love.mousemoved(x, y, dx, dy, istouch)
-    if istouch or not show_touch_controls then return end
+    if istouch or client_state ~= "in_game" or not show_touch_controls then return end
     if virtual_joystick.handle_mousemoved(x, y) then
         return true
     end
 end
 
 function love.mousereleased(x, y, button, istouch, presses)
-    if istouch or not show_touch_controls then return end
+    if istouch or client_state ~= "in_game" or not show_touch_controls then return end
     if virtual_joystick.handle_mousereleased(x, y, button) then
         return true
+    end
+end
+
+function love.focus(focused)
+    if not focused then
+        virtual_joystick.reset()
+        if client_state == "in_game" and loci.send_move then
+            loci.send_move(0, 0)
+        end
+    elseif client_state == "in_game" and is_connection_lost and loci.resume then
+        loci.resume(current_server_ip, current_server_port, current_player_name)
     end
 end
 
@@ -1350,6 +1546,12 @@ function love.draw()
     push:start()
 
     local sw, sh = GAME_WIDTH, GAME_HEIGHT
+    if client_state ~= "in_game" then
+        ConnectScreen.draw(sw, sh)
+        push:finish()
+        return
+    end
+
     local center_x = sw / 2
     local center_y = sh / 2
 
@@ -1528,7 +1730,7 @@ function love.draw()
         local banner_w = 340
         local banner_h = 36
         local bx = (sw - banner_w) / 2
-        local by = 16
+        local by = 56
         love.graphics.setColor(0.85, 0.15, 0.15, 0.92)
         love.graphics.rectangle("fill", bx, by, banner_w, banner_h, 6, 6)
         love.graphics.setColor(0.95, 0.35, 0.35, 0.95)
