@@ -339,17 +339,23 @@ run_test("main.lua on_action enforces CC/death guards and character swap 999", f
 
     -- Swap character via ability_id == 999 cycles arya -> default -> mage -> warrior -> arya
     assert(on_move_intent(1, -1, 0) == true)
-    assert_near(p1.vx, -3.2, 1e-5, "arya base move_speed")
+    assert_near(p1.vx, -2.2, 1e-5, "arya base move_speed")
 
     assert(on_action(1, 999, 0, 0) == true)
     assert(p1.props.character_name == "default")
     env.step_ticks(16, 16)
-    assert_near(p1.vx, -3.0, 1e-5, "intent speed updates to default move_speed=3.0")
+    assert_near(p1.vx, -2.0, 1e-5, "intent speed updates to default move_speed=2.0")
 
     assert(on_action(1, 999, 0, 0) == true)
     assert(p1.props.character_name == "mage")
+    env.step_ticks(17, 17)
+    assert_near(p1.vx, -2.0, 1e-5, "intent speed updates to mage move_speed=2.0")
+
     assert(on_action(1, 999, 0, 0) == true)
     assert(p1.props.character_name == "warrior")
+    env.step_ticks(18, 18)
+    assert_near(p1.vx, -1.9, 1e-5, "intent speed updates to warrior move_speed=1.9")
+
     assert(on_action(1, 999, 0, 0) == true)
     assert(p1.props.character_name == "arya")
 
