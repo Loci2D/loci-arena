@@ -77,6 +77,13 @@ Para executar todas as suítes de testes em Lua (combate, respawn, skills, netco
 ```
 *(Caso queira rodar apenas os testes unitários sem o SDK do cliente, use `./scripts/run_tests.sh --unit`).*
 
+### 6. Empacotamento `.love` e Build Android (APK)
+Para gerar o pacote `dist/game.love` localmente:
+```bash
+./scripts/package_love.sh
+```
+O planejamento de arquitetura mobile, compilação de `libpb.so` via NDK e pipeline de release do APK no GitHub Actions está documentado em [`docs/android-apk-architecture.md`](docs/android-apk-architecture.md).
+
 ---
 
 ## Controles Padrão

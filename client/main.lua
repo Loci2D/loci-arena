@@ -358,8 +358,18 @@ function love.load(arg)
     -- Linear filter ensures smooth sub-pixel interpolation without snapping jitter
     love.graphics.setDefaultFilter("linear", "linear")
 
-    push:setupScreen(GAME_WIDTH, GAME_HEIGHT, 1280, 720, {
-        fullscreen = false,
+    local os_name = (love.system and love.system.getOS and love.system.getOS()) or ""
+    local is_mobile = (os_name == "Android" or os_name == "iOS")
+    local win_w, win_h = GAME_WIDTH, GAME_HEIGHT
+    if love.graphics and love.graphics.getDimensions then
+        local gw, gh = love.graphics.getDimensions()
+        if gw and gh and gw > 0 and gh > 0 then
+            win_w, win_h = gw, gh
+        end
+    end
+
+    push:setupScreen(GAME_WIDTH, GAME_HEIGHT, win_w, win_h, {
+        fullscreen = is_mobile,
         resizable = true,
         pixelperfect = false
     })
