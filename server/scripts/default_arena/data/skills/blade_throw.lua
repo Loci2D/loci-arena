@@ -13,18 +13,16 @@ local function get_coords(pos)
     return 0, 0
 end
 
-local VISUAL_SCALE = (CombatSystem.CONST and CombatSystem.CONST.VISUAL_SCALE) or 8 -- Escala do cliente (8 pixels = 1 unidade/metro no mundo)
-
 return {
     id = "blade_throw",
     name = "Arremesso de Lâmina",
     description = "Arremessa a espada. Causa dano físico e Stun em área no impacto, mas aplica Desarme na Arya por 2.0s.",
     mana_cost = 45,
     cooldown = 420, -- 14 segundos a 30Hz
-    range = 260 / VISUAL_SCALE,     -- 32.5 unidades no mundo (260px na tela)
+    range = 56.0,                   -- unidades do mundo (cabe na tela: +-45 na vertical, +-80 na horizontal)
     damage = 400,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 55 / VISUAL_SCALE, -- 6.875 unidades no mundo (55px na tela)
+    aoe_radius = 8.0,               -- unidades do mundo (Stun em área no impacto)
     stun_duration_ticks = 36,   -- 1.2 segundos de Stun a 30Hz
     disarm_duration_ticks = 60, -- 2.0 segundos de Desarme a 30Hz
 
@@ -88,7 +86,7 @@ return {
             d = d + step
         end
 
-        -- Aplica a explosão de impacto em área (aoe_radius = 55px) no ponto de impacto (impact_x, impact_y)
+        -- Aplica a explosão de impacto em área (aoe_radius, em unidades do mundo) no ponto de impacto (impact_x, impact_y)
         -- Causa dano físico e Stun em todos os alvos inimigos na área de impacto
         local hit_ids = Loci.get_entities_in_radius({ x = impact_x, y = impact_y }, skill_data.aoe_radius)
         local hit_count = 0
