@@ -369,6 +369,61 @@ local MOUSE_ID = -1
 -- Dimensões virtuais do jogo
 local game_w, game_h = 1280, 720
 
+-- Barra superior compacta de paridade touch (KDA, Trocar Herói, Som/Mudo, Sair)
+local hud_state = {
+    audio_enabled = true,
+    kda_visible = false,
+    safe_top = 14,
+}
+local hud_events = nil
+
+local HUD_BUTTON_SPECS = {
+    { id = "kda",         label = "KDA",   w = 72, h = 34 },
+    { id = "swap_hero",   label = "Heroi", w = 78, h = 34 },
+    { id = "toggle_mute", label = "Som",   w = 72, h = 34 },
+    { id = "disconnect",  label = "Sair",  w = 72, h = 34 },
+}
+
+local function get_hud_buttons()
+    local gap = 10
+    local total_w = 0
+    for i, spec in ipairs(HUD_BUTTON_SPECS) do
+        total_w = total_w + spec.w + (i > 1 and gap or 0)
+    end
+    local start_x = (game_w - total_w) / 2
+    local y = hud_state.safe_top or 14
+    local buttons = {}
+    local cur_x = start_x
+    for _, spec in ipairs(HUD_BUTTON_SPECS) do
+        local label = spec.label
+        if spec.id == "toggle_mute" then
+            label = hud_state.audio_enabled and "Som" or "Mudo"
+        end
+        table.insert(buttons, {
+            id = spec.id,
+            label = label,
+            x = cur_x,
+            y = y,
+            w = spec.w,
+            h = spec.h,
+            active = (spec.id == "kda" and hud_state.kda_visible) or (spec.id == "toggle_mute" and not hud_state.audio_enabled),
+        })
+        cur_x = cur_x + spec.w + gap
+    end
+    return buttons
+end
+
+local function handle_hud_press(gx, gy)
+    for _, btn in ipairs(get_hud_buttons()) do
+        if gx >= btn.x and gx <= btn.x + btn.w and gy >= btn.y and gy <= btn.y + btn.h then
+            if not hud_events then hud_events = {} end
+            table.insert(hud_events, btn.id)
+            return true
+        end
+    end
+    return false
+end
+
 -- Conversão de coordenadas da janela real para coordenadas do jogo virtual
 local function to_game(x, y)
     if push then
@@ -378,6 +433,19 @@ local function to_game(x, y)
 end
 
 -- API pública
+function VirtualJoystick.set_hud_state(opts)
+    if type(opts) ~= "table" then return end
+    if opts.audio_enabled ~= nil then hud_state.audio_enabled = opts.audio_enabled == true end
+    if opts.kda_visible ~= nil then hud_state.kda_visible = opts.kda_visible == true end
+    if opts.safe_top ~= nil then hud_state.safe_top = tonumber(opts.safe_top) or 14 end
+end
+
+function VirtualJoystick.pop_hud_events()
+    local events = hud_events
+    hud_events = nil
+    return events or {}
+end
+
 function VirtualJoystick.update(w, h)
     game_w = w or game_w
     game_h = h or game_h
@@ -394,6 +462,9 @@ end
 function VirtualJoystick.handle_touchpress(id, x, y)
     local gx, gy = to_game(x, y)
     if not gx or not gy then return false end
+    if handle_hud_press(gx, gy) then
+        return true
+    end
     if move_joystick:handle_press(gx, gy, id, game_w, game_h) then
         return true
     end
@@ -502,6 +573,7 @@ function VirtualJoystick.reset()
         btn.is_cancelled = false
     end
     VirtualJoystick.release_events = nil
+    hud_events = nil
 end
 
 function VirtualJoystick.draw()
@@ -509,6 +581,25 @@ function VirtualJoystick.draw()
     for _, btn in ipairs(skill_buttons) do
         btn:draw()
     end
+
+    -- Barra superior compacta de paridade touch (KDA, Trocar Herói, Som/Mudo, Sair)
+    local font = love.graphics.getFont()
+    local text_h = font and font:getHeight() or 14
+    for _, btn in ipairs(get_hud_buttons()) do
+        if btn.active then
+            love.graphics.setColor(0.22, 0.45, 0.78, 0.9)
+        elseif btn.id == "disconnect" then
+            love.graphics.setColor(0.45, 0.18, 0.18, 0.78)
+        else
+            love.graphics.setColor(0.1, 0.13, 0.19, 0.78)
+        end
+        love.graphics.rectangle("fill", btn.x, btn.y, btn.w, btn.h, 6, 6)
+        love.graphics.setColor(1, 1, 1, 0.45)
+        love.graphics.rectangle("line", btn.x, btn.y, btn.w, btn.h, 6, 6)
+        love.graphics.setColor(1, 1, 1, 0.95)
+        love.graphics.printf(btn.label, btn.x, btn.y + (btn.h - text_h) / 2, btn.w, "center")
+    end
+    love.graphics.setColor(1, 1, 1, 1)
 end
 
 -- API para obter estado de aiming de um botão

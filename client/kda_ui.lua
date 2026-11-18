@@ -46,6 +46,12 @@ function kda_ui.is_visible()
     return show_kda
 end
 
+-- Alternar visibilidade (usado no touch mobile)
+function kda_ui.toggle()
+    show_kda = not show_kda
+    return show_kda
+end
+
 -- Desenhar a UI (estilo Valorant - centralizado)
 function kda_ui.draw(entities, my_entity)
     if not show_kda then
@@ -187,7 +193,7 @@ function kda_ui.draw(entities, my_entity)
     -- Footer com instruções
     love.graphics.setColor(0.4, 0.4, 0.5, 1)
     love.graphics.setFont(font_footer)
-    love.graphics.print("Hold TAB for scoreboard", x + PADDING, y + UI_HEIGHT - 25)
+    love.graphics.print("Hold TAB or tap [KDA] to close", x + PADDING, y + UI_HEIGHT - 25)
 
     -- Restaura estado gráfico para não afetar overlays seguintes
     if prev_font then
