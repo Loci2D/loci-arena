@@ -463,6 +463,13 @@ run_test("server publishes skill_ranges from data/skills and the client defaults
         assert_near(def.range, data.range, 1e-3, "client default range drifted from server for " .. name)
         assert_near(def.aoe, data.aoe_radius, 1e-3, "client default aoe drifted from server for " .. name)
     end
+
+    -- Anti-deriva de cooldowns e mana_cost em SkillRanges.SKILL_META (ticks a 30 Hz -> segundos)
+    for name, meta in pairs(SkillRanges.SKILL_META) do
+        local data = require("data.skills." .. name)
+        assert_near(meta.cooldown * 30, data.cooldown, 1e-3, "client SKILL_META cooldown drifted from server for " .. name)
+        assert_near(meta.mana_cost, data.mana_cost or 0, 1e-3, "client SKILL_META mana_cost drifted from server for " .. name)
+    end
 end)
 
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

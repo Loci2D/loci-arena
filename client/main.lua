@@ -354,6 +354,98 @@ local function reset_cooldown_slots()
         cooldown_slots[slot].duration = 0
         skill_cast_gate[slot] = nil
     end
+    if virtual_joystick and virtual_joystick.reset_cooldowns then
+        virtual_joystick.reset_cooldowns()
+    end
+end
+
+local function start_slot_cooldown(slot, duration, now)
+    if not slot or slot < 1 or slot > 4 then return end
+    local cd = tonumber(duration) or 0
+    if cd <= 0 then return end
+    local t = now or get_client_time()
+    cooldown_slots[slot].active = true
+    cooldown_slots[slot].start_time = t
+    cooldown_slots[slot].duration = cd
+    if virtual_joystick and virtual_joystick.trigger_skill then
+        virtual_joystick.trigger_skill(slot, t, cd)
+    end
+end
+
+local function get_slot_cooldown_remaining(slot, current_time)
+    local entry = cooldown_slots[slot]
+    if not entry or not entry.active then
+        return 0
+    end
+    local now = current_time or get_client_time()
+    local rem = (entry.duration or 0) - (now - (entry.start_time or 0))
+    if rem <= 0 then
+        entry.active = false
+        return 0
+    end
+    return rem
+end
+
+local function has_living_team_allies(my_entity)
+    if not my_entity then return false end
+    local my_team = tostring((my_entity.get and my_entity:get("team")) or my_entity.team or "1")
+    local all_entities = (loci.get_entities and loci.get_entities()) or {}
+    for _, other in ipairs(all_entities) do
+        if other.id ~= my_entity.id then
+            local ent_type = (other.get and other:get("entity_type")) or (other.properties and other.properties["entity_type"])
+            local is_player = (ent_type == nil) or (string.lower(tostring(ent_type)) == "player")
+            if is_player then
+                local other_team = (other.get and other:get("team")) or (other.properties and other.properties["team"])
+                if other_team ~= nil and tostring(other_team) == my_team then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function sync_virtual_joystick_slots(my_entity, current_time)
+    if not my_entity or not virtual_joystick or not virtual_joystick.sync_skill_slot then
+        return
+    end
+    local now = current_time or get_client_time()
+    local mana = tonumber((my_entity.get and my_entity:get("mana", 0)) or my_entity.mana or 0) or 0
+    local fury_val = (my_entity.get and my_entity:get("fury_active")) or my_entity.fury_active
+    local fury_active = (fury_val == true or fury_val == "true")
+    local has_allies = nil
+
+    for slot = 1, 4 do
+        local skill_name = SkillRanges.resolve_entity_skill(my_entity, slot)
+        local meta = skill_name and (SKILL_HUD_META[skill_name] or SkillRanges.meta(skill_name)) or nil
+        local cd_remaining = get_slot_cooldown_remaining(slot, now)
+        local cd_total = (meta and meta.cooldown) or 0.5
+
+        local locked_reason = nil
+        if skill_name then
+            if skill_name == "fury_reward" and not fury_active then
+                if has_allies == nil then
+                    has_allies = has_living_team_allies(my_entity)
+                end
+                if has_allies then
+                    locked_reason = "BLOQ."
+                end
+            end
+            if not locked_reason and meta and (meta.mana_cost or 0) > mana then
+                locked_reason = "MANA"
+            end
+        end
+
+        virtual_joystick.sync_skill_slot(slot, {
+            enabled = (skill_name ~= nil),
+            skill_name = skill_name,
+            label = (meta and meta.label) or skill_name,
+            cooldown = cd_total,
+            cooldown_remaining = cd_remaining,
+            cooldown_duration = (cooldown_slots[slot].duration > 0 and cooldown_slots[slot].duration) or cd_total,
+            locked_reason = locked_reason,
+        })
+    end
 end
 
 local function get_entity_prop_number(ent, key)
@@ -726,22 +818,15 @@ function love.load(arg)
         -- Rastrear cooldown local pelo nome real da skill (ou fallback se skills_list ainda não chegou)
         local my_entity = loci.get_my_entity()
         if entity and my_entity and entity.id == my_entity.id then
+            procedural_anim.set_facing_vector(entity.id, dx, dy)
             local slot = ability_id
             if slot >= 1 and slot <= 4 then
-                local resolved_skill = skill_name
-                if not resolved_skill then
-                    local raw_list = entity.get and entity:get("skills_list", "") or ""
-                    if raw_list == "" then
-                        local default_slots = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" }
-                        resolved_skill = (slot == 1 and character_name == "mage") and "fireball" or default_slots[slot]
-                    end
-                end
-                local meta = resolved_skill and SKILL_HUD_META[resolved_skill]
+                local resolved_skill = skill_name or SkillRanges.resolve_entity_skill(entity, slot)
+                local meta = resolved_skill and (SKILL_HUD_META[resolved_skill] or SkillRanges.meta(resolved_skill))
                 if meta and meta.cooldown and meta.cooldown > 0 then
-                    cooldown_slots[slot].active = true
-                    cooldown_slots[slot].start_time = get_client_time()
-                    cooldown_slots[slot].duration = meta.cooldown
+                    start_slot_cooldown(slot, meta.cooldown, get_client_time())
                 end
+                sync_virtual_joystick_slots(entity, get_client_time())
             end
         end
 
@@ -811,6 +896,9 @@ end
 local function update_movement(my_entity)
     local dx, dy = read_move_input()
     update_last_move_dir(dx, dy)
+    if my_entity and (math.abs(dx) >= 0.1 or math.abs(dy) >= 0.1) then
+        procedural_anim.set_facing_vector(my_entity.id, dx, dy)
+    end
     local cur_tick = tonumber(loci._last_state_tick) or 0
     local now = (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
     movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
@@ -834,25 +922,16 @@ end
 -- Resolve a direção de mira para casts rápidos (sem aim manual explícita):
 -- 1) inimigo vivo mais próximo de outro time dentro do alcance da habilidade do slot;
 -- 2) direção de movimento atual (joystick/teclado);
--- 3) última direção de movimento conhecida (padrão norte quando nunca se moveu).
+-- 3) última direção/facing do personagem (fallback dinâmico, evitando norte fixo).
 local function resolve_quick_cast_aim(my_entity, slot)
-    local dx, dy = AutoAim.aim_at_nearest_enemy(my_entity, loci.get_entities(), auto_aim_range_for_slot(my_entity, slot))
-    if dx then
-        return dx, dy
-    end
-
+    local aaim_dx, aaim_dy = AutoAim.aim_at_nearest_enemy(my_entity, loci.get_entities(), auto_aim_range_for_slot(my_entity, slot))
     local move_dx, move_dy = read_move_input()
-    local ndx, ndy = normalize_dir(move_dx, move_dy)
-    if ndx then
-        return ndx, ndy
-    end
-
-    return last_move_dir_x, last_move_dir_y
+    return procedural_anim.resolve_cast_direction(my_entity and my_entity.id, move_dx, move_dy, aaim_dx, aaim_dy)
 end
 
 -- Ataque básico (slot 1) compartilhado entre touch (botão 1 segurado) e
 -- teclado (Espaço segurado): dispara no ritmo do cooldown da skill, com
--- auto-aim no inimigo mais próximo e fallback de direção de movimento.
+-- auto-aim no inimigo mais próximo e fallback de direção de movimento/facing.
 -- `use_button_gate` aplica também o cooldown interno do botão virtual.
 local function cast_basic_attack(my_entity, now, use_button_gate)
     if now < (skill_cast_gate[1] or 0) then return end
@@ -861,10 +940,12 @@ local function cast_basic_attack(my_entity, now, use_button_gate)
         virtual_joystick.trigger_skill(1, now)
     end
 
-    local skill_name = get_entity_skill_by_slot(my_entity, 1)
-    local meta = skill_name and SKILL_HUD_META[skill_name]
+    local skill_name = SkillRanges.resolve_entity_skill(my_entity, 1) or get_entity_skill_by_slot(my_entity, 1)
+    local meta = skill_name and (SKILL_HUD_META[skill_name] or SkillRanges.meta(skill_name))
     local cast_interval = (meta and meta.cooldown and meta.cooldown > 0) and meta.cooldown or 0.5
     skill_cast_gate[1] = now + cast_interval
+    start_slot_cooldown(1, cast_interval, now)
+    sync_virtual_joystick_slots(my_entity, now)
 
     local action_dx, action_dy = resolve_quick_cast_aim(my_entity, 1)
     loci.send_action(1, action_dx, action_dy)
@@ -935,42 +1016,55 @@ function love.update(dt)
         end
         update_movement(my_entity)
 
+        local now = get_client_time()
+        sync_virtual_joystick_slots(my_entity, now)
+
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
         local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
         if not is_dead and show_touch_controls then
-            local now = love.timer.getTime()
+            local move_dx, move_dy = read_move_input()
 
             -- Botão 1: ataque básico com mira automática no inimigo mais próximo.
             -- Segurar o botão mantém o personagem atacando (hold-to-cast) no ritmo
             -- do cooldown da skill; cada disparo reavalia o alvo mais próximo.
-            -- Fallback de mira: direção de movimento/última direção.
+            -- Fallback de mira: direção de movimento/última direção (facing).
             if virtual_joystick.is_skill_active(1) then
                 cast_basic_attack(my_entity, now, true)
             end
 
-            -- Botão 2: quick cast com mira automática no inimigo mais próximo no alcance da skill (fallback: movimento)
-            if virtual_joystick.is_skill_active(2) and virtual_joystick.can_trigger_skill(2, now) then
+            -- Botão 2: quick cast com mira automática no inimigo mais próximo no alcance da skill (fallback: movimento/facing)
+            local s2_name = SkillRanges.resolve_entity_skill(my_entity, 2)
+            if s2_name and virtual_joystick.is_skill_active(2) and virtual_joystick.can_trigger_skill(2, now) then
+                local meta = SKILL_HUD_META[s2_name] or SkillRanges.meta(s2_name)
+                local cd_dur = (meta and meta.cooldown) or 0.5
+                start_slot_cooldown(2, cd_dur, now)
+                sync_virtual_joystick_slots(my_entity, now)
                 virtual_joystick.trigger_skill(2, now)
                 local action_dx, action_dy = resolve_quick_cast_aim(my_entity, 2)
                 loci.send_action(2, action_dx, action_dy)
             end
 
-            -- Botões 3 e 4: sempre disparam no release (drag-to-aim)
+            -- Botões 3 e 4: sempre disparam no release (drag-to-aim ou quick-tap com fallback de facing)
             local release_events = virtual_joystick.pop_release_events()
             for _, event in ipairs(release_events) do
                 local slot = event.skill_id
-                if slot >= 3 and slot <= 4 and virtual_joystick.can_trigger_skill(slot, now) then
+                local skill_name = SkillRanges.resolve_entity_skill(my_entity, slot)
+                if skill_name and slot >= 3 and slot <= 4 and virtual_joystick.can_trigger_skill(slot, now) then
                     -- Não disparar se foi cancelado (arrastou de volta para a zona de cancelamento)
                     if not event.is_cancelled then
-                        virtual_joystick.trigger_skill(slot, now)
+                        local meta = SKILL_HUD_META[skill_name] or SkillRanges.meta(skill_name)
+                        local cd_dur = (meta and meta.cooldown) or 0.5
+                        start_slot_cooldown(slot, cd_dur, now)
+                        sync_virtual_joystick_slots(my_entity, now)
 
                         -- Determinar direção de mira
                         local action_dx, action_dy
                         if event.was_aiming then
-                            -- Release-to-cast: usar direção do arrasto
+                            -- Release-to-cast: usar direção do arrasto e atualizar facing
                             action_dx, action_dy = event.aim_dx, event.aim_dy
+                            procedural_anim.set_facing_vector(my_entity.id, action_dx, action_dy)
                         else
-                            -- Quick tap: mira automática no inimigo mais próximo no alcance da skill (fallback: movimento)
+                            -- Quick tap: mira automática no inimigo mais próximo no alcance da skill (fallback: movimento/facing)
                             action_dx, action_dy = resolve_quick_cast_aim(my_entity, slot)
                         end
 
@@ -1661,19 +1755,19 @@ function love.draw()
         draw_entity(ent, my_entity and (ent.id == my_entity.id))
     end
 
-    -- Draw aim indicator (drag-to-aim) enquanto botões 3 ou 4 estão aiming ou cancelando
+    -- Draw aim indicator (drag-to-aim) dinâmico conforme o personagem e skills_list ativos
     if my_entity and show_touch_controls then
-        -- Habilidade padrão de cada slot de mira (usada se skills_list ainda não chegou)
-        local DEFAULT_AIM_SKILLS = { [3] = "whirlwind_dash", [4] = "blade_throw" }
+        sync_virtual_joystick_slots(my_entity, get_client_time())
 
-        for slot = 3, 4 do
-            if virtual_joystick.is_aiming(slot) or virtual_joystick.is_skill_cancelled(slot) then
+        for slot = 1, 4 do
+            local aim_skill = SkillRanges.resolve_entity_skill(my_entity, slot)
+            local skill_range_world = aim_skill and SkillRanges.range(aim_skill) or nil
+            if aim_skill and skill_range_world and (virtual_joystick.is_aiming(slot) or virtual_joystick.is_skill_cancelled(slot)) then
                 local aim_dx, aim_dy = virtual_joystick.get_aim_vector(slot)
                 if math.abs(aim_dx) > 0.01 or math.abs(aim_dy) > 0.01 then
                     local player_x = my_entity.x * VISUAL_SCALE
                     local player_y = (my_entity.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Centro do corpo a partir dos pés do modelo escalado
-                    local aim_skill = get_entity_skill_by_slot(my_entity, slot) or DEFAULT_AIM_SKILLS[slot]
-                    local aim_length = SkillRanges.range(aim_skill, 200 / VISUAL_SCALE) * VISUAL_SCALE
+                    local aim_length = skill_range_world * VISUAL_SCALE
                     local end_x = player_x + aim_dx * aim_length
                     local end_y = player_y + aim_dy * aim_length
 
