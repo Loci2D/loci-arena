@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLIENT_DIR="$ROOT_DIR/client"
-OUT_FILE="${1:-$ROOT_DIR/dist/game.love}"
+RAW_OUT="${1:-$ROOT_DIR/dist/game.love}"
+mkdir -p "$(dirname "$RAW_OUT")"
+OUT_FILE="$(cd "$(dirname "$RAW_OUT")" && pwd)/$(basename "$RAW_OUT")"
 
 if [ ! -d "$CLIENT_DIR/loci2d" ]; then
     echo "-> client/loci2d nao encontrado. Executando setup_sdk.sh --download..."
