@@ -19,6 +19,7 @@ local procedural_anim = require("src.procedural_anim")
 local sprite_anim = require("src.sprite_anim")
 local MovementSync = require("src.movement_sync")
 local AudioSystem = require("src.audio_system")
+local SkillRanges = require("src.skill_ranges")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
 
 -- Fontes para efeitos visuais (criadas uma vez)
@@ -754,6 +755,9 @@ function love.update(dt)
     end
 
     if my_entity then
+        -- Alcances autoritativos publicados pelo servidor (indicador de mira e VFX)
+        SkillRanges.update(my_entity.get and my_entity:get("skill_ranges", "") or nil)
+
         if not clamped_my_entity and should_clamp_entity(my_entity) then
             clamp_entity_to_arena(my_entity, true, true)
         end
@@ -1221,9 +1225,13 @@ local function draw_procedural_skill_fx(fx)
         end
     end
 
+    -- Alcance e raio da AoE da habilidade em pixels (unidades do mundo * VISUAL_SCALE)
+    local range_px = SkillRanges.range(skill_name, 0) * VISUAL_SCALE
+    local aoe_px = SkillRanges.aoe(skill_name, 0) * VISUAL_SCALE
+
     if skill_name == "fireball" then
-        -- Fireball: projétil até range * 0.7 (210px) seguido de explosão na área real (aoe_radius = 60px)
-        local max_dist = 210
+        -- Fireball: projétil até range * 0.7 seguido de explosão na área real (aoe_radius)
+        local max_dist = range_px * 0.7
         local travel_t = math.min(1.0, inv_prog / 0.5)
         local travel_dist = max_dist * travel_t
         local fireball_x = fx_start_x + fx.dir_x * travel_dist
@@ -1244,7 +1252,7 @@ local function draw_procedural_skill_fx(fx)
         else
             local blast_t = (inv_prog - 0.5) / 0.5
             local blast_alpha = 1.0 - blast_t
-            local blast_r = 20 + 40 * blast_t
+            local blast_r = aoe_px * (1 / 3 + 2 / 3 * blast_t) -- cresce até o raio real da AoE
 
             love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
             love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
@@ -1256,7 +1264,7 @@ local function draw_procedural_skill_fx(fx)
         end
     elseif skill_name == "slash" then
         local angle = math.atan2(fx.dir_y, fx.dir_x)
-        local radius = 45 * (0.8 + 0.4 * inv_prog)
+        local radius = range_px * (0.6 + 0.4 * inv_prog) -- o arco abre até o alcance real do golpe
         love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
         love.graphics.setLineWidth(4)
         love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius, angle - 0.8, angle + 0.8)
@@ -1264,10 +1272,10 @@ local function draw_procedural_skill_fx(fx)
         love.graphics.setLineWidth(8)
         love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
     elseif skill_name == "fury_reward" then
-        local hit_dist = 120 -- (15.0 unidades no mundo * VISUAL_SCALE = 120px na tela)
+        local hit_dist = range_px * 0.5 -- ponto focal da onda de choque (igual ao do servidor: 0.5 * range)
         local hit_x = fx_start_x + fx.dir_x * hit_dist
         local hit_y = fx_start_y + fx.dir_y * hit_dist
-        local r = 50 * (0.5 + 0.8 * inv_prog)
+        local r = aoe_px * (0.5 + 0.5 * inv_prog) -- termina exatamente no raio real da AoE
         love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
         love.graphics.setLineWidth(3)
         love.graphics.circle("line", hit_x, hit_y, r)
@@ -1275,13 +1283,13 @@ local function draw_procedural_skill_fx(fx)
         love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
     elseif skill_name == "whirlwind_dash" then
         local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
-        local dash_world_dist = (280 / VISUAL_SCALE) * inv_prog -- 35 unidades no mundo
+        local dash_world_dist = SkillRanges.range("whirlwind_dash", 0) * inv_prog -- unidades do mundo
         local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
         local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
         local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
         local curr_x = clamped_wx * VISUAL_SCALE
         local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
-        local r = 65 * (0.7 + 0.5 * inv_prog)
+        local r = aoe_px * (0.7 + 0.3 * inv_prog) -- termina exatamente no raio real da AoE
         local spin_angle = inv_prog * math.pi * 5
         love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
         love.graphics.setLineWidth(3)
@@ -1296,7 +1304,7 @@ local function draw_procedural_skill_fx(fx)
             )
         end
     elseif skill_name == "blade_throw" then
-        local max_dist = 260
+        local max_dist = range_px
         local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
         local blade_x = fx_start_x + fx.dir_x * travel_dist
         local blade_y = fx_start_y + fx.dir_y * travel_dist
@@ -1311,7 +1319,7 @@ local function draw_procedural_skill_fx(fx)
         love.graphics.circle("line", blade_x, blade_y, 7)
 
         if inv_prog > 0.45 then
-            local shock_r = 55 * ((inv_prog - 0.45) / 0.55)
+            local shock_r = aoe_px * ((inv_prog - 0.45) / 0.55) -- termina no raio real do Stun em área
             love.graphics.setColor(1.0, 0.9, 0.2, progress * 0.9)
             love.graphics.setLineWidth(3)
             love.graphics.circle("line", blade_x, blade_y, shock_r)
@@ -1363,11 +1371,8 @@ function love.draw()
 
     -- Draw aim indicator (drag-to-aim) enquanto botões 3 ou 4 estão aiming ou cancelando
     if my_entity and show_touch_controls then
-        -- Alcance no mundo de cada habilidade (em pixels visuais: range * VISUAL_SCALE)
-        local SKILL_RANGES = {
-            [3] = 280, -- Whirlwind Dash (35.0 * 8)
-            [4] = 400, -- Blade Throw (50.0 * 8)
-        }
+        -- Habilidade padrão de cada slot de mira (usada se skills_list ainda não chegou)
+        local DEFAULT_AIM_SKILLS = { [3] = "whirlwind_dash", [4] = "blade_throw" }
 
         for slot = 3, 4 do
             if virtual_joystick.is_aiming(slot) or virtual_joystick.is_skill_cancelled(slot) then
@@ -1375,7 +1380,8 @@ function love.draw()
                 if math.abs(aim_dx) > 0.01 or math.abs(aim_dy) > 0.01 then
                     local player_x = my_entity.x * VISUAL_SCALE
                     local player_y = (my_entity.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Centro do corpo a partir dos pés do modelo escalado
-                    local aim_length = SKILL_RANGES[slot] or 200
+                    local aim_skill = get_entity_skill_by_slot(my_entity, slot) or DEFAULT_AIM_SKILLS[slot]
+                    local aim_length = SkillRanges.range(aim_skill, 200 / VISUAL_SCALE) * VISUAL_SCALE
                     local end_x = player_x + aim_dx * aim_length
                     local end_y = player_y + aim_dy * aim_length
 
@@ -1392,7 +1398,7 @@ function love.draw()
                     love.graphics.line(player_x, player_y, end_x, end_y)
 
                     -- Círculo no final (indicando o alcance ou área de impacto)
-                    local circle_radius = (slot == 4) and 14 or 8
+                    local circle_radius = SkillRanges.aoe(aim_skill, 1) * VISUAL_SCALE -- raio real da AoE
                     if is_cancelled then
                         love.graphics.setColor(1.0, 0.2, 0.2, 0.3)
                         love.graphics.circle("fill", end_x, end_y, circle_radius)
