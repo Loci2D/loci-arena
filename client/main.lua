@@ -394,8 +394,11 @@ function love.load(arg)
     connected_status_label = "Connected to " .. SERVER_IP .. ":" .. SERVER_PORT .. " (" .. player_name .. ")"
     connection_status = connected_status_label
 
-    if loci.netcode and os.getenv("LOCI_AUTO_EXPORT_CSV") == "1" then
-        loci.netcode.auto_export_csv_on_quit = true
+    if loci.netcode then
+        loci.netcode.default_move_speed = 2.0
+        if os.getenv("LOCI_AUTO_EXPORT_CSV") == "1" then
+            loci.netcode.auto_export_csv_on_quit = true
+        end
     end
 
     -- Inicializar placeholders padronizados de 32x32px
