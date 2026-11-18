@@ -43,7 +43,7 @@ return {
         -- Impulso de deslocamento (Dash físico sincronizado com o alcance da habilidade)
         local CharacterFactory = require("systems.character_factory")
         local current_tick = CharacterFactory.get_current_tick()
-        local dash_duration_ticks = skill_data.dash_duration_ticks or 4
+        local dash_duration_ticks = skill_data.dash_duration_ticks or 6
         Loci.Commands.set_property(entity_id, "dashing_until", tostring(current_tick + dash_duration_ticks))
 
         local dash_speed = skill_data.dash_speed or (skill_data.range / dash_duration_ticks) -- Desloca exatamente o alcance da habilidade durante a investida

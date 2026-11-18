@@ -49,8 +49,9 @@ function SkillRanges.update(raw)
         return
     end
     last_raw = raw
-    for name, values in pairs(SkillRanges.parse(raw)) do
-        published[name] = values
+    local parsed = SkillRanges.parse(raw)
+    if next(parsed) ~= nil then
+        published = parsed
     end
 end
 
