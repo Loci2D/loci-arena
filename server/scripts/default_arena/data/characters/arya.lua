@@ -12,7 +12,7 @@ return {
         mag_def = 50,
         mana = 100,
         max_mana = 100,
-        move_speed = 2.0,
+        move_speed = 2.2,
         hp_regen = 20,
         mana_regen = 10
     },

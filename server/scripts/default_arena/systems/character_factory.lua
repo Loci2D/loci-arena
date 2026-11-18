@@ -166,7 +166,7 @@ function CharacterFactory.create_character(entity_id, character_name)
     local mag_def = attrs.mag_def or 50
     local mana = attrs.mana or 100
     local max_mana = attrs.max_mana or mana
-    local move_speed = attrs.move_speed or 3.0
+    local move_speed = attrs.move_speed or 2.0
 
     -- 1. Inicializa atributos base no CombatSystem
     CombatSystem.init_entity(entity_id, max_hp, phys_def, mag_def)
