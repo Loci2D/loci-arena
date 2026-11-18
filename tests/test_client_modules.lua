@@ -184,4 +184,47 @@ run_test("VirtualJoystick cooldowns and push coordinate transform", function()
     VJ.set_push(nil)
 end)
 
+-- ----------------------------------------------------------------------------
+-- SkillRanges tests (alcances publicados pelo servidor com fallback embutido)
+-- ----------------------------------------------------------------------------
+run_test("SkillRanges parses the server property, ignores malformed entries and falls back to defaults", function()
+    package.loaded["skill_ranges"] = nil
+    local SkillRanges = require("skill_ranges")
+
+    -- parse(): entradas válidas, espaços e números decimais
+    local parsed = SkillRanges.parse("slash=16:7, fireball=64.5:9,dash=40:10")
+    assert_near(parsed.slash.range, 16, 1e-9, "slash range")
+    assert_near(parsed.slash.aoe, 7, 1e-9, "slash aoe")
+    assert_near(parsed.fireball.range, 64.5, 1e-9, "fireball range")
+    assert_near(parsed.dash.aoe, 10, 1e-9, "dash aoe")
+
+    -- parse(): vazio/nil/lixo nunca quebra e entradas inválidas são descartadas
+    assert(next(SkillRanges.parse("")) == nil and next(SkillRanges.parse(nil)) == nil, "empty -> {}")
+    local bad = SkillRanges.parse("bad,x=1,y=a:b,z=-1:2,w=1:2:3,ok=5:2")
+    assert(bad.bad == nil and bad.x == nil and bad.y == nil and bad.z == nil and bad.w == nil, "malformed entries dropped")
+    assert(bad.ok and bad.ok.range == 5 and bad.ok.aoe == 2, "valid entry kept next to malformed ones")
+
+    -- Sem nada publicado: usa os padrões embutidos (todas as skills com alcance)
+    SkillRanges.reset()
+    for _, name in ipairs({ "slash", "fury_reward", "whirlwind_dash", "blade_throw", "fireball" }) do
+        assert(SkillRanges.range(name) and SkillRanges.range(name) > 0, "default range for " .. name)
+        assert(SkillRanges.aoe(name) and SkillRanges.aoe(name) > 0, "default aoe for " .. name)
+    end
+    assert(SkillRanges.range("unknown_skill") == nil, "unknown skill has no default")
+    assert(SkillRanges.range("unknown_skill", 12) == 12, "explicit fallback is returned for unknown skill")
+
+    -- update(): o valor publicado pelo servidor vence o padrão; lixo posterior não apaga o que já valia
+    local default_slash = SkillRanges.range("slash")
+    SkillRanges.update("slash=99:33")
+    assert_near(SkillRanges.range("slash"), 99, 1e-9, "published slash range overrides default")
+    assert_near(SkillRanges.aoe("slash"), 33, 1e-9, "published slash aoe overrides default")
+    assert(SkillRanges.range("fireball") == SkillRanges.DEFAULTS.fireball.range, "skills not published keep the default")
+    SkillRanges.update("???")
+    assert_near(SkillRanges.range("slash"), 99, 1e-9, "garbage update keeps the last valid value")
+    SkillRanges.update(nil)
+    assert_near(SkillRanges.range("slash"), 99, 1e-9, "nil update keeps the last valid value")
+    SkillRanges.reset()
+    assert_near(SkillRanges.range("slash"), default_slash, 1e-9, "reset() returns to the defaults")
+end)
+
 print(string.format("\n>>> Phase 4: All %d Client Module unit tests passed! <<<", passed))
