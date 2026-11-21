@@ -230,4 +230,123 @@ run_test("SkillRanges parses the server property, ignores malformed entries and 
     assert_near(SkillRanges.range("slash"), default_slash, 1e-9, "reset() returns to the defaults")
 end)
 
+-- ---------------------------------------------------------------------------
+-- 5. SessionStore: persistencia de servidor e session_token
+-- ---------------------------------------------------------------------------
+run_test("SessionStore persists connection, session_token and validates grace age", function()
+    local fs_files = {}
+    local prev_love = _G.love
+    _G.love = {
+        filesystem = {
+            getInfo = function(name) return fs_files[name] ~= nil and { type = "file" } or nil end,
+            read = function(name) return fs_files[name] end,
+            write = function(name, content) fs_files[name] = content; return true end,
+        }
+    }
+
+    local SessionStore = require("src.session_store")
+    local initial = SessionStore.load()
+    assert(initial.last_ip == "127.0.0.1" and initial.last_port == 8080, "defaults loaded")
+    assert(not SessionStore.has_valid_token(initial, 30, 1000), "no token initially")
+
+    SessionStore.save_session_token("192.168.0.2", 8080, "AryaPlayer", "tok_abc", 1000)
+    local reloaded = SessionStore.load()
+    assert(reloaded.last_ip == "192.168.0.2" and reloaded.player_name == "AryaPlayer", "connection fields persisted")
+    assert(reloaded.session_token == "tok_abc", "session_token persisted")
+    assert(SessionStore.has_valid_token(reloaded, 30, 1020), "token valid within 30s grace period")
+    assert(not SessionStore.has_valid_token(reloaded, 30, 1045), "token expired after 30s grace period")
+
+    SessionStore.clear_session_token()
+    local cleared = SessionStore.load()
+    assert(cleared.session_token == nil and not SessionStore.has_valid_token(cleared, 30, 1005), "token cleared")
+
+    _G.love = prev_love
+end)
+
+-- ---------------------------------------------------------------------------
+-- 6. ConnectScreen: presets, edicao de campos, validacao e callbacks
+-- ---------------------------------------------------------------------------
+run_test("ConnectScreen handles presets, textinput, validation and connect/resume callbacks", function()
+    local ConnectScreen = require("src.ui.connect_screen")
+    local connected_args, resumed_args = nil, nil
+
+    ConnectScreen.init({
+        initial_ip = "127.0.0.1",
+        initial_port = 8080,
+        initial_name = "Tester",
+        can_resume = true,
+        on_connect = function(ip, port, name) connected_args = { ip, port, name } end,
+        on_resume = function(ip, port, name) resumed_args = { ip, port, name } end,
+    })
+
+    -- Preset 2 (LAN 192.168.0.2)
+    assert(ConnectScreen.handle_press(600, 240) == true, "preset 2 hit")
+    local ip, port, name = ConnectScreen.get_values()
+    assert(ip == "192.168.0.2" and port == 8080 and name == "Tester", "preset updated ip/port")
+
+    -- Focar campo nome, digitar e apagar
+    assert(ConnectScreen.handle_press(400, 400) == true, "name input hit")
+    assert(ConnectScreen.textinput("1") == true, "textinput appended")
+    local _, _, updated_name = ConnectScreen.get_values()
+    assert(updated_name == "Tester1", "name updated via textinput")
+    assert(ConnectScreen.keypressed("backspace") == true, "backspace handled")
+    local _, _, after_bs = ConnectScreen.get_values()
+    assert(after_bs == "Tester", "backspace removed char")
+
+    -- Botao Conectar e Retomar Sessao
+    assert(ConnectScreen.handle_press(400, 520) == true, "connect button hit")
+    assert(connected_args and connected_args[1] == "192.168.0.2" and connected_args[2] == 8080, "on_connect invoked")
+    assert(ConnectScreen.handle_press(750, 520) == true, "resume button hit")
+    assert(resumed_args and resumed_args[1] == "192.168.0.2" and resumed_args[3] == "Tester", "on_resume invoked")
+end)
+
+-- ---------------------------------------------------------------------------
+-- 7. Paridade Touch (VirtualJoystick HUD bar + kda_ui.toggle)
+-- ---------------------------------------------------------------------------
+run_test("VirtualJoystick top HUD bar emits KDA/swap/mute/disconnect without moving joystick", function()
+    local VirtualJoystick = require("virtual_joystick")
+    local kda_ui = require("kda_ui")
+
+    VirtualJoystick.set_push(nil)
+    VirtualJoystick.update(1280, 720)
+    VirtualJoystick.set_hud_state({ safe_top = 14, audio_enabled = true, kda_visible = false })
+
+    -- Centro superior: 4 botoes (72 + 10 + 78 + 10 + 72 + 10 + 72 = 324 -> start_x = 478)
+    assert(VirtualJoystick.handle_touchpress(1, 500, 25) == true, "KDA button hit")
+    assert(VirtualJoystick.handle_touchpress(2, 580, 25) == true, "Heroi button hit")
+    assert(VirtualJoystick.handle_touchpress(3, 660, 25) == true, "Som button hit")
+    assert(VirtualJoystick.handle_touchpress(4, 740, 25) == true, "Sair button hit")
+    assert(not VirtualJoystick.is_move_active(), "HUD bar taps must not activate movement joystick")
+
+    local evs = VirtualJoystick.pop_hud_events()
+    assert(#evs == 4 and evs[1] == "kda" and evs[2] == "swap_hero" and evs[3] == "toggle_mute" and evs[4] == "disconnect",
+        "HUD events emitted in expected order")
+
+    local was_visible = kda_ui.is_visible()
+    assert(kda_ui.toggle() == (not was_visible), "kda_ui.toggle flips state")
+    assert(kda_ui.toggle() == was_visible, "kda_ui.toggle restores state")
+end)
+
+run_test("ConnectScreen invokes love.keyboard.setTextInput(true/false) on focus and blur", function()
+    local ConnectScreen = require("src.ui.connect_screen")
+    local text_input_calls = {}
+    local prev_love = _G.love
+    _G.love = {
+        keyboard = {
+            setTextInput = function(enabled)
+                table.insert(text_input_calls, enabled)
+            end
+        }
+    }
+
+    ConnectScreen.init({ initial_ip = "127.0.0.1", initial_port = 8080, initial_name = "Tester" })
+    assert(ConnectScreen.handle_press(400, 320) == true, "ip input hit")
+    assert(text_input_calls[#text_input_calls] == true, "setTextInput(true) called when input focused")
+
+    assert(ConnectScreen.handle_press(100, 100) == false, "outside click blurs")
+    assert(text_input_calls[#text_input_calls] == false, "setTextInput(false) called when blurred")
+
+    _G.love = prev_love
+end)
+
 print(string.format("\n>>> Phase 4: All %d Client Module unit tests passed! <<<", passed))
