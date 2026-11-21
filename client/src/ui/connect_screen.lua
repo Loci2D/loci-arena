@@ -60,13 +60,9 @@ local function point_in_rect(px, py, r)
     return px >= r.x and px <= r.x + r.w and py >= r.y and py <= r.y + r.h
 end
 
-local function set_text_input(enabled, rect)
+local function set_text_input(enabled)
     if not (love and love.keyboard and love.keyboard.setTextInput) then return end
-    if enabled and rect then
-        pcall(love.keyboard.setTextInput, true, rect.x, rect.y, rect.w, rect.h)
-    else
-        pcall(love.keyboard.setTextInput, false)
-    end
+    pcall(love.keyboard.setTextInput, enabled == true)
 end
 
 function ConnectScreen.init(opts)
