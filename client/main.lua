@@ -1097,24 +1097,19 @@ function love.keyreleased(key)
 end
 
 -- Touch handlers para joysticks virtuais e tela de conexão
+-- No Love2D 11.x, love.touchpressed/touchmoved já recebem x, y em coordenadas da janela (0..W, 0..H).
 function love.touchpressed(id, x, y, dx, dy, pressure)
-    local screen_w, screen_h = love.graphics.getDimensions()
-    local real_x = x * screen_w
-    local real_y = y * screen_h
     if client_state ~= "in_game" then
-        local gx, gy = push:toGame(real_x, real_y)
+        local gx, gy = push:toGame(x, y)
         return ConnectScreen.handle_press(gx, gy)
     end
     if not show_touch_controls then return end
-    return virtual_joystick.handle_touchpress(id, real_x, real_y)
+    return virtual_joystick.handle_touchpress(id, x, y)
 end
 
 function love.touchmoved(id, x, y, dx, dy, pressure)
     if client_state ~= "in_game" or not show_touch_controls then return end
-    local screen_w, screen_h = love.graphics.getDimensions()
-    local real_x = x * screen_w
-    local real_y = y * screen_h
-    return virtual_joystick.handle_touchmove(id, real_x, real_y)
+    return virtual_joystick.handle_touchmove(id, x, y)
 end
 
 function love.touchreleased(id, x, y, dx, dy, pressure)

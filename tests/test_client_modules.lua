@@ -327,4 +327,26 @@ run_test("VirtualJoystick top HUD bar emits KDA/swap/mute/disconnect without mov
     assert(kda_ui.toggle() == was_visible, "kda_ui.toggle restores state")
 end)
 
+run_test("ConnectScreen invokes love.keyboard.setTextInput(true/false) on focus and blur", function()
+    local ConnectScreen = require("src.ui.connect_screen")
+    local text_input_calls = {}
+    local prev_love = _G.love
+    _G.love = {
+        keyboard = {
+            setTextInput = function(enabled)
+                table.insert(text_input_calls, enabled)
+            end
+        }
+    }
+
+    ConnectScreen.init({ initial_ip = "127.0.0.1", initial_port = 8080, initial_name = "Tester" })
+    assert(ConnectScreen.handle_press(400, 320) == true, "ip input hit")
+    assert(text_input_calls[#text_input_calls] == true, "setTextInput(true) called when input focused")
+
+    assert(ConnectScreen.handle_press(100, 100) == false, "outside click blurs")
+    assert(text_input_calls[#text_input_calls] == false, "setTextInput(false) called when blurred")
+
+    _G.love = prev_love
+end)
+
 print(string.format("\n>>> Phase 4: All %d Client Module unit tests passed! <<<", passed))
