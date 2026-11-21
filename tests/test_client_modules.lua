@@ -429,6 +429,25 @@ run_test("AutoAim targets nearest living enemy of another team within range", fu
     dx, dy = AutoAim.aim_at_nearest_enemy(sdk_me, { sdk_me, sdk_enemy }, 20)
     assert_near(dx, 0.0, 1e-6, "sdk aim dx")
     assert_near(dy, -1.0, 1e-6, "sdk aim dy")
+
+    -- Suporta tabelas de entidades associativas/mapas indexadas por ID (pairs)
+    local map_entities = {
+        [99] = me,
+        [101] = ent(101, 0, 15, "2", false),
+        [102] = ent(102, 50, 0, "2", false),
+    }
+    local map_target = AutoAim.find_nearest_enemy(me, map_entities, 50)
+    assert(map_target and map_target.id == 101, "map_entities must target id 101")
+
+    -- Caster ou inimigo com time vazio ("") -> ignorado
+    local empty_team_me = ent(30, 0, 0, "", false)
+    assert(AutoAim.find_nearest_enemy(empty_team_me, entities, 100) == nil, "caster with empty team must not aim")
+    local empty_team_enemy = ent(31, 0, 5, "", false)
+    assert(AutoAim.find_nearest_enemy(me, { me, empty_team_enemy }, 50) == nil, "enemy with empty team must not be aimed")
+
+    -- Inimigo com hp <= 0 é ignorado como morto mesmo sem is_dead explícito
+    local hp_zero_enemy = { id = 32, x = 0, y = 5, team = "2", hp = 0 }
+    assert(AutoAim.find_nearest_enemy(me, { me, hp_zero_enemy }, 50) == nil, "enemy with hp <= 0 must be ignored as dead")
 end)
 
 print(string.format("\n>>> Phase 4: All %d Client Module unit tests passed! <<<", passed))

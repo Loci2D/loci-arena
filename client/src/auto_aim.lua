@@ -30,7 +30,10 @@ end
 
 local function is_dead(ent)
     local d = read_prop(ent, "is_dead")
-    return d == true or d == "true" or d == 1 or d == "1"
+    if d == true or d == "true" or d == 1 or d == "1" then return true end
+    local hp = tonumber(read_prop(ent, "hp"))
+    if hp and hp <= 0 then return true end
+    return false
 end
 
 local function is_player_entity(ent)
@@ -49,7 +52,7 @@ function AutoAim.find_nearest_enemy(my_entity, entities, max_range)
     if range <= 0 then return nil end
 
     local my_team = read_prop(my_entity, "team")
-    if my_team == nil then return nil end
+    if my_team == nil or my_team == "" then return nil end
     my_team = tostring(my_team)
 
     local mx = tonumber(my_entity.x) or 0
@@ -57,12 +60,12 @@ function AutoAim.find_nearest_enemy(my_entity, entities, max_range)
     local max_d2 = range * range
 
     local best, best_d2 = nil, nil
-    for _, ent in ipairs(entities) do
+    for _, ent in pairs(entities) do
         if ent and ent.id ~= my_entity.id
             and is_player_entity(ent)
             and not is_dead(ent) then
             local team = read_prop(ent, "team")
-            if team ~= nil and tostring(team) ~= my_team then
+            if team ~= nil and team ~= "" and tostring(team) ~= my_team then
                 local dx = (tonumber(ent.x) or 0) - mx
                 local dy = (tonumber(ent.y) or 0) - my
                 local d2 = dx * dx + dy * dy

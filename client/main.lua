@@ -121,7 +121,10 @@ end
 
 local function get_entity_skill_by_slot(entity, slot_index)
     if not entity or not slot_index then return nil end
-    local list_str = entity:get("skills_list", "")
+    local list_str = (type(entity.get) == "function" and entity:get("skills_list", ""))
+        or entity.skills_list
+        or (entity.properties and entity.properties["skills_list"])
+        or ""
     if not list_str or list_str == "" then return nil end
 
     local idx = 1
@@ -813,11 +816,18 @@ local function update_movement(my_entity)
     movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
 end
 
--- Alcance de detecção de auto-aim para o slot: alcance autoritativo da
--- habilidade (publicado pelo servidor via `skill_ranges`), com fallback padrão.
+-- Alcance de detecção de auto-aim para o slot:
+-- Para o ataque básico (slot 1), utiliza alcance de detecção amplo (estilo MOBA,
+-- DEFAULT_MAX_RANGE = 64.0) para que o herói corpo a corpo (ex: Arya) sempre
+-- vire e ataque na direção do alvo enquanto se aproxima, evitando golpear no vazio.
+-- Para as demais habilidades (slots 2-4), utiliza o alcance autoritativo da skill
+-- com fallback para o alcance padrão.
 local function auto_aim_range_for_slot(my_entity, slot)
     local skill_name = get_entity_skill_by_slot(my_entity, slot)
     local range = skill_name and SkillRanges.range(skill_name) or nil
+    if slot == 1 then
+        return math.max(range or 0, AutoAim.DEFAULT_MAX_RANGE)
+    end
     return (range and range > 0) and range or AutoAim.DEFAULT_MAX_RANGE
 end
 
@@ -938,13 +948,10 @@ function love.update(dt)
                 cast_basic_attack(my_entity, now, true)
             end
 
-            -- Botão 2: comportamento original (direção do joystick de movimento)
+            -- Botão 2: quick cast com mira automática no inimigo mais próximo no alcance da skill (fallback: movimento)
             if virtual_joystick.is_skill_active(2) and virtual_joystick.can_trigger_skill(2, now) then
                 virtual_joystick.trigger_skill(2, now)
-                local action_dx, action_dy = virtual_joystick.get_move_vector()
-                if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
-                    action_dx, action_dy = 0, -1
-                end
+                local action_dx, action_dy = resolve_quick_cast_aim(my_entity, 2)
                 loci.send_action(2, action_dx, action_dy)
             end
 
@@ -963,11 +970,8 @@ function love.update(dt)
                             -- Release-to-cast: usar direção do arrasto
                             action_dx, action_dy = event.aim_dx, event.aim_dy
                         else
-                            -- Quick tap: usar direção do joystick de movimento, ou padrão se parado
-                            action_dx, action_dy = virtual_joystick.get_move_vector()
-                            if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
-                                action_dx, action_dy = 0, -1
-                            end
+                            -- Quick tap: mira automática no inimigo mais próximo no alcance da skill (fallback: movimento)
+                            action_dx, action_dy = resolve_quick_cast_aim(my_entity, slot)
                         end
 
                         loci.send_action(slot, action_dx, action_dy)
