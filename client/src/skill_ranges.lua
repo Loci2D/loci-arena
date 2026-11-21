@@ -21,6 +21,67 @@ SkillRanges.DEFAULTS = {
     fireball       = { range = 64.0, aoe = 9.0 },
 }
 
+-- Metadados de habilidades (cooldown em segundos a 30 Hz e custo de mana, alinhados a data/skills/*.lua)
+SkillRanges.SKILL_META = {
+    slash          = { label = "Slash",    cooldown = 0.5,  mana_cost = 10 },
+    fireball       = { label = "Fireball", cooldown = 1.5,  mana_cost = 35 },
+    fury_reward    = { label = "Fúria",    cooldown = 5.0,  mana_cost = 0  },
+    whirlwind_dash = { label = "Dash",     cooldown = 6.0,  mana_cost = 25 },
+    blade_throw    = { label = "Lâmina",   cooldown = 14.0, mana_cost = 45 },
+    shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 20 },
+}
+
+-- Fallback de skills por personagem apenas quando a propriedade `skills_list` ainda não chegou da rede
+SkillRanges.CHARACTER_DEFAULT_SKILLS = {
+    arya    = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" },
+    default = { "slash" },
+    mage    = { "fireball" },
+    warrior = { "slash" },
+}
+
+local function get_entity_str_prop(entity, key)
+    if not entity then return "" end
+    local val = (entity.get and entity:get(key))
+        or entity[key]
+        or (entity.properties and entity.properties[key])
+    if val == nil then return "" end
+    return tostring(val)
+end
+
+--- Resolve o nome da habilidade equipada no `slot_index` (1..4) para a entidade,
+--- respeitando `skills_list` e `character_name` ativos (retorna `nil` se o slot não existir no herói).
+function SkillRanges.resolve_entity_skill(entity, slot_index)
+    if not entity or type(slot_index) ~= "number" or slot_index < 1 then
+        return nil
+    end
+
+    local list_str = get_entity_str_prop(entity, "skills_list")
+    if list_str ~= "" then
+        local idx = 1
+        for skill in string.gmatch(list_str, "[^,]+") do
+            local trimmed = string.match(skill, "^%s*(.-)%s*$")
+            if idx == slot_index then
+                return (trimmed and trimmed ~= "") and string.lower(trimmed) or nil
+            end
+            idx = idx + 1
+        end
+        return nil
+    end
+
+    local char_name = string.lower(get_entity_str_prop(entity, "character_name"))
+    if char_name == "" then
+        char_name = "default"
+    end
+    local defaults = SkillRanges.CHARACTER_DEFAULT_SKILLS[char_name] or SkillRanges.CHARACTER_DEFAULT_SKILLS.default
+    return defaults and defaults[slot_index] or nil
+end
+
+--- Retorna os metadados (`label`, `cooldown`, `mana_cost`) de uma habilidade.
+function SkillRanges.meta(skill_name)
+    if not skill_name then return nil end
+    return SkillRanges.SKILL_META[string.lower(tostring(skill_name))]
+end
+
 local published = {}
 local last_raw = nil
 

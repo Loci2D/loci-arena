@@ -53,8 +53,33 @@ run_test("ProceduralAnim computes 8-way directions, facing, legacy mode, and sta
     -- Legacy facing_dir signature
     local leg_left = ProceduralAnim.update_walk(0.016, 2, true, -1)
     assert(leg_left.direction == "west" and leg_left.facing == -1)
+    local fx, fy = ProceduralAnim.get_facing_vector(2)
+    assert_near(fx, -1.0, 1e-4, "legacy left facing vector dx")
+    assert_near(fy, 0.0, 1e-4, "legacy left facing vector dy")
+
     local leg_right = ProceduralAnim.update_walk(0.016, 2, true, 1)
     assert(leg_right.direction == "east" and leg_right.facing == 1)
+    fx, fy = ProceduralAnim.get_facing_vector(2)
+    assert_near(fx, 1.0, 1e-4, "legacy right facing vector dx")
+    assert_near(fy, 0.0, 1e-4, "legacy right facing vector dy")
+
+    -- resolve_cast_direction: stopped fallback uses last direction/facing instead of hardcoded (0, -1),
+    -- and integrates cleanly with active movement and auto-aim target vector
+    ProceduralAnim.update_walk(0.016, 1, true, 0, 1) -- move south
+    ProceduralAnim.update_walk(0.016, 1, false, 0, 0) -- stop
+    local cdx, cdy = ProceduralAnim.resolve_cast_direction(1, 0, 0)
+    assert_near(cdx, 0.0, 1e-4, "stopped cast dx uses last facing (south)")
+    assert_near(cdy, 1.0, 1e-4, "stopped cast dy uses last facing (south)")
+
+    -- Active movement overrides stopped facing
+    cdx, cdy = ProceduralAnim.resolve_cast_direction(1, -1, 0)
+    assert_near(cdx, -1.0, 1e-4, "active movement cast dx")
+    assert_near(cdy, 0.0, 1e-4, "active movement cast dy")
+
+    -- Auto-aim target vector takes priority when provided (Card #92 integration)
+    cdx, cdy = ProceduralAnim.resolve_cast_direction(1, 0, 0, 3, 4)
+    assert_near(cdx, 0.6, 1e-4, "auto-aim cast dx")
+    assert_near(cdy, 0.8, 1e-4, "auto-aim cast dy")
 
     -- clear_state resets entity
     ProceduralAnim.clear_state(1)
@@ -191,6 +216,51 @@ run_test("VirtualJoystick cooldowns and push coordinate transform", function()
     assert(VJ.is_skill_active(1) == true)
     VJ.handle_touchrelease("t_push")
     VJ.set_push(nil)
+
+    -- Real skill cooldown synchronization (whirlwind_dash=6.0s, blade_throw=14.0s) and disabled slot blocking
+    VJ.reset()
+    VJ.sync_skill_slot(3, {
+        enabled = true,
+        skill_name = "whirlwind_dash",
+        label = "Dash",
+        cooldown = 6.0,
+        cooldown_remaining = 4.2,
+        cooldown_duration = 6.0,
+    })
+    assert(VJ.can_trigger_skill(3, 10.0) == false, "slot on active server cooldown must block trigger")
+    local st3 = VJ.get_skill_state(3)
+    assert(st3.skill_name == "whirlwind_dash" and math.abs(st3.action_cooldown - 6.0) < 1e-6 and math.abs(st3.cooldown_remaining - 4.2) < 1e-6)
+
+    -- While on cooldown, dragging button 3 must not enter aiming state
+    assert(VJ.handle_touchpress("t_cd_drag", 1024, 489.6) == true)
+    VJ.handle_touchmove("t_cd_drag", 1024 + 60, 489.6)
+    assert(VJ.is_aiming(3) == false, "button on cooldown must not enter drag-to-aim")
+    VJ.handle_touchrelease("t_cd_drag")
+    VJ.pop_release_events()
+
+    -- Unequipped slot (e.g. slot 4 on mage/default/warrior) blocks press activation and trigger
+    VJ.sync_skill_slot(4, { enabled = false, skill_name = nil, cooldown_remaining = 0 })
+    assert(VJ.can_trigger_skill(4, 20.0) == false, "disabled/unequipped slot must not trigger")
+    assert(VJ.handle_touchpress("t_dis", 960, 612) == true)
+    assert(VJ.is_skill_active(4) == false, "disabled slot must consume touch without activating")
+
+    -- Slot with locked_reason ("MANA" or "BLOQ.") must block trigger and drag-to-aim
+    VJ.sync_skill_slot(2, {
+        enabled = true,
+        skill_name = "fury_reward",
+        label = "Fúria",
+        cooldown = 5.0,
+        cooldown_remaining = 0,
+        locked_reason = "BLOQ.",
+    })
+    assert(VJ.can_trigger_skill(2, 30.0) == false, "slot with locked_reason must block trigger")
+    local st2 = VJ.get_skill_state(2)
+    assert(st2.locked_reason == "BLOQ.", "locked_reason must be preserved in state")
+    assert(VJ.handle_touchpress("t_lock_drag", 1152, 432) == true)
+    VJ.handle_touchmove("t_lock_drag", 1152 + 60, 432)
+    assert(VJ.is_aiming(2) == false, "locked slot must not enter drag-to-aim")
+    VJ.handle_touchrelease("t_lock_drag")
+    VJ.pop_release_events()
 end)
 
 -- ----------------------------------------------------------------------------

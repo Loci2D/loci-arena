@@ -197,11 +197,34 @@ function ActionButton.new(config)
     self.passed_deadzone = false -- Flag para saber se o toque passou da deadzone
     self.is_cancelled = false -- Flag para indicar que o aiming foi cancelado
     self.cancel_deadzone = (config.radius or 50) * 0.75 -- Pixels de deadzone para cancelamento (arrastar de volta para o botão)
+    -- Sincronização com cooldown real e metadados da skill equipada
+    self.enabled = true
+    self.skill_name = nil
+    self.skill_label = nil
+    self.cooldown_remaining = 0
+    self.cooldown_duration = 0
+    self.locked_reason = nil
     return self
+end
+
+function ActionButton:can_trigger_action(t)
+    if not self.enabled then
+        return false
+    end
+    if self.locked_reason ~= nil and self.locked_reason ~= "" then
+        return false
+    end
+    if self.cooldown_remaining and self.cooldown_remaining > 0 then
+        return false
+    end
+    return (t - self.last_action_time) >= self.action_cooldown
 end
 
 function ActionButton:handle_press(x, y, touch_id)
     if self:hit_test(x, y) then
+        if not self.enabled then
+            return true
+        end
         self.active = true
         self.touch_id = touch_id
         -- Registrar posição inicial para drag-to-aim
@@ -219,6 +242,13 @@ end
 
 function ActionButton:handle_move(x, y, touch_id)
     if self.active and self.touch_id == touch_id then
+        if not self.enabled or (self.cooldown_remaining and self.cooldown_remaining > 0) or (self.locked_reason and self.locked_reason ~= "") then
+            self.is_aiming = false
+            self.is_cancelled = false
+            self.aim_dx = 0
+            self.aim_dy = 0
+            return true
+        end
         -- Apenas botões com support_aiming ativado usam drag-to-aim
         if self.config.support_aiming then
             -- Calcular deslocamento desde o início do toque
@@ -300,24 +330,75 @@ function ActionButton:handle_release(touch_id)
 end
 
 function ActionButton:draw()
-    -- Cor do botão: muda quando está aiming ou cancelado
-    if self.is_cancelled then
+    local is_on_cd = (self.cooldown_remaining and self.cooldown_remaining > 0)
+    local is_locked = (self.locked_reason ~= nil and self.locked_reason ~= "")
+
+    -- Cor do botão: desabilitado, cancelado, aiming, em cooldown/bloqueado ou normal
+    if not self.enabled then
+        love.graphics.setColor(0.12, 0.12, 0.16, 0.35)
+    elseif self.is_cancelled then
         love.graphics.setColor(0.8, 0.2, 0.2, 0.95) -- Vermelho quando cancelado
     elseif self.is_aiming then
         love.graphics.setColor(0.9, 0.9, 0.9, 0.95) -- Branco brilhante quando aiming
+    elseif is_on_cd or is_locked then
+        love.graphics.setColor(0.18, 0.18, 0.24, 0.75)
     else
         love.graphics.setColor(self.active and self.config.color_pressed or self.config.color_bg)
     end
     love.graphics.circle("fill", self.center_x, self.center_y, self.config.radius)
-    love.graphics.setColor(1, 1, 1, 0.5)
+
+    -- Overlay radial de progresso de cooldown real
+    if self.enabled and is_on_cd then
+        local dur = (self.cooldown_duration and self.cooldown_duration > 0) and self.cooldown_duration or self.action_cooldown
+        local ratio = (dur and dur > 0) and math.max(0, math.min(1, self.cooldown_remaining / dur)) or 1
+        if love.graphics.arc then
+            love.graphics.setColor(0.05, 0.05, 0.08, 0.65)
+            love.graphics.arc("fill", self.center_x, self.center_y, self.config.radius, -math.pi / 2, -math.pi / 2 + 2 * math.pi * ratio)
+        end
+    end
+
+    if not self.enabled then
+        love.graphics.setColor(0.4, 0.4, 0.45, 0.3)
+    elseif is_on_cd then
+        love.graphics.setColor(0.95, 0.85, 0.35, 0.85)
+    else
+        love.graphics.setColor(1, 1, 1, 0.5)
+    end
     love.graphics.circle("line", self.center_x, self.center_y, self.config.radius)
 
-    -- Desenhar o número da habilidade
-    love.graphics.setColor(1, 1, 1, 0.9)
+    -- Desenhar o rótulo/número da habilidade e o contador de cooldown real
     local font = love.graphics.getFont()
-    local label = tostring(self.config.skill_id or 1)
-    local tw = font:getWidth(label)
-    love.graphics.print(label, self.center_x - tw / 2, self.center_y - font:getHeight() / 2)
+    local fh = font:getHeight()
+    if not self.enabled then
+        love.graphics.setColor(0.55, 0.55, 0.65, 0.5)
+        local label = "-"
+        local tw = font:getWidth(label)
+        love.graphics.print(label, self.center_x - tw / 2, self.center_y - fh / 2)
+    elseif is_on_cd then
+        local top_label = self.skill_label or tostring(self.config.skill_id or 1)
+        love.graphics.setColor(1, 1, 1, 0.55)
+        local tw_top = font:getWidth(top_label)
+        love.graphics.print(top_label, self.center_x - tw_top / 2, self.center_y - fh - 1)
+
+        local cd_text = string.format("%.1fs", self.cooldown_remaining)
+        love.graphics.setColor(0.95, 0.85, 0.4, 1.0)
+        local tw_cd = font:getWidth(cd_text)
+        love.graphics.print(cd_text, self.center_x - tw_cd / 2, self.center_y + 1)
+    elseif is_locked then
+        local top_label = self.skill_label or tostring(self.config.skill_id or 1)
+        love.graphics.setColor(1, 1, 1, 0.55)
+        local tw_top = font:getWidth(top_label)
+        love.graphics.print(top_label, self.center_x - tw_top / 2, self.center_y - fh - 1)
+
+        love.graphics.setColor(0.85, 0.55, 0.55, 0.95)
+        local tw_lock = font:getWidth(self.locked_reason)
+        love.graphics.print(self.locked_reason, self.center_x - tw_lock / 2, self.center_y + 1)
+    else
+        love.graphics.setColor(1, 1, 1, 0.9)
+        local label = tostring(self.config.skill_id or 1)
+        local tw = font:getWidth(label)
+        love.graphics.print(label, self.center_x - tw / 2, self.center_y - fh / 2)
+    end
 
     -- Indicador visual de arrasto (quando aiming)
     if self.is_aiming then
@@ -547,10 +628,79 @@ function VirtualJoystick.can_trigger_skill(slot, t)
     return btn and btn:can_trigger_action(t) or false
 end
 
-function VirtualJoystick.trigger_skill(slot, t)
+function VirtualJoystick.trigger_skill(slot, t, cooldown_duration)
     local btn = skill_buttons[slot]
     if btn then
+        if type(cooldown_duration) == "number" and cooldown_duration > 0 then
+            btn.action_cooldown = cooldown_duration
+            btn.cooldown_duration = cooldown_duration
+        end
         btn:trigger_action(t)
+    end
+end
+
+function VirtualJoystick.set_skill_cooldown(slot, cooldown_duration)
+    local btn = skill_buttons[slot]
+    if btn and type(cooldown_duration) == "number" and cooldown_duration >= 0 then
+        btn.action_cooldown = cooldown_duration
+        btn.cooldown_duration = cooldown_duration
+    end
+end
+
+function VirtualJoystick.sync_skill_slot(slot, state)
+    local btn = skill_buttons[slot]
+    if not btn or type(state) ~= "table" then return end
+
+    if state.enabled ~= nil then
+        btn.enabled = (state.enabled == true)
+    end
+    if state.skill_name ~= nil then
+        btn.skill_name = state.skill_name
+    end
+    if state.label ~= nil then
+        btn.skill_label = state.label
+    end
+    if type(state.cooldown) == "number" and state.cooldown >= 0 then
+        btn.action_cooldown = state.cooldown
+    end
+    if type(state.cooldown_duration) == "number" and state.cooldown_duration >= 0 then
+        btn.cooldown_duration = state.cooldown_duration
+    elseif type(state.cooldown) == "number" and state.cooldown >= 0 then
+        btn.cooldown_duration = state.cooldown
+    end
+    if type(state.cooldown_remaining) == "number" then
+        btn.cooldown_remaining = math.max(0, state.cooldown_remaining)
+    end
+    btn.locked_reason = state.locked_reason
+
+    if not btn.enabled or (btn.cooldown_remaining and btn.cooldown_remaining > 0) or (btn.locked_reason and btn.locked_reason ~= "") then
+        btn.is_aiming = false
+        btn.is_cancelled = false
+        btn.aim_dx = 0
+        btn.aim_dy = 0
+    end
+end
+
+function VirtualJoystick.get_skill_state(slot)
+    local btn = skill_buttons[slot]
+    if not btn then return nil end
+    return {
+        enabled = btn.enabled,
+        skill_name = btn.skill_name,
+        label = btn.skill_label,
+        action_cooldown = btn.action_cooldown,
+        cooldown_remaining = btn.cooldown_remaining,
+        cooldown_duration = btn.cooldown_duration,
+        locked_reason = btn.locked_reason,
+    }
+end
+
+function VirtualJoystick.reset_cooldowns()
+    for _, btn in ipairs(skill_buttons) do
+        btn.last_action_time = 0
+        btn.cooldown_remaining = 0
+        btn.cooldown_duration = 0
+        btn.locked_reason = nil
     end
 end
 
@@ -558,7 +708,7 @@ end
 for slot = 1, 4 do
     VirtualJoystick["is_skill_" .. slot .. "_active"] = function() return VirtualJoystick.is_skill_active(slot) end
     VirtualJoystick["can_trigger_skill_" .. slot] = function(t) return VirtualJoystick.can_trigger_skill(slot, t) end
-    VirtualJoystick["trigger_skill_" .. slot] = function(t) return VirtualJoystick.trigger_skill(slot, t) end
+    VirtualJoystick["trigger_skill_" .. slot] = function(t, cd) return VirtualJoystick.trigger_skill(slot, t, cd) end
 end
 
 function VirtualJoystick.reset()
@@ -574,6 +724,14 @@ function VirtualJoystick.reset()
         btn.aim_dy = 0
         btn.passed_deadzone = false
         btn.is_cancelled = false
+        btn.enabled = true
+        btn.skill_name = nil
+        btn.skill_label = nil
+        btn.action_cooldown = 0.5
+        btn.last_action_time = 0
+        btn.cooldown_remaining = 0
+        btn.cooldown_duration = 0
+        btn.locked_reason = nil
     end
     VirtualJoystick.release_events = nil
     hud_events = nil
