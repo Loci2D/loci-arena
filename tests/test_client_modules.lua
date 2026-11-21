@@ -151,11 +151,20 @@ run_test("VirtualJoystick drag-to-aim, cancellation, quick tap, and non-aiming b
     events = VJ.pop_release_events()
     assert(#events == 1 and events[1].was_aiming == false and events[1].is_cancelled == false)
 
-    -- 4. Non-aiming button 1 (1152, 612, r=75) cancels when dragged outside radius
+    -- 4. Botão 1 (hold_to_cast): permanece ativo mesmo arrastando para fora do raio
+    --    (ataque contínuo enquanto segurado); botão 2 sem aiming cancela ao sair do raio
     assert(VJ.handle_mousepressed(1152, 612, 1) == true)
     assert(VJ.is_skill_1_active() == true)
     VJ.handle_mousemoved(1152 + 100, 612)
-    assert(VJ.is_skill_1_active() == false, "button without aiming must deactivate when dragged outside radius")
+    assert(VJ.is_skill_1_active() == true, "button 1 hold_to_cast must stay active while held")
+    VJ.handle_mousereleased(1152 + 100, 612, 1)
+    assert(VJ.is_skill_1_active() == false, "button 1 must deactivate on release")
+
+    -- Botão 2 (sem aiming e sem hold_to_cast) desativa ao sair do raio
+    assert(VJ.handle_mousepressed(1152, 432, 1) == true)
+    assert(VJ.is_skill_2_active() == true)
+    VJ.handle_mousemoved(1152 + 100, 432)
+    assert(VJ.is_skill_2_active() == false, "button without aiming must deactivate when dragged outside radius")
     assert(VJ.handle_mousepressed(1152, 612, 2) == false, "right-click must be ignored")
 end)
 
@@ -347,6 +356,98 @@ run_test("ConnectScreen invokes love.keyboard.setTextInput(true/false) on focus 
     assert(text_input_calls[#text_input_calls] == false, "setTextInput(false) called when blurred")
 
     _G.love = prev_love
+end)
+
+-- ---------------------------------------------------------------------------
+-- 8. AutoAim: mira automática no inimigo vivo mais próximo
+-- ---------------------------------------------------------------------------
+run_test("AutoAim targets nearest living enemy of another team within range", function()
+    package.loaded["auto_aim"] = nil
+    local AutoAim = require("auto_aim")
+
+    local function ent(id, x, y, team, is_dead, entity_type)
+        return {
+            id = id, x = x, y = y,
+            team = team,
+            is_dead = is_dead,
+            properties = entity_type and { entity_type = entity_type } or nil,
+        }
+    end
+
+    local me = ent(1, 0, 0, "1", false)
+    local entities = {
+        me,
+        ent(2, 0, 10, "2", false),   -- inimigo a 10u (norte)
+        ent(3, 30, 0, "2", false),   -- inimigo mais longe a 30u (leste)
+        ent(4, 0, -8, "1", false),   -- aliado mais perto: ignorado
+        ent(5, 0, 5, "2", true),     -- inimigo morto: ignorado
+        ent(6, 0, 4, "2", false, "projectile"), -- não-jogador: ignorado
+        ent(7, 0, 6, nil, false),    -- sem time: ignorado
+    }
+
+    -- Inimigo válido mais próximo é o id 2 (dist 10 < 30)
+    local target = AutoAim.find_nearest_enemy(me, entities, 20)
+    assert(target and target.id == 2, "nearest enemy must be entity 2, got " .. tostring(target and target.id))
+
+    -- Vetor normalizado aponta para (0, +1)
+    local dx, dy = AutoAim.aim_at_nearest_enemy(me, entities, 20)
+    assert_near(dx, 0.0, 1e-6, "aim dx")
+    assert_near(dy, 1.0, 1e-6, "aim dy")
+
+    -- Diagonal normalizada
+    entities[2].x, entities[2].y = 30, 40
+    entities[3].x, entities[3].y = 300, 0 -- fora de qualquer range
+    dx, dy = AutoAim.aim_at_nearest_enemy(me, entities, 100)
+    assert_near(dx, 0.6, 1e-6, "diagonal aim dx")
+    assert_near(dy, 0.8, 1e-6, "diagonal aim dy")
+
+    -- Fora de alcance -> nil (fallback do chamador assume)
+    dx, dy = AutoAim.aim_at_nearest_enemy(me, entities, 10)
+    assert(dx == nil and dy == nil, "out of range must return nil")
+
+    -- Sem time próprio -> nunca mira (não dá para distinguir inimigos)
+    local teamless = ent(9, 0, 0, nil, false)
+    assert(AutoAim.find_nearest_enemy(teamless, entities, 100) == nil, "caster without team must not aim")
+
+    -- Alvo na mesma posição do caster -> nil (vetor degenerado)
+    local stacked = ent(10, 0, 0, "2", false)
+    assert(AutoAim.aim_at_nearest_enemy(me, { me, stacked }, 50) == nil, "stacked target must not aim")
+
+    -- Suporta entidades com API ent:get(key) (estilo SDK do cliente)
+    local sdk_me = {
+        id = 20, x = 0, y = 0,
+        get = function(_, key)
+            return ({ team = "1", is_dead = "false" })[key]
+        end,
+    }
+    local sdk_enemy = {
+        id = 21, x = 0, y = -12,
+        get = function(_, key)
+            return ({ team = "2", is_dead = "false" })[key]
+        end,
+    }
+    dx, dy = AutoAim.aim_at_nearest_enemy(sdk_me, { sdk_me, sdk_enemy }, 20)
+    assert_near(dx, 0.0, 1e-6, "sdk aim dx")
+    assert_near(dy, -1.0, 1e-6, "sdk aim dy")
+
+    -- Suporta tabelas de entidades associativas/mapas indexadas por ID (pairs)
+    local map_entities = {
+        [99] = me,
+        [101] = ent(101, 0, 15, "2", false),
+        [102] = ent(102, 50, 0, "2", false),
+    }
+    local map_target = AutoAim.find_nearest_enemy(me, map_entities, 50)
+    assert(map_target and map_target.id == 101, "map_entities must target id 101")
+
+    -- Caster ou inimigo com time vazio ("") -> ignorado
+    local empty_team_me = ent(30, 0, 0, "", false)
+    assert(AutoAim.find_nearest_enemy(empty_team_me, entities, 100) == nil, "caster with empty team must not aim")
+    local empty_team_enemy = ent(31, 0, 5, "", false)
+    assert(AutoAim.find_nearest_enemy(me, { me, empty_team_enemy }, 50) == nil, "enemy with empty team must not be aimed")
+
+    -- Inimigo com hp <= 0 é ignorado como morto mesmo sem is_dead explícito
+    local hp_zero_enemy = { id = 32, x = 0, y = 5, team = "2", hp = 0 }
+    assert(AutoAim.find_nearest_enemy(me, { me, hp_zero_enemy }, 50) == nil, "enemy with hp <= 0 must be ignored as dead")
 end)
 
 print(string.format("\n>>> Phase 4: All %d Client Module unit tests passed! <<<", passed))

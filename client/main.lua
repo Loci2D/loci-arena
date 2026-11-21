@@ -20,6 +20,7 @@ local sprite_anim = require("src.sprite_anim")
 local MovementSync = require("src.movement_sync")
 local AudioSystem = require("src.audio_system")
 local SkillRanges = require("src.skill_ranges")
+local AutoAim = require("src.auto_aim")
 local SessionStore = require("src.session_store")
 local ConnectScreen = require("src.ui.connect_screen")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
@@ -120,7 +121,10 @@ end
 
 local function get_entity_skill_by_slot(entity, slot_index)
     if not entity or not slot_index then return nil end
-    local list_str = entity:get("skills_list", "")
+    local list_str = (type(entity.get) == "function" and entity:get("skills_list", ""))
+        or entity.skills_list
+        or (entity.properties and entity.properties["skills_list"])
+        or ""
     if not list_str or list_str == "" then return nil end
 
     local idx = 1
@@ -314,7 +318,30 @@ local cooldown_slots = {
     [4] = { active = false, start_time = 0, duration = 0 },
 }
 
+-- Gate de cast por slot (tempo do cliente): evita spam de ações rejeitadas pelo
+-- servidor quando uma habilidade é segurada (hold-to-cast) com cooldown > 0.5s.
+local skill_cast_gate = {}
+
 local respawn_state = { active = false, start_time = 0, duration = RESPAWN_DURATION_SECONDS }
+
+-- Última direção de movimento conhecida (fallback de mira quando não há input atual)
+local last_move_dir_x, last_move_dir_y = 0, -1
+
+local function normalize_dir(dx, dy, min_len)
+    local ax, ay = dx or 0, dy or 0
+    local len = math.sqrt(ax * ax + ay * ay)
+    if len > (min_len or 1e-6) then
+        return ax / len, ay / len
+    end
+    return nil
+end
+
+local function update_last_move_dir(dx, dy)
+    local ndx, ndy = normalize_dir(dx, dy, 0.01)
+    if ndx then
+        last_move_dir_x, last_move_dir_y = ndx, ndy
+    end
+end
 
 local function get_client_time()
     return (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
@@ -325,6 +352,7 @@ local function reset_cooldown_slots()
         cooldown_slots[slot].active = false
         cooldown_slots[slot].start_time = 0
         cooldown_slots[slot].duration = 0
+        skill_cast_gate[slot] = nil
     end
 end
 
@@ -782,9 +810,64 @@ end
 
 local function update_movement(my_entity)
     local dx, dy = read_move_input()
+    update_last_move_dir(dx, dy)
     local cur_tick = tonumber(loci._last_state_tick) or 0
     local now = (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
     movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
+end
+
+-- Alcance de detecção de auto-aim para o slot:
+-- Para o ataque básico (slot 1), utiliza alcance de detecção amplo (estilo MOBA,
+-- DEFAULT_MAX_RANGE = 64.0) para que o herói corpo a corpo (ex: Arya) sempre
+-- vire e ataque na direção do alvo enquanto se aproxima, evitando golpear no vazio.
+-- Para as demais habilidades (slots 2-4), utiliza o alcance autoritativo da skill
+-- com fallback para o alcance padrão.
+local function auto_aim_range_for_slot(my_entity, slot)
+    local skill_name = get_entity_skill_by_slot(my_entity, slot)
+    local range = skill_name and SkillRanges.range(skill_name) or nil
+    if slot == 1 then
+        return math.max(range or 0, AutoAim.DEFAULT_MAX_RANGE)
+    end
+    return (range and range > 0) and range or AutoAim.DEFAULT_MAX_RANGE
+end
+
+-- Resolve a direção de mira para casts rápidos (sem aim manual explícita):
+-- 1) inimigo vivo mais próximo de outro time dentro do alcance da habilidade do slot;
+-- 2) direção de movimento atual (joystick/teclado);
+-- 3) última direção de movimento conhecida (padrão norte quando nunca se moveu).
+local function resolve_quick_cast_aim(my_entity, slot)
+    local dx, dy = AutoAim.aim_at_nearest_enemy(my_entity, loci.get_entities(), auto_aim_range_for_slot(my_entity, slot))
+    if dx then
+        return dx, dy
+    end
+
+    local move_dx, move_dy = read_move_input()
+    local ndx, ndy = normalize_dir(move_dx, move_dy)
+    if ndx then
+        return ndx, ndy
+    end
+
+    return last_move_dir_x, last_move_dir_y
+end
+
+-- Ataque básico (slot 1) compartilhado entre touch (botão 1 segurado) e
+-- teclado (Espaço segurado): dispara no ritmo do cooldown da skill, com
+-- auto-aim no inimigo mais próximo e fallback de direção de movimento.
+-- `use_button_gate` aplica também o cooldown interno do botão virtual.
+local function cast_basic_attack(my_entity, now, use_button_gate)
+    if now < (skill_cast_gate[1] or 0) then return end
+    if use_button_gate then
+        if not virtual_joystick.can_trigger_skill(1, now) then return end
+        virtual_joystick.trigger_skill(1, now)
+    end
+
+    local skill_name = get_entity_skill_by_slot(my_entity, 1)
+    local meta = skill_name and SKILL_HUD_META[skill_name]
+    local cast_interval = (meta and meta.cooldown and meta.cooldown > 0) and meta.cooldown or 0.5
+    skill_cast_gate[1] = now + cast_interval
+
+    local action_dx, action_dy = resolve_quick_cast_aim(my_entity, 1)
+    loci.send_action(1, action_dx, action_dy)
 end
 
 function love.update(dt)
@@ -857,20 +940,19 @@ function love.update(dt)
         if not is_dead and show_touch_controls then
             local now = love.timer.getTime()
 
-            -- Botões 1 e 2: comportamento original (disparo imediato ao pressionar)
-            for slot = 1, 2 do
-                if virtual_joystick.is_skill_active(slot) and virtual_joystick.can_trigger_skill(slot, now) then
-                    virtual_joystick.trigger_skill(slot, now)
+            -- Botão 1: ataque básico com mira automática no inimigo mais próximo.
+            -- Segurar o botão mantém o personagem atacando (hold-to-cast) no ritmo
+            -- do cooldown da skill; cada disparo reavalia o alvo mais próximo.
+            -- Fallback de mira: direção de movimento/última direção.
+            if virtual_joystick.is_skill_active(1) then
+                cast_basic_attack(my_entity, now, true)
+            end
 
-                    -- Usar a direção do joystick de movimento, ou direção padrão se parado
-                    local action_dx, action_dy = virtual_joystick.get_move_vector()
-                    if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
-                        action_dx, action_dy = 0, -1
-                    end
-
-                    -- Direção de mira enviada diretamente via vetor do joystick
-                    loci.send_action(slot, action_dx, action_dy)
-                end
+            -- Botão 2: quick cast com mira automática no inimigo mais próximo no alcance da skill (fallback: movimento)
+            if virtual_joystick.is_skill_active(2) and virtual_joystick.can_trigger_skill(2, now) then
+                virtual_joystick.trigger_skill(2, now)
+                local action_dx, action_dy = resolve_quick_cast_aim(my_entity, 2)
+                loci.send_action(2, action_dx, action_dy)
             end
 
             -- Botões 3 e 4: sempre disparam no release (drag-to-aim)
@@ -888,11 +970,8 @@ function love.update(dt)
                             -- Release-to-cast: usar direção do arrasto
                             action_dx, action_dy = event.aim_dx, event.aim_dy
                         else
-                            -- Quick tap: usar direção do joystick de movimento, ou padrão se parado
-                            action_dx, action_dy = virtual_joystick.get_move_vector()
-                            if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
-                                action_dx, action_dy = 0, -1
-                            end
+                            -- Quick tap: mira automática no inimigo mais próximo no alcance da skill (fallback: movimento)
+                            action_dx, action_dy = resolve_quick_cast_aim(my_entity, slot)
                         end
 
                         loci.send_action(slot, action_dx, action_dy)
@@ -904,6 +983,11 @@ function love.update(dt)
             if is_dead and show_touch_controls then
                 virtual_joystick.pop_release_events()
             end
+        end
+
+        -- Segurar Espaço = ataque básico contínuo com auto-aim (paridade com o botão 1 touch)
+        if not is_dead and love.keyboard.isDown("space") then
+            cast_basic_attack(my_entity, love.timer.getTime(), false)
         end
     else
         movement_sync:on_entity_missing()
@@ -1066,8 +1150,6 @@ function love.keypressed(key)
         end
     elseif key == "tab" then
         kda_ui.show()
-    elseif key == "space" then
-        cast_ability_at_mouse(1)
     elseif key == "q" then
         cast_ability_at_mouse(2)
     elseif key == "e" then
