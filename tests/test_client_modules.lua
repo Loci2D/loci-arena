@@ -243,6 +243,24 @@ run_test("VirtualJoystick cooldowns and push coordinate transform", function()
     assert(VJ.can_trigger_skill(4, 20.0) == false, "disabled/unequipped slot must not trigger")
     assert(VJ.handle_touchpress("t_dis", 960, 612) == true)
     assert(VJ.is_skill_active(4) == false, "disabled slot must consume touch without activating")
+
+    -- Slot with locked_reason ("MANA" or "BLOQ.") must block trigger and drag-to-aim
+    VJ.sync_skill_slot(2, {
+        enabled = true,
+        skill_name = "fury_reward",
+        label = "Fúria",
+        cooldown = 5.0,
+        cooldown_remaining = 0,
+        locked_reason = "BLOQ.",
+    })
+    assert(VJ.can_trigger_skill(2, 30.0) == false, "slot with locked_reason must block trigger")
+    local st2 = VJ.get_skill_state(2)
+    assert(st2.locked_reason == "BLOQ.", "locked_reason must be preserved in state")
+    assert(VJ.handle_touchpress("t_lock_drag", 1152, 432) == true)
+    VJ.handle_touchmove("t_lock_drag", 1152 + 60, 432)
+    assert(VJ.is_aiming(2) == false, "locked slot must not enter drag-to-aim")
+    VJ.handle_touchrelease("t_lock_drag")
+    VJ.pop_release_events()
 end)
 
 -- ----------------------------------------------------------------------------

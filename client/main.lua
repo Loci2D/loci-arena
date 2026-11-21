@@ -386,7 +386,7 @@ local function get_slot_cooldown_remaining(slot, current_time)
     return rem
 end
 
-local function has_living_team_allies(my_entity)
+local function has_team_allies(my_entity)
     if not my_entity then return false end
     local my_team = tostring((my_entity.get and my_entity:get("team")) or my_entity.team or "1")
     local all_entities = (loci.get_entities and loci.get_entities()) or {}
@@ -425,7 +425,7 @@ local function sync_virtual_joystick_slots(my_entity, current_time)
         if skill_name then
             if skill_name == "fury_reward" and not fury_active then
                 if has_allies == nil then
-                    has_allies = has_living_team_allies(my_entity)
+                    has_allies = has_team_allies(my_entity)
                 end
                 if has_allies then
                     locked_reason = "BLOQ."
@@ -1757,8 +1757,6 @@ function love.draw()
 
     -- Draw aim indicator (drag-to-aim) dinâmico conforme o personagem e skills_list ativos
     if my_entity and show_touch_controls then
-        sync_virtual_joystick_slots(my_entity, get_client_time())
-
         for slot = 1, 4 do
             local aim_skill = SkillRanges.resolve_entity_skill(my_entity, slot)
             local skill_range_world = aim_skill and SkillRanges.range(aim_skill) or nil

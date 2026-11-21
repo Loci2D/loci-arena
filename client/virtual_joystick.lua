@@ -211,6 +211,9 @@ function ActionButton:can_trigger_action(t)
     if not self.enabled then
         return false
     end
+    if self.locked_reason ~= nil and self.locked_reason ~= "" then
+        return false
+    end
     if self.cooldown_remaining and self.cooldown_remaining > 0 then
         return false
     end
@@ -239,7 +242,7 @@ end
 
 function ActionButton:handle_move(x, y, touch_id)
     if self.active and self.touch_id == touch_id then
-        if not self.enabled or (self.cooldown_remaining and self.cooldown_remaining > 0) then
+        if not self.enabled or (self.cooldown_remaining and self.cooldown_remaining > 0) or (self.locked_reason and self.locked_reason ~= "") then
             self.is_aiming = false
             self.is_cancelled = false
             self.aim_dx = 0
@@ -670,7 +673,7 @@ function VirtualJoystick.sync_skill_slot(slot, state)
     end
     btn.locked_reason = state.locked_reason
 
-    if not btn.enabled or (btn.cooldown_remaining and btn.cooldown_remaining > 0) then
+    if not btn.enabled or (btn.cooldown_remaining and btn.cooldown_remaining > 0) or (btn.locked_reason and btn.locked_reason ~= "") then
         btn.is_aiming = false
         btn.is_cancelled = false
         btn.aim_dx = 0
