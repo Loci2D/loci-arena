@@ -1953,6 +1953,61 @@ function draw_arena_grid()
     love.graphics.line(0, -20, 0, 20)
     love.graphics.setColor(0.6, 0.75, 0.9, 0.6)
     love.graphics.print("(0, 0)", 6, 6)
+
+    -- Draw arena obstacles
+    draw_arena_obstacles()
+end
+
+function draw_arena_obstacles()
+    -- Obstáculos da arena (correspondem ao server/scripts/default_arena/data/arena_obstacles.lua)
+    -- Paredes horizontais (cobertura tática)
+    love.graphics.setColor(0.25, 0.35, 0.45, 0.85)
+    love.graphics.setLineWidth(2)
+
+    -- wall_center_1 (parede horizontal superior) - position é o centro, Love2D usa canto superior esquerdo
+    love.graphics.rectangle("fill", (-30 - 30) * VISUAL_SCALE, (-200 - 5) * VISUAL_SCALE, 60 * VISUAL_SCALE, 10 * VISUAL_SCALE)
+    love.graphics.setColor(0.4, 0.5, 0.6, 0.95)
+    love.graphics.rectangle("line", (-30 - 30) * VISUAL_SCALE, (-200 - 5) * VISUAL_SCALE, 60 * VISUAL_SCALE, 10 * VISUAL_SCALE)
+
+    -- wall_center_2 (parede horizontal inferior)
+    love.graphics.setColor(0.25, 0.35, 0.45, 0.85)
+    love.graphics.rectangle("fill", (-30 - 30) * VISUAL_SCALE, (200 - 5) * VISUAL_SCALE, 60 * VISUAL_SCALE, 10 * VISUAL_SCALE)
+    love.graphics.setColor(0.4, 0.5, 0.6, 0.95)
+    love.graphics.rectangle("line", (-30 - 30) * VISUAL_SCALE, (200 - 5) * VISUAL_SCALE, 60 * VISUAL_SCALE, 10 * VISUAL_SCALE)
+
+    -- Pilares nos cantos (cobertura)
+    love.graphics.setColor(0.30, 0.40, 0.50, 0.85)
+    love.graphics.setLineWidth(2)
+
+    -- pillar_nw (pilar noroeste)
+    love.graphics.circle("fill", (-400) * VISUAL_SCALE, (-400) * VISUAL_SCALE, 30 * VISUAL_SCALE)
+    love.graphics.setColor(0.5, 0.6, 0.7, 0.95)
+    love.graphics.circle("line", (-400) * VISUAL_SCALE, (-400) * VISUAL_SCALE, 30 * VISUAL_SCALE)
+
+    -- pillar_ne (pilar nordeste)
+    love.graphics.setColor(0.30, 0.40, 0.50, 0.85)
+    love.graphics.circle("fill", (400) * VISUAL_SCALE, (-400) * VISUAL_SCALE, 30 * VISUAL_SCALE)
+    love.graphics.setColor(0.5, 0.6, 0.7, 0.95)
+    love.graphics.circle("line", (400) * VISUAL_SCALE, (-400) * VISUAL_SCALE, 30 * VISUAL_SCALE)
+
+    -- pillar_sw (pilar sudoeste)
+    love.graphics.setColor(0.30, 0.40, 0.50, 0.85)
+    love.graphics.circle("fill", (-400) * VISUAL_SCALE, (400) * VISUAL_SCALE, 30 * VISUAL_SCALE)
+    love.graphics.setColor(0.5, 0.6, 0.7, 0.95)
+    love.graphics.circle("line", (-400) * VISUAL_SCALE, (400) * VISUAL_SCALE, 30 * VISUAL_SCALE)
+
+    -- pillar_se (pilar sudeste)
+    love.graphics.setColor(0.30, 0.40, 0.50, 0.85)
+    love.graphics.circle("fill", (400) * VISUAL_SCALE, (400) * VISUAL_SCALE, 30 * VISUAL_SCALE)
+    love.graphics.setColor(0.5, 0.6, 0.7, 0.95)
+    love.graphics.circle("line", (400) * VISUAL_SCALE, (400) * VISUAL_SCALE, 30 * VISUAL_SCALE)
+
+    -- Caixa central (destrutível no futuro)
+    love.graphics.setColor(0.45, 0.35, 0.25, 0.85)
+    love.graphics.setLineWidth(2)
+    love.graphics.rectangle("fill", (-15 - 15) * VISUAL_SCALE, (-15 - 15) * VISUAL_SCALE, 30 * VISUAL_SCALE, 30 * VISUAL_SCALE)
+    love.graphics.setColor(0.6, 0.5, 0.4, 0.95)
+    love.graphics.rectangle("line", (-15 - 15) * VISUAL_SCALE, (-15 - 15) * VISUAL_SCALE, 30 * VISUAL_SCALE, 30 * VISUAL_SCALE)
 end
 
 local TEAM_SHADOW_COLORS = {
