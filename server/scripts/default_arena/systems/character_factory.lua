@@ -360,6 +360,13 @@ function CharacterFactory.execute_skill(entity_id, skill_name, aim_x, aim_y)
         local existing_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
         local new_until = math.max(existing_until, current_tick + cast_lock_ticks)
         Loci.Commands.set_property(entity_id, "casting_until", tostring(new_until))
+        -- Um golpe com cast lock encerra o dash por completo: zerar só a
+        -- velocidade deixaria dashing_until ativo e o jogador congelado até
+        -- o fim do dash sem impulso físico.
+        local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
+        if current_tick < dashing_until then
+            Loci.Commands.set_property(entity_id, "dashing_until", "0")
+        end
         Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
     end
 

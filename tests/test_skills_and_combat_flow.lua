@@ -586,4 +586,31 @@ run_test("whirlwind_dash cancels an active casting_until and does not freeze aft
     assert(p1.vx > 0, "movement must resume right after dash ends, got vx=" .. tostring(p1.vx))
 end)
 
+run_test("casting a locked skill during whirlwind_dash ends dashing_until entirely", function()
+    local env = make_server_env(true)
+    local p1 = env.join_player(1, 0, 0)    -- Time 1 (Arya)
+    local p2 = env.join_player(2, 0, -40)  -- Time 2, em outra faixa
+
+    env.step_ticks(1, 5)
+
+    -- Whirlwind dash (slot 3) no tick 5 -> dashing_until = 11
+    with_fixed_random(0.99, function()
+        assert(on_action(1, 3, 1, 0) == true)
+    end)
+    assert(tostring(p1.props.dashing_until) == "11")
+
+    -- Slash (slot 1) ainda no tick 5: cast lock encerra o dash por completo
+    with_fixed_random(0.99, function()
+        assert(on_action(1, 1, 1, 0) == true)
+    end)
+    assert(p1.props.casting_until == "14", "slash cast lock = 5 + 9")
+    assert(p1.props.dashing_until == "0", "cast-lock skill must clear dashing_until, not just zero velocity")
+    assert(p1.vx == 0 and p1.vy == 0)
+
+    -- Após o cast lock expirar (tick 14), movimento normal de caminhada — sem dash residual
+    env.step_ticks(6, 14)
+    assert(on_move_intent(1, 1, 0) == true)
+    assert_near(p1.vx, 2.2, 1e-4, "walk speed resumes after cast lock, no dash remnant")
+end)
+
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))
