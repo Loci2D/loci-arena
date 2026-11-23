@@ -560,4 +560,30 @@ run_test("on_move_intent/on_tick root the caster during casting_until and resume
     assert(p1.vx > 5, "dash velocity must prevail during whirlwind_dash, got vx=" .. tostring(p1.vx))
 end)
 
+run_test("whirlwind_dash cancels an active casting_until and does not freeze after the dash", function()
+    local env = make_server_env(true)
+    local p1 = env.join_player(1, 0, 0)    -- Time 1 (Arya)
+    local p2 = env.join_player(2, 0, -40)  -- Time 2, em outra faixa para não colidir
+
+    env.step_ticks(1, 5)
+
+    -- Fury reward (slot 2) no tick 5 -> casting_until = 29 (5 + 24)
+    with_fixed_random(0.99, function()
+        assert(on_action(1, 2, 1, 0) == true)
+    end)
+    assert(p1.props.casting_until == "29")
+
+    -- Whirlwind dash (slot 3) ainda no tick 5: mobilidade cancela o cast lock
+    with_fixed_random(0.99, function()
+        assert(on_action(1, 3, 1, 0) == true)
+    end)
+    assert(p1.props.casting_until == "0", "whirlwind_dash must clear casting_until")
+    assert(tostring(p1.props.dashing_until) == "11", "dash must last 6 ticks (5 + 6)")
+
+    -- Fim do dash no tick 11: o lock restante de fury_reward não pode congelar o jogador
+    env.step_ticks(6, 11)
+    assert(on_move_intent(1, 1, 0) == true)
+    assert(p1.vx > 0, "movement must resume right after dash ends, got vx=" .. tostring(p1.vx))
+end)
+
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

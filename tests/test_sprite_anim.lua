@@ -226,7 +226,7 @@ run_test("SpriteAnim.trigger_action initializes before update and preserves aim 
     end
 end)
 
-run_test("SpriteAnim slash cancels into locomotion on movement while fury_reward stays locked", function()
+run_test("SpriteAnim slash cancels into locomotion on movement while whirlwind_dash stays locked", function()
     setup_love_mock()
     package.loaded["src.sprite_anim"] = nil
     local SpriteAnim = require("src.sprite_anim")
@@ -265,8 +265,8 @@ run_test("SpriteAnim slash cancels into locomotion on movement while fury_reward
     assert(cancel_img.path:find("correndo/animations/east/") or cancel_img.path:find("andando/animations/east/"),
         "slash must cancel into locomotion when moving, got " .. tostring(cancel_img and cancel_img.path))
 
-    -- Fury reward (não cancelável): continua bloqueado mesmo em movimento
-    SpriteAnim.trigger_action(51, "fury_reward", 2, 1, 0, "arya")
+    -- Whirlwind dash (não cancelável): continua bloqueado mesmo em movimento
+    SpriteAnim.trigger_action(51, "whirlwind_dash", 3, 1, 0, "arya")
     SpriteAnim.update(0.05, 51, {
         character_name = "arya",
         direction = "east",
@@ -275,8 +275,8 @@ run_test("SpriteAnim slash cancels into locomotion on movement while fury_reward
         is_dead = false
     })
     local locked_img = SpriteAnim.get_frame({ entity_id = 51, character_name = "arya" })
-    assert(locked_img.path:find("Habilidade_2/animations/east/"),
-        "fury_reward must remain locked while moving, got " .. tostring(locked_img and locked_img.path))
+    assert(locked_img.path:find("Habilidade_3/animations/east/"),
+        "whirlwind_dash must remain locked while moving, got " .. tostring(locked_img and locked_img.path))
 end)
 
 run_test("SpriteAnim.trigger_ally_death plays 18-frame sequence over 3.0s accurately", function()

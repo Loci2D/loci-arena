@@ -55,12 +55,15 @@ local MAX_IMAGE_CACHE = 512
 local SPRITE_BASE_SIZE = 32
 
 -- Skills cuja animação de ataque pode ser cancelada por input de movimento
--- (animation canceling). O cast lock autoritativo do servidor (casting_until)
--- é mais curto que a animação nesses casos; ao expirar, andar interrompe o
--- recovery em vez de deslizar reproduzindo o golpe. Demais golpes esperam a
--- animação terminar (o servidor os enraíza pela duração total).
+-- (animation canceling). Quando o cast lock do servidor é mais curto que a
+-- animação — ou é cancelado por uma skill de mobilidade (ex.: whirlwind_dash
+-- no meio de fury_reward) — andar interrompe o recovery em vez de deslizar
+-- reproduzindo o golpe. whirlwind_dash não é cancelável: o próprio dash é
+-- a mobilidade da habilidade.
 local CANCELABLE_ATTACK_SKILLS = {
     slash = true,
+    fury_reward = true,
+    blade_throw = true,
 }
 
 -- Frames mínimos da animação antes de aceitar cancelamento por movimento.
