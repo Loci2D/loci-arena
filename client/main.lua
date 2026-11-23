@@ -1170,7 +1170,8 @@ local function draw_hotbar(my_entity)
 
             if is_on_cooldown then
                 love.graphics.setColor(0.95, 0.85, 0.4, 1)
-                love.graphics.print(string.format("%.1fs", cd_remaining), x + 5, y + 20)
+                -- Formato compacto: "13s" em vez de "13.8s" para caber no botão
+                love.graphics.print(string.format("%.0fs", cd_remaining), x + 5, y + 20)
             elseif no_mana then
                 love.graphics.setColor(0.65, 0.75, 1.0, 0.95)
                 love.graphics.print("MANA", x + 5, y + 20)
@@ -1574,6 +1575,9 @@ function draw_arena_grid()
         love.graphics.line(v_min, y, v_max, y)
     end
 
+    -- Desenhar obstáculos visuais (placeholder até API física estar disponível)
+    draw_arena_obstacles()
+
     -- Outer collision barrier glow
     love.graphics.setColor(0.25, 0.55, 0.95, 0.25)
     love.graphics.setLineWidth(5)
@@ -1591,6 +1595,43 @@ function draw_arena_grid()
     love.graphics.line(0, -20, 0, 20)
     love.graphics.setColor(0.6, 0.75, 0.9, 0.6)
     love.graphics.print("(0, 0)", 6, 6)
+end
+
+function draw_arena_obstacles()
+    -- Obstáculos visuais placeholder (não há colisão física ainda)
+    -- Paredes centrais
+    love.graphics.setColor(0.25, 0.30, 0.40, 0.8)
+    love.graphics.setLineWidth(3)
+
+    -- Parede horizontal superior
+    love.graphics.rectangle("fill", -30 * VISUAL_SCALE, -200 * VISUAL_SCALE, 60 * VISUAL_SCALE, 20 * VISUAL_SCALE)
+    love.graphics.setColor(0.35, 0.40, 0.50, 0.9)
+    love.graphics.rectangle("line", -30 * VISUAL_SCALE, -200 * VISUAL_SCALE, 60 * VISUAL_SCALE, 20 * VISUAL_SCALE)
+
+    -- Parede horizontal inferior
+    love.graphics.setColor(0.25, 0.30, 0.40, 0.8)
+    love.graphics.rectangle("fill", -30 * VISUAL_SCALE, 200 * VISUAL_SCALE, 60 * VISUAL_SCALE, 20 * VISUAL_SCALE)
+    love.graphics.setColor(0.35, 0.40, 0.50, 0.9)
+    love.graphics.rectangle("line", -30 * VISUAL_SCALE, 200 * VISUAL_SCALE, 60 * VISUAL_SCALE, 20 * VISUAL_SCALE)
+
+    -- Pilares nos cantos
+    love.graphics.setColor(0.30, 0.35, 0.45, 0.8)
+    local pillar_radius = 25 * VISUAL_SCALE
+    local pillar_positions = {
+        {-350, -350}, {350, -350}, {-350, 350}, {350, 350}
+    }
+    for _, pos in ipairs(pillar_positions) do
+        love.graphics.circle("fill", pos[1] * VISUAL_SCALE, pos[2] * VISUAL_SCALE, pillar_radius)
+        love.graphics.setColor(0.40, 0.45, 0.55, 0.9)
+        love.graphics.circle("line", pos[1] * VISUAL_SCALE, pos[2] * VISUAL_SCALE, pillar_radius)
+        love.graphics.setColor(0.30, 0.35, 0.45, 0.8)
+    end
+
+    -- Caixa central
+    love.graphics.setColor(0.35, 0.25, 0.15, 0.8)
+    love.graphics.rectangle("fill", -15 * VISUAL_SCALE, -15 * VISUAL_SCALE, 30 * VISUAL_SCALE, 30 * VISUAL_SCALE)
+    love.graphics.setColor(0.45, 0.35, 0.25, 0.9)
+    love.graphics.rectangle("line", -15 * VISUAL_SCALE, -15 * VISUAL_SCALE, 30 * VISUAL_SCALE, 30 * VISUAL_SCALE)
 end
 
 local TEAM_SHADOW_COLORS = {

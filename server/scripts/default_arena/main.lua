@@ -70,6 +70,17 @@ end
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("systems.character_factory")
 local RespawnSystem = require("respawn_system")
+local ArenaObstacles = require("data.arena_obstacles")
+
+-- Inicializa obstáculos estáticos da arena (adiado para Loci estar disponível)
+local obstacles_initialized = false
+
+local function ensure_obstacles_initialized()
+    if not obstacles_initialized and Loci and Loci.Commands then
+        ArenaObstacles.spawn_all()
+        obstacles_initialized = true
+    end
+end
 
 local function is_player_alive(entity_id)
     if not connected_players[entity_id] then return false end
@@ -197,6 +208,9 @@ function on_tick(current_tick)
 end
 
 function on_player_join(entity_id)
+    -- Inicializa obstáculos na primeira vez que um jogador entra
+    ensure_obstacles_initialized()
+
     -- Proteção contra chamadas duplicadas ([Join] inicial seguido por [Session] re-joined)
     local existing_record = connected_players[entity_id]
     local existing_prop_team = (Loci and Loci.get_entity_property) and Loci.get_entity_property(entity_id, "team") or nil
@@ -575,5 +589,23 @@ function on_player_leave(entity_id)
 
     CharacterFactory.on_entity_remove(entity_id)
     RespawnSystem.cleanup(entity_id)
+    Loci.Commands.destroy_entity(entity_id)
+end
+
+-- Callback para colisão de projéteis com obstáculos estáticos
+function on_static_collision(entity_id, nx, ny)
+    if Loci and Loci.Log then
+        Loci.Log.info("[Arena] Projétil " .. tostring(entity_id) .. " colidiu com obstáculo estático")
+    end
+    -- Destruir projétil ao colidir com obstáculo
+    Loci.Commands.destroy_entity(entity_id)
+end
+
+-- Callback para colisão de projéteis com limites da arena
+function on_boundary_collision(entity_id, nx, ny)
+    if Loci and Loci.Log then
+        Loci.Log.info("[Arena] Projétil " .. tostring(entity_id) .. " colidiu com limite da arena")
+    end
+    -- Destruir projétil ao colidir com limite da arena
     Loci.Commands.destroy_entity(entity_id)
 end
