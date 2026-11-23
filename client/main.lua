@@ -18,6 +18,7 @@ local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
 local sprite_anim = require("src.sprite_anim")
 local MovementSync = require("src.movement_sync")
+local LocalPrediction = require("src.local_prediction")
 local AudioSystem = require("src.audio_system")
 local SkillRanges = require("src.skill_ranges")
 local AutoAim = require("src.auto_aim")
@@ -261,47 +262,14 @@ end
 -- e `reconcile_position`, evitando que passos maiores (FPS baixo ou buff de velocidade)
 -- ultrapassem ±498 e distorçam a reconciliação contra a parede. Se o SDK passar a expor
 -- um hook de pós-predição/clamp antes da reconciliação, esta cópia pode ser removida.
+-- A lógica vive em src/local_prediction.lua (inclui o cast lock `casting_until`).
 local function predict_local_movement(ent, dx, dy, dt)
-    if not ent then return end
-
-    -- Cast lock autoritativo (casting_until, publicado pelo servidor em ticks):
-    -- zera a predição local durante a conjuração para não divergir do servidor.
-    local cur_tick = tonumber(loci._last_state_tick) or 0
-    local casting_until = tonumber((ent.get and ent:get("casting_until"))
-        or (ent.properties and ent.properties["casting_until"])) or 0
-    if casting_until > cur_tick then
-        ent.vx = 0
-        ent.vy = 0
-        clamp_entity_to_arena(ent, true, false)
-        return
-    end
-
-    local in_dx = dx or 0
-    local in_dy = dy or 0
-    local len = math.sqrt(in_dx * in_dx + in_dy * in_dy)
-
-    if len > 0 then
-        local ndx = in_dx / len
-        local ndy = in_dy / len
-        local default_speed = (loci.netcode and loci.netcode.default_move_speed) or 2.0
-        local raw_speed = (ent.get and (ent:get("move_speed") or ent:get("speed")))
-            or (ent.properties and (ent.properties.move_speed or ent.properties.speed))
-            or default_speed
-        local move_speed = tonumber(raw_speed) or 2.0
-        local tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0
-        local speed_sec = move_speed * tick_rate
-
-        ent.x = (ent.x or 0) + ndx * speed_sec * dt
-        ent.y = (ent.y or 0) + ndy * speed_sec * dt
-        ent.vx = ndx * move_speed
-        ent.vy = ndy * move_speed
-    else
-        ent.vx = 0
-        ent.vy = 0
-    end
-
-    -- Roda antes de decay_error e poll_network: preserva erro corretivo para dentro e bloqueia erro para fora
-    clamp_entity_to_arena(ent, true, false)
+    LocalPrediction.predict_local_movement(ent, dx, dy, dt, {
+        cur_tick = tonumber(loci._last_state_tick) or 0,
+        tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0,
+        default_speed = loci.netcode and loci.netcode.default_move_speed,
+        clamp = function(e) clamp_entity_to_arena(e, true, false) end,
+    })
 end
 
 -- Metadados de habilidades para HUD/Hotbar (alinhados a server/scripts/default_arena/data/skills/*.lua a 30 Hz)
