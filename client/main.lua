@@ -24,11 +24,8 @@ local SkillRanges = require("src.skill_ranges")
 local AutoAim = require("src.auto_aim")
 local SessionStore = require("src.session_store")
 local ConnectScreen = require("src.ui.connect_screen")
+local VfxSystem = require("src.vfx_system")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
-
--- Fontes para efeitos visuais (criadas uma vez)
-local font_damage_normal = love.graphics.newFont(18)
-local font_damage_critical = love.graphics.newFont(24)
 
 -- Configurar push no sistema de joystick para conversão de coordenadas
 virtual_joystick.set_push(push)
@@ -52,8 +49,6 @@ local is_connection_lost = false
 local movement_sync = MovementSync.new()
 local rejection_msg = ""
 local rejection_timer = 0
-local visual_fx = {}
-local floating_damage = {}
 local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
@@ -138,11 +133,6 @@ local function get_entity_skill_by_slot(entity, slot_index)
     return nil
 end
 
--- Screen shake state
-local shake_duration = 0
-local shake_total_duration = 0.2
-local shake_intensity = 0
-
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
 
@@ -171,8 +161,19 @@ local function clamp_arena_coords(x, y)
     return cx, cy
 end
 
+VfxSystem.configure({
+    visual_scale = VISUAL_SCALE,
+    sprite_base_size = SPRITE_BASE_SIZE,
+    sprite_scale = SPRITE_SCALE,
+    clamp_fn = clamp_arena_coords,
+})
+VfxSystem.reset()
+
 local function should_clamp_entity(ent)
     if not ent then return false end
+    if VfxSystem.is_projectile_entity(ent) then
+        return false
+    end
     local ent_type = (ent.get and ent:get("entity_type"))
         or (ent.properties and ent.properties["entity_type"])
     if ent_type ~= nil then
@@ -650,6 +651,7 @@ function love.load(arg)
     -- Event hooks
     loci.on_entity_spawned = function(entity)
         print(string.format("[Event] Entity spawned: ID %s at (%.1f, %.1f)", tostring(entity.id), entity.x, entity.y))
+        VfxSystem.on_entity_spawned(entity)
 
         -- Iniciar BGM quando o jogador local spawnar
         local my_entity = loci.get_my_entity()
@@ -658,8 +660,9 @@ function love.load(arg)
         end
     end
 
-    loci.on_entity_despawned = function(entity_id)
+    loci.on_entity_despawned = function(entity_id, last_entity)
         print("[Event] Entity despawned: ID " .. tostring(entity_id))
+        VfxSystem.on_entity_despawned(entity_id, last_entity)
         procedural_anim.clear_state(entity_id)
         sprite_anim.clear_entity_state(entity_id)
     end
@@ -678,25 +681,13 @@ function love.load(arg)
                 -- 1. Screen shake apenas para dano significativo no jogador local
                 local my_entity = loci.get_my_entity()
                 if my_entity and entity and entity.id == my_entity.id and damage > 50 then
-                    shake_total_duration = 0.2
-                    shake_duration = 0.2
-                    local intensity = math.min(8, 2.5 + (damage / 120))
-                    shake_intensity = math.max(shake_intensity, intensity)
+                    VfxSystem.trigger_shake(damage, 0.2)
                 end
 
                 -- 2. Dano flutuante para qualquer entidade (local ou inimiga)
-                -- Ataques normais variam de ~150 a 300 de dano após mitigação de defesa;
-                -- Golpes com dano >= 350 são críticos reais (multiplicador 2.25x)
-                local hud_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) + 32 -- Inicia acima da cabeça e HUD do modelo escalado
-                table.insert(floating_damage, {
-                    value = damage,
-                    x = entity.x,
-                    y = entity.y,
-                    offset_y = hud_offset_y,
-                    lifetime = 1.0,
-                    max_lifetime = 1.0,
+                VfxSystem.add_floating_damage(entity, damage, {
                     is_critical = is_critical,
-                    is_shield = false
+                    is_shield = false,
                 })
             end
         elseif key == "shield" then
@@ -709,22 +700,12 @@ function love.load(arg)
 
                 local my_entity = loci.get_my_entity()
                 if my_entity and entity and entity.id == my_entity.id and damage > 50 then
-                    shake_total_duration = 0.2
-                    shake_duration = 0.2
-                    local intensity = math.min(8, 2.5 + (damage / 120))
-                    shake_intensity = math.max(shake_intensity, intensity)
+                    VfxSystem.trigger_shake(damage, 0.2)
                 end
 
-                local hud_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) + 32 -- Inicia acima da cabeça e HUD do modelo escalado
-                table.insert(floating_damage, {
-                    value = damage,
-                    x = entity.x,
-                    y = entity.y,
-                    offset_y = hud_offset_y,
-                    lifetime = 1.0,
-                    max_lifetime = 1.0,
+                VfxSystem.add_floating_damage(entity, damage, {
                     is_critical = false,
-                    is_shield = true
+                    is_shield = true,
                 })
             end
         elseif key == "is_dead" then
@@ -812,16 +793,7 @@ function love.load(arg)
 
         -- Fallback procedural apenas para personagens/habilidades sem animação de sprite
         if not has_sprite_anim then
-            local lifetime = 0.35
-            if skill_name == "fireball" then
-                lifetime = 0.40
-            elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
-                lifetime = 0.45 -- Whirlwind Dash
-            elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
-                lifetime = 0.60 -- Blade Throw
-            end
-
-            table.insert(visual_fx, {
+            VfxSystem.spawn_skill_fx({
                 x = entity and entity.x or 0,
                 y = entity and entity.y or 0,
                 dir_x = dx,
@@ -829,8 +801,7 @@ function love.load(arg)
                 ability_id = ability_id,
                 skill_name = skill_name,
                 character_name = character_name,
-                lifetime = lifetime,
-                max_lifetime = lifetime
+                caster_id = entity and entity.id or nil,
             })
         end
     end
@@ -1116,32 +1087,8 @@ function love.update(dt)
         rejection_timer = rejection_timer - dt
     end
 
-    -- Update visual effects (skills)
-    for i = #visual_fx, 1, -1 do
-        visual_fx[i].lifetime = visual_fx[i].lifetime - dt
-        if visual_fx[i].lifetime <= 0 then
-            table.remove(visual_fx, i)
-        end
-    end
-
-    -- Update floating damage numbers
-    for i = #floating_damage, 1, -1 do
-        local fd = floating_damage[i]
-        fd.lifetime = fd.lifetime - dt
-        fd.offset_y = fd.offset_y + 50 * dt
-        if fd.lifetime <= 0 then
-            table.remove(floating_damage, i)
-        end
-    end
-
-    -- Update screen shake timer
-    if shake_duration > 0 then
-        shake_duration = shake_duration - dt
-        if shake_duration <= 0 then
-            shake_duration = 0
-            shake_intensity = 0
-        end
-    end
+    -- Update VFX, floating damage numbers, impact particles and screen shake
+    VfxSystem.update(dt)
 end
 
 function love.resize(w, h)
@@ -1564,135 +1511,6 @@ local function draw_respawn_timer()
     love.graphics.setColor(1, 1, 1, 1)
 end
 
-local function draw_procedural_skill_fx(fx)
-    local progress = fx.lifetime / fx.max_lifetime
-    local inv_prog = 1.0 - progress
-    local fx_start_x = fx.x * VISUAL_SCALE
-    local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
-
-    -- Mapeamento de VFX desacoplado por skill_name (com fallback por ability_id / character_name)
-    local char_name = string.lower(tostring(fx.character_name or "default"))
-    local skill_name = fx.skill_name
-    if not skill_name then
-        if fx.ability_id == 1 then
-            skill_name = (char_name == "mage") and "fireball" or "slash"
-        elseif fx.ability_id == 2 then
-            skill_name = "fury_reward"
-        elseif fx.ability_id == 3 then
-            skill_name = "whirlwind_dash"
-        elseif fx.ability_id == 4 then
-            skill_name = "blade_throw"
-        end
-    end
-
-    -- Alcance e raio da AoE da habilidade em pixels (unidades do mundo * VISUAL_SCALE)
-    local range_px = SkillRanges.range(skill_name, 0) * VISUAL_SCALE
-    local aoe_px = SkillRanges.aoe(skill_name, 0) * VISUAL_SCALE
-
-    if skill_name == "fireball" then
-        -- Fireball: projétil até range * 0.7 seguido de explosão na área real (aoe_radius)
-        local max_dist = range_px * 0.7
-        local travel_t = math.min(1.0, inv_prog / 0.5)
-        local travel_dist = max_dist * travel_t
-        local fireball_x = fx_start_x + fx.dir_x * travel_dist
-        local fireball_y = fx_start_y + fx.dir_y * travel_dist
-
-        if inv_prog <= 0.5 then
-            local radius = 18 + 8 * travel_t
-            love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.4)
-            love.graphics.setLineWidth(3)
-            love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
-
-            love.graphics.setColor(1.0, 0.55, 0.1, progress * 0.9)
-            love.graphics.circle("fill", fireball_x, fireball_y, radius)
-            love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.75)
-            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
-            love.graphics.setColor(1.0, 1.0, 0.85, progress * 0.6)
-            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
-        else
-            local blast_t = (inv_prog - 0.5) / 0.5
-            local blast_alpha = 1.0 - blast_t
-            local blast_r = aoe_px * (1 / 3 + 2 / 3 * blast_t) -- cresce até o raio real da AoE
-
-            love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
-            love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
-            love.graphics.setColor(1.0, 0.75, 0.2, blast_alpha * 0.55)
-            love.graphics.circle("fill", fireball_x, fireball_y, blast_r * 0.55)
-            love.graphics.setColor(1.0, 0.35, 0.05, blast_alpha * 0.9)
-            love.graphics.setLineWidth(3)
-            love.graphics.circle("line", fireball_x, fireball_y, blast_r)
-        end
-    elseif skill_name == "slash" then
-        local angle = math.atan2(fx.dir_y, fx.dir_x)
-        local radius = range_px * (0.6 + 0.4 * inv_prog) -- o arco abre até o alcance real do golpe
-        love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
-        love.graphics.setLineWidth(4)
-        love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius, angle - 0.8, angle + 0.8)
-        love.graphics.setColor(0.3, 0.7, 1.0, progress * 0.5)
-        love.graphics.setLineWidth(8)
-        love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
-    elseif skill_name == "fury_reward" then
-        local hit_dist = range_px * 0.5 -- ponto focal da onda de choque (igual ao do servidor: 0.5 * range)
-        local hit_x = fx_start_x + fx.dir_x * hit_dist
-        local hit_y = fx_start_y + fx.dir_y * hit_dist
-        local r = aoe_px * (0.5 + 0.5 * inv_prog) -- termina exatamente no raio real da AoE
-        love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
-        love.graphics.setLineWidth(3)
-        love.graphics.circle("line", hit_x, hit_y, r)
-        love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
-        love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
-    elseif skill_name == "whirlwind_dash" then
-        local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
-        local dash_world_dist = SkillRanges.range("whirlwind_dash", 0) * inv_prog -- unidades do mundo
-        local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
-        local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
-        local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
-        local curr_x = clamped_wx * VISUAL_SCALE
-        local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
-        local r = aoe_px * (0.7 + 0.3 * inv_prog) -- termina exatamente no raio real da AoE
-        local spin_angle = inv_prog * math.pi * 5
-        love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
-        love.graphics.setLineWidth(3)
-        love.graphics.circle("line", curr_x, curr_y, r)
-        love.graphics.setColor(1.0, 0.9, 0.5, progress * 0.6)
-        for i = 0, 3 do
-            local a = spin_angle + (i * math.pi / 2)
-            love.graphics.line(
-                curr_x, curr_y,
-                curr_x + math.cos(a) * r,
-                curr_y + math.sin(a) * r
-            )
-        end
-    elseif skill_name == "blade_throw" then
-        local max_dist = range_px
-        local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
-        local blade_x = fx_start_x + fx.dir_x * travel_dist
-        local blade_y = fx_start_y + fx.dir_y * travel_dist
-
-        love.graphics.setColor(0.4, 0.8, 1.0, progress * 0.7)
-        love.graphics.setLineWidth(2)
-        love.graphics.line(fx_start_x, fx_start_y, blade_x, blade_y)
-
-        love.graphics.setColor(1.0, 1.0, 1.0, progress)
-        love.graphics.circle("fill", blade_x, blade_y, 7)
-        love.graphics.setColor(0.2, 0.6, 1.0, progress)
-        love.graphics.circle("line", blade_x, blade_y, 7)
-
-        if inv_prog > 0.45 then
-            local shock_r = aoe_px * ((inv_prog - 0.45) / 0.55) -- termina no raio real do Stun em área
-            love.graphics.setColor(1.0, 0.9, 0.2, progress * 0.9)
-            love.graphics.setLineWidth(3)
-            love.graphics.circle("line", blade_x, blade_y, shock_r)
-        end
-    else
-        local fx_end_x = fx_start_x + fx.dir_x * 50 * VISUAL_SCALE
-        local fx_end_y = fx_start_y + fx.dir_y * 50 * VISUAL_SCALE
-        love.graphics.setColor(1, 0.85, 0.2, progress)
-        love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
-        love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
-    end
-end
-
 function love.draw()
     push:start()
 
@@ -1711,22 +1529,14 @@ function love.draw()
     love.graphics.translate(center_x, center_y)
 
     -- Apply screen shake offset when active (smooth linear damping over duration)
-    local shake_offset_x = 0
-    local shake_offset_y = 0
-    if shake_duration > 0 and shake_intensity > 0 then
-        local current_intensity = shake_intensity * (shake_duration / shake_total_duration)
-        shake_offset_x = (love.math.random() - 0.5) * 2 * current_intensity
-        shake_offset_y = (love.math.random() - 0.5) * 2 * current_intensity
-    end
+    local shake_offset_x, shake_offset_y = VfxSystem.get_shake_offset()
     love.graphics.translate(-cam_x + shake_offset_x, -cam_y + shake_offset_y)
 
     -- Draw background grid & physical collision boundaries
     draw_arena_grid()
 
-    -- Draw transient procedural fallback effects (apenas para personagens/skills sem sprite animado)
-    for _, fx in ipairs(visual_fx) do
-        draw_procedural_skill_fx(fx)
-    end
+    -- Draw transient procedural fallback effects & despawn impact VFX
+    VfxSystem.draw_world_effects()
 
     -- Draw all network entities
     local my_entity = loci.get_my_entity()
@@ -1797,43 +1607,7 @@ function love.draw()
     end
 
     -- Draw floating damage numbers (renderizado sobre os personagens)
-    if #floating_damage > 0 then
-        local original_font = love.graphics.getFont()
-        for _, fd in ipairs(floating_damage) do
-            local progress = fd.lifetime / fd.max_lifetime
-            local alpha = progress
-            local scale = 1.0 + (1.0 - progress) * 0.3
-
-            local text_x = fd.x * VISUAL_SCALE
-            local text_y = (fd.y * VISUAL_SCALE) - fd.offset_y
-
-            love.graphics.push()
-            love.graphics.translate(text_x, text_y)
-            love.graphics.scale(scale, scale)
-
-            if fd.is_shield then
-                -- Dano absorvido pelo escudo - azul ciano
-                love.graphics.setColor(0.3, 0.75, 1.0, alpha)
-                love.graphics.setFont(font_damage_normal)
-            elseif fd.is_critical then
-                -- Dano crítico - vermelho brilhante, maior
-                love.graphics.setColor(1.0, 0.15, 0.15, alpha)
-                love.graphics.setFont(font_damage_critical)
-            else
-                -- Dano normal - branco
-                love.graphics.setColor(1.0, 1.0, 1.0, alpha)
-                love.graphics.setFont(font_damage_normal)
-            end
-
-            local damage_text = string.format("%d", fd.value)
-            local tw = love.graphics.getFont():getWidth(damage_text)
-            love.graphics.print(damage_text, -tw / 2, 0)
-
-            love.graphics.pop()
-        end
-        love.graphics.setFont(original_font)
-        love.graphics.setColor(1.0, 1.0, 1.0, 1.0)
-    end
+    VfxSystem.draw_floating_damage()
 
     love.graphics.pop()
 
@@ -1969,6 +1743,11 @@ local function draw_team_shadow(px, py, rx, ry, team, is_dead)
 end
 
 function draw_entity(ent, is_me)
+    if VfxSystem.is_projectile_entity(ent) then
+        VfxSystem.draw_projectile(ent)
+        return
+    end
+
     local radius = 2 * VISUAL_SCALE
     local px = ent.x * VISUAL_SCALE
     local py = ent.y * VISUAL_SCALE
