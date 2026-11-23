@@ -1,5 +1,6 @@
--- Integration & Skill tests for server combat flow (Phase 3 of Issue #59)
+-- Integration & Skill tests for server combat flow (Phase 3 of Issue #59 + Card #104 ProjectileSystem)
 -- Covers slash, fireball, blade_throw, fury_reward, shield, whirlwind_dash AoE damage,
+-- ProjectileSystem (spawn_entity, sensor CCD, static/boundary collision),
 -- on_action CC/death/slot guards, character swap (999), and end-to-end duel + KDA + passive + respawn.
 
 package.path = "./server/scripts/default_arena/?.lua;./client/src/?.lua;./?.lua;" .. package.path
@@ -24,6 +25,7 @@ end
 local function make_server_env(load_main)
     local entities = {}
     local logs = {}
+    local next_auto_id = 1000
 
     local function make_pos_ud(ent)
         return {
@@ -41,6 +43,15 @@ local function make_server_env(load_main)
             warn = function(msg) table.insert(logs, { level = "warn", msg = msg }) end,
             error = function(msg) table.insert(logs, { level = "error", msg = msg }) end,
         },
+        Physics = {
+            Layer = {
+                NONE = 0,
+                SOLID_WALL = 1,
+                PLAYER = 2,
+                TRIGGER_ZONE = 4,
+                PROJECTILE = 8,
+            },
+        },
         get_entity_position = function(id)
             local e = entities[id]
             return e and make_pos_ud(e) or nil
@@ -52,6 +63,10 @@ local function make_server_env(load_main)
         get_entity_property = function(id, key)
             local e = entities[id]
             return e and e.props[key] or nil
+        end,
+        get_entity_type = function(id)
+            local e = entities[id]
+            return e and e.entity_type or nil
         end,
         get_entities_in_radius = function(pos, radius)
             local res = {}
@@ -67,6 +82,35 @@ local function make_server_env(load_main)
             return res
         end,
         Commands = {
+            spawn_entity = function(params)
+                next_auto_id = next_auto_id + 1
+                local id = next_auto_id
+                local props = {}
+                if type(params.properties) == "table" then
+                    for k, v in pairs(params.properties) do
+                        props[tostring(k)] = tostring(v)
+                    end
+                end
+                local pos = params.position or { x = 0, y = 0 }
+                local vel = params.velocity or { x = 0, y = 0 }
+                entities[id] = {
+                    id = id,
+                    blueprint = params.blueprint or "prop",
+                    entity_type = params.entity_type or "Prop",
+                    x = pos.x or 0,
+                    y = pos.y or 0,
+                    vx = vel.x or 0,
+                    vy = vel.y or 0,
+                    move_speed = params.move_speed or 1.0,
+                    radius = params.radius or 2.0,
+                    is_sensor = params.is_sensor == true,
+                    lifetime_ticks = params.lifetime_ticks,
+                    collision_layer = params.collision_layer or 2,
+                    collision_mask = params.collision_mask or 3,
+                    props = props,
+                }
+                return id
+            end,
             set_position = function(id, vec)
                 local e = entities[id]
                 if e then
@@ -87,6 +131,25 @@ local function make_server_env(load_main)
                     e.props[key] = tostring(value)
                 end
             end,
+            set_sensor = function(id, is_sensor)
+                local e = entities[id]
+                if e then
+                    e.is_sensor = is_sensor == true
+                end
+            end,
+            set_lifetime = function(id, ticks)
+                local e = entities[id]
+                if e then
+                    e.lifetime_ticks = ticks
+                end
+            end,
+            set_collision_filter = function(id, layer, mask)
+                local e = entities[id]
+                if e then
+                    e.collision_layer = layer
+                    e.collision_mask = mask
+                end
+            end,
             destroy_entity = function(id)
                 entities[id] = nil
             end,
@@ -105,6 +168,7 @@ local function make_server_env(load_main)
 
     local CombatSystem = require("core.combat_system")
     local CharacterFactory = require("systems.character_factory")
+    local ProjectileSystem = require("systems.projectile_system")
     local RespawnSystem = require("respawn_system")
 
     if load_main then
@@ -114,10 +178,14 @@ local function make_server_env(load_main)
     local function spawn_entity(id, char_name, team, x, y)
         entities[id] = {
             id = id,
+            blueprint = char_name or "default",
+            entity_type = "Player",
             x = x or 0,
             y = y or 0,
             vx = 0,
             vy = 0,
+            radius = 2.0,
+            is_sensor = false,
             props = { team = tostring(team or "1"), kills = "0", deaths = "0", is_dead = "false" },
         }
         CharacterFactory.create_character(id, char_name or "default")
@@ -127,10 +195,14 @@ local function make_server_env(load_main)
     local function join_player(id, x, y)
         entities[id] = {
             id = id,
+            blueprint = "player",
+            entity_type = "Player",
             x = x or 0,
             y = y or 0,
             vx = 0,
             vy = 0,
+            radius = 2.0,
+            is_sensor = false,
             props = {},
         }
         on_player_join(id)
@@ -139,10 +211,84 @@ local function make_server_env(load_main)
 
     local function step_ticks(start_tick, end_tick)
         for t = start_tick, end_tick do
-            on_tick(t)
-            for _, e in pairs(entities) do
-                e.x = math.max(-498.0, math.min(498.0, e.x + e.vx))
-                e.y = math.max(-498.0, math.min(498.0, e.y + e.vy))
+            if load_main and type(on_tick) == "function" then
+                on_tick(t)
+            else
+                CharacterFactory.update_tick(t)
+                ProjectileSystem.update_tick(t)
+                RespawnSystem.process_tick(t)
+            end
+
+            -- 1. Velocity Integration & Map Bounds Check
+            local sorted_ids = {}
+            for id in pairs(entities) do
+                table.insert(sorted_ids, id)
+            end
+            table.sort(sorted_ids)
+
+            local boundary_hits = {}
+            for _, id in ipairs(sorted_ids) do
+                local e = entities[id]
+                if e then
+                    local r = e.radius or 2.0
+                    local min_b = -500.0 + r
+                    local max_b = 500.0 - r
+                    local ux = e.x + (e.vx or 0)
+                    local uy = e.y + (e.vy or 0)
+                    local cx = math.max(min_b, math.min(max_b, ux))
+                    local cy = math.max(min_b, math.min(max_b, uy))
+                    e.x, e.y = cx, cy
+                    if cx ~= ux or cy ~= uy then
+                        local nx = (cx > ux and 1) or (cx < ux and -1) or 0
+                        local ny = (cy > uy and 1) or (cy < uy and -1) or 0
+                        table.insert(boundary_hits, { id = id, nx = nx, ny = ny })
+                    end
+                end
+            end
+
+            for _, hit in ipairs(boundary_hits) do
+                if entities[hit.id] then
+                    if load_main and type(on_boundary_collision) == "function" then
+                        on_boundary_collision(hit.id, hit.nx, hit.ny)
+                    else
+                        ProjectileSystem.on_boundary_collision(hit.id, hit.nx, hit.ny)
+                    end
+                end
+            end
+
+            -- 2. Dynamic Circle-vs-Circle Collision Detection (Zero pushback when is_sensor)
+            for i = 1, #sorted_ids do
+                for j = i + 1, #sorted_ids do
+                    local id_a = sorted_ids[i]
+                    local id_b = sorted_ids[j]
+                    local a = entities[id_a]
+                    local b = entities[id_b]
+                    if a and b then
+                        local ra = a.radius or 2.0
+                        local rb = b.radius or 2.0
+                        local dx = b.x - a.x
+                        local dy = b.y - a.y
+                        local min_dist = ra + rb
+                        if (dx * dx + dy * dy) <= (min_dist * min_dist) then
+                            if load_main and type(on_collision) == "function" then
+                                on_collision(id_a, id_b)
+                            elseif ProjectileSystem.is_projectile(id_a) or ProjectileSystem.is_projectile(id_b) then
+                                ProjectileSystem.on_collision(id_a, id_b)
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- 3. Engine Lifetime Countdown
+            for _, id in ipairs(sorted_ids) do
+                local e = entities[id]
+                if e and e.lifetime_ticks then
+                    e.lifetime_ticks = e.lifetime_ticks - 1
+                    if e.lifetime_ticks <= 0 then
+                        entities[id] = nil
+                    end
+                end
             end
         end
     end
@@ -152,6 +298,7 @@ local function make_server_env(load_main)
         logs = logs,
         CombatSystem = CombatSystem,
         CharacterFactory = CharacterFactory,
+        ProjectileSystem = ProjectileSystem,
         RespawnSystem = RespawnSystem,
         spawn_entity = spawn_entity,
         join_player = join_player,
@@ -194,29 +341,46 @@ run_test("slash deals physical damage once to enemies in front, sparing allies a
     assert(enemy_far.props.hp == "5000", "slash is melee: enemy beyond ~2 character heights must not be hit")
 end)
 
-run_test("fireball deals magical AoE damage at 70% range and spares allies", function()
+run_test("fireball spawns authoritative Projectile entity, travels across ticks, deals magical AoE damage and spares allies", function()
     local env = make_server_env(false)
     local CF = env.CharacterFactory
 
-    -- Fireball range=64.0 -> explosion center at 0.7 * 64 = 44.8, aoe_radius=9.0
     env.spawn_entity(1, "mage", "1", 0, 0)
-    local enemy_in = env.spawn_entity(2, "warrior", "2", 46, 2)   -- dist from (44.8,0) ~ 2.3 < 9
-    local ally_in = env.spawn_entity(3, "default", "1", 44, 0)    -- same team -> spared
-    local enemy_out = env.spawn_entity(4, "warrior", "2", 60, 0)  -- dist 15.2 > 9 -> spared
+    local enemy_in = env.spawn_entity(2, "warrior", "2", 46, 2)   -- hit when projectile reaches x=44 (dist ~ 2.83 <= 3.5)
+    local ally_in = env.spawn_entity(3, "default", "1", 44, 0)    -- same team in path & blast -> spared
+    local enemy_out = env.spawn_entity(4, "warrior", "2", 60, 0)  -- outside blast radius (aoe=9.0) -> spared
 
     with_fixed_random(0.99, function()
         local ok = CF.execute_skill(1, "fireball", 10, 0)
         assert(ok == true)
     end)
 
+    -- Immediately after cast (tick 0), projectile is spawned and no damage is dealt yet
+    assert(env.ProjectileSystem.get_active_count() == 1, "fireball must spawn an active Projectile entity")
+    assert(enemy_in.props.hp == "6000", "projectile must travel over ticks before dealing damage")
+
+    -- Advance 5 ticks (x = 20): still in flight
+    with_fixed_random(0.99, function()
+        env.step_ticks(1, 5)
+    end)
+    assert(env.ProjectileSystem.get_active_count() == 1, "fireball still in flight at tick 5")
+    assert(enemy_in.props.hp == "6000", "enemy at x=46 not reached yet at tick 5")
+
+    -- Advance through tick 12: projectile passes ally at x=44 and collides with enemy_in at (46, 2)
+    with_fixed_random(0.99, function()
+        env.step_ticks(6, 12)
+    end)
+
     -- Warrior mag_def=40 -> mitigation = 40/140; fireball dmg=500 -> 500 * (100/140)
     local expected_dmg = 500 * (100 / 140)
     assert_near(tonumber(enemy_in.props.hp), 6000 - expected_dmg, 1e-4, "enemy in blast takes magical damage")
-    assert(ally_in.props.hp == "5000", "ally in blast spared")
+    assert_near(enemy_in.x, 46.0, 1e-4, "sensor projectile must not physically push target")
+    assert(ally_in.props.hp == "5000", "ally in flight path and blast spared")
     assert(enemy_out.props.hp == "6000", "enemy outside blast spared")
+    assert(env.ProjectileSystem.get_active_count() == 0, "projectile destroyed after impact")
 end)
 
-run_test("blade_throw stops at first enemy, stuns AoE targets, and disarms caster", function()
+run_test("blade_throw stops at first enemy, stuns AoE targets without pushing them, and disarms caster", function()
     local env = make_server_env(false)
     local CF = env.CharacterFactory
 
@@ -224,7 +388,6 @@ run_test("blade_throw stops at first enemy, stuns AoE targets, and disarms caste
     env.spawn_entity(1, "arya", "1", 0, 0)
     local ally_path = env.spawn_entity(2, "default", "1", 6, 0)    -- ally in flight path must NOT stop blade
     local enemy_hit = env.spawn_entity(3, "default", "2", 12, 0)   -- first enemy at d=12 -> impact at x=12
-    enemy_hit.vx, enemy_hit.vy = 2.0, 1.0
     local enemy_splash = env.spawn_entity(4, "default", "2", 16, 0) -- within aoe_radius=8.0 of x=12
     local enemy_far = env.spawn_entity(5, "default", "2", 25, 0)   -- beyond impact AoE -> unharmed
 
@@ -233,17 +396,71 @@ run_test("blade_throw stops at first enemy, stuns AoE targets, and disarms caste
         assert(ok == true)
     end)
 
-    -- Caster disarmed for 60 ticks (100 + 60 = 160)
+    -- Caster disarmed immediately on cast for 60 ticks (100 + 60 = 160)
     assert(env.entities[1].props.disarmed_until == "160", "caster must be disarmed for 60 ticks")
-    assert(ally_path.props.hp == "5000", "ally in path must not take damage")
+    assert(env.ProjectileSystem.get_active_count() == 1, "blade_throw must spawn a Projectile entity")
+    assert(enemy_hit.props.hp == "5000", "enemy at d=12 not hit on tick 100 before projectile flight")
 
-    -- Both enemy_hit and enemy_splash take 400 phys damage, 36-tick stun, and velocity reset
+    -- Advance 2 ticks (101..102): projectile travels 4 -> 8, passing ally at x=6 without hitting enemy_hit at x=12
+    with_fixed_random(0.99, function()
+        env.step_ticks(101, 102)
+    end)
+    assert(ally_path.props.hp == "5000", "ally in path must not take damage")
+    assert_near(ally_path.x, 6.0, 1e-4, "ally in path must not be pushed by sensor projectile")
+    assert(enemy_hit.props.hp == "5000", "enemy at d=12 not hit yet at tick 102 (x=8)")
+
+    -- On tick 103, enemy_hit is moving (vx=2.0, vy=1.0 from (10,-1) -> (12,0)) and collides with blade at (12,0)
+    enemy_hit.x, enemy_hit.y = 10.0, -1.0
+    enemy_hit.vx, enemy_hit.vy = 2.0, 1.0
+    with_fixed_random(0.99, function()
+        env.step_ticks(103, 103)
+    end)
+
+    -- Both enemy_hit and enemy_splash take 400 phys damage, 36-tick stun (103 + 36 = 139), and velocity reset
     local expected_dmg = 400 * (100 / 180)
     assert_near(tonumber(enemy_hit.props.hp), 5000 - expected_dmg, 1e-4)
     assert_near(tonumber(enemy_splash.props.hp), 5000 - expected_dmg, 1e-4)
-    assert(enemy_hit.props.stunned_until == "136" and enemy_splash.props.stunned_until == "136")
+    assert(enemy_hit.props.stunned_until == "139" and enemy_splash.props.stunned_until == "139")
     assert(enemy_hit.vx == 0 and enemy_hit.vy == 0)
     assert(enemy_far.props.hp == "5000" and enemy_far.props.stunned_until == "0")
+    assert(env.ProjectileSystem.get_active_count() == 0, "blade_throw projectile destroyed on impact")
+end)
+
+run_test("ProjectileSystem destroys projectiles on static obstacle and boundary collisions", function()
+    local env = make_server_env(true)
+    local p1 = env.join_player(1, 0, 0) -- Team 1 (Arya)
+    local p2 = env.join_player(2, 30, 0) -- Team 2 behind wall at x=8
+
+    env.step_ticks(1, 10)
+
+    -- 1. Cast blade_throw and trigger on_static_collision with an obstacle at x=8
+    assert(on_action(1, 4, 1, 0) == true)
+    assert(env.ProjectileSystem.get_active_count() == 1)
+
+    local proj_id = nil
+    for id, e in pairs(env.entities) do
+        if e.entity_type == "Projectile" then
+            proj_id = id
+            break
+        end
+    end
+    assert(proj_id ~= nil, "spawned projectile entity must exist in world")
+    assert(env.entities[proj_id].is_sensor == true, "projectile must be configured as sensor")
+
+    on_static_collision(proj_id, 501, -1.0, 0.0)
+    assert(env.entities[proj_id] == nil, "on_static_collision must destroy projectile entity")
+    assert(env.ProjectileSystem.get_active_count() == 0, "projectile removed from ProjectileSystem tracking")
+    assert(p2.props.hp == p2.props.max_hp, "enemy behind static wall must not take damage")
+
+    -- 2. Cast fireball near map boundary (+X = 500) and verify on_boundary_collision destroys it
+    assert(on_action(2, 999, 0, 0) == true) -- default
+    assert(on_action(2, 999, 0, 0) == true) -- mage
+    p2.x, p2.y = 492.0, 0.0
+    assert(on_action(2, 1, 1, 0) == true) -- fireball towards +X wall
+    assert(env.ProjectileSystem.get_active_count() == 1)
+
+    env.step_ticks(11, 14)
+    assert(env.ProjectileSystem.get_active_count() == 0, "on_boundary_collision must destroy projectile at arena border")
 end)
 
 run_test("fury_reward enforces ally lock in team games, unlocks in 1v1, and forces crit when fury_active", function()
@@ -386,31 +603,33 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
 
     env.step_ticks(1, 10)
 
-    -- 1. p1 casts blade_throw (slot 4) hitting p2: stuns p2 (36 ticks), disarms p1 (60 ticks)
+    -- 1. p1 casts blade_throw (slot 4) at tick 10: disarms p1 immediately (70), projectile hits p2 at tick 12 (stunned_until = 48)
     with_fixed_random(0.99, function()
         assert(on_action(1, 4, 1, 0) == true)
+        env.step_ticks(11, 12)
     end)
-    assert(p2.props.stunned_until == "46")
+    assert(p2.props.stunned_until == "48")
     assert(p1.props.disarmed_until == "70")
     assert(on_action(2, 1, 1, 0) == false, "stunned p2 cannot cast")
     assert(on_action(1, 1, 1, 0) == false, "disarmed p1 cannot cast")
 
     -- 2. Advance to tick 70 (both stun and disarm expired)
-    env.step_ticks(11, 70)
+    env.step_ticks(13, 70)
 
-    -- 3. Low-HP p3 gets eliminated by p2's fireball -> KDA updates + p1 (allied Arya) gets passive paralysis + fury
+    -- 3. Low-HP p3 gets eliminated by p2's fireball projectile -> KDA updates + p1 (allied Arya) gets passive paralysis + fury
     p3.props.hp = "100"
     with_fixed_random(0.99, function()
-        assert(on_action(2, 1, 1, 0) == true) -- fireball hits p3 at x=55 (10 + 0.7 * 64 = 54.8)
+        assert(on_action(2, 1, 1, 0) == true) -- fireball launched from x=10 towards p3 at x=55
+        env.step_ticks(71, 81)                -- 11 ticks at speed 4.0 reaches x=54 and hits p3 at x=55
     end)
     assert(p3.props.hp == "0" and p3.props.is_dead == "true")
     assert(p3.props.deaths == "1" and p2.props.kills == "1")
     assert(p1.props.fury_active == "true")
-    assert(p1.props.paralyzed_until == "160") -- 70 + 90
+    assert(p1.props.paralyzed_until == "171") -- 81 + 90
     assert(on_action(1, 2, 1, 0) == false, "paralyzed p1 cannot cast fury_reward yet")
 
-    -- 4. Advance to tick 160: paralysis expires, p1 moves next to p2 and finishes p2 with fury_reward (slot 2)
-    env.step_ticks(71, 160)
+    -- 4. Advance to tick 171: paralysis expires, p1 moves next to p2 and finishes p2 with fury_reward (slot 2)
+    env.step_ticks(82, 171)
     p2.x, p2.y = 5, 0
     p2.props.hp = "200"
     with_fixed_random(0.99, function()
@@ -420,8 +639,8 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     assert(p2.props.deaths == "1" and p1.props.kills == "1")
     assert(p1.props.fury_active == "false")
 
-    -- 5. Advance to tick 460 (300 ticks after tick 160): both p3 (died at 70) and p2 (died at 160) have respawned
-    env.step_ticks(161, 460)
+    -- 5. Advance to tick 471 (300 ticks after tick 171): both p3 (died at 81) and p2 (died at 171) have respawned
+    env.step_ticks(172, 471)
     assert(p3.props.is_dead == "false" and p3.props.hp == p3.props.max_hp)
     assert(p2.props.is_dead == "false" and p2.props.hp == p2.props.max_hp)
 

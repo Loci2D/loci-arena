@@ -69,6 +69,7 @@ end
 -- Importa os sistemas modulares da arena (via VFS nativo do Loci2D)
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("systems.character_factory")
+local ProjectileSystem = require("systems.projectile_system")
 local RespawnSystem = require("respawn_system")
 
 local function is_player_alive(entity_id)
@@ -152,6 +153,7 @@ end
 
 function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
+    ProjectileSystem.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
 
     -- 1. Salva posições antes da integração de física do tick (apenas para vivos)
@@ -392,6 +394,12 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
 end
 
 function on_collision(entity_a, entity_b)
+    -- Delega colisões envolvendo projéteis para o ProjectileSystem (comportamento de sensor sem empurrão físico)
+    if ProjectileSystem.is_projectile(entity_a) or ProjectileSystem.is_projectile(entity_b) then
+        ProjectileSystem.on_collision(entity_a, entity_b)
+        return
+    end
+
     -- Só processa colisão sólida e body-blocking se ambos forem jogadores conectados e vivos
     if not (connected_players[entity_a] and connected_players[entity_b]) then
         return
@@ -569,6 +577,18 @@ function on_collision(entity_a, entity_b)
         set_position_clamped(entity_b, mid_x - nx * (MIN_DIST * 0.5), mid_y - ny * (MIN_DIST * 0.5))
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
+    end
+end
+
+function on_static_collision(entity_id, obstacle_id, nx, ny)
+    if ProjectileSystem.is_projectile(entity_id) then
+        ProjectileSystem.on_static_collision(entity_id, obstacle_id, nx, ny)
+    end
+end
+
+function on_boundary_collision(entity_id, nx, ny)
+    if ProjectileSystem.is_projectile(entity_id) then
+        ProjectileSystem.on_boundary_collision(entity_id, nx, ny)
     end
 end
 
