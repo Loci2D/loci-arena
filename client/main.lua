@@ -52,6 +52,7 @@ local movement_sync = MovementSync.new()
 local rejection_msg = ""
 local rejection_timer = 0
 local visual_fx = {}
+local impact_fx = {}
 local floating_damage = {}
 local show_debug_overlay = false
 local show_character_sheet = false
@@ -170,13 +171,40 @@ local function clamp_arena_coords(x, y)
     return cx, cy
 end
 
+local function entity_type_of(ent)
+    if not ent then return nil end
+    -- Prioridade: propriedade sincronizada (legado/testes) > campo entity_type do SDK
+    -- (EntityType do proto: "player"/"npc"/"prop"/"projectile").
+    local t = (ent.get and ent:get("entity_type"))
+        or (ent.properties and ent.properties["entity_type"])
+        or ent.entity_type
+    return t ~= nil and string.lower(tostring(t)) or nil
+end
+
+local function is_inconclusive_entity_type(t)
+    return t == nil or t == "prop" or t == "unknown"
+end
+
+local function is_projectile_entity(ent)
+    return entity_type_of(ent) == "projectile"
+end
+
+-- true para entidades controláveis por jogadores (usado em checagens de time/aliados).
+-- Tipos inconclusivos ("prop"/"unknown"/ausente — ex.: snapshots antigos) mantêm o
+-- comportamento legado de tratar a entidade como jogador.
+local function is_player_like_entity(ent)
+    local t = entity_type_of(ent)
+    if is_inconclusive_entity_type(t) then return true end
+    return t == "player" or t == "hero" or t == "character"
+end
+
 local function should_clamp_entity(ent)
     if not ent then return false end
-    local ent_type = (ent.get and ent:get("entity_type"))
-        or (ent.properties and ent.properties["entity_type"])
-    if ent_type ~= nil then
-        local t = string.lower(tostring(ent_type))
-        return t == "player" or t == "hero" or t == "character"
+    local ent_type = entity_type_of(ent)
+    -- Projéteis físicos nunca são clampados como jogadores
+    if ent_type == "projectile" then return false end
+    if not is_inconclusive_entity_type(ent_type) then
+        return ent_type == "player" or ent_type == "hero" or ent_type == "character"
     end
     local bp = type(ent.blueprint) == "string" and string.lower(ent.blueprint) or ""
     if bp:find("projectile", 1, true) or bp:find("bullet", 1, true) or bp:find("fx", 1, true) then
@@ -391,14 +419,10 @@ local function has_team_allies(my_entity)
     local my_team = tostring((my_entity.get and my_entity:get("team")) or my_entity.team or "1")
     local all_entities = (loci.get_entities and loci.get_entities()) or {}
     for _, other in ipairs(all_entities) do
-        if other.id ~= my_entity.id then
-            local ent_type = (other.get and other:get("entity_type")) or (other.properties and other.properties["entity_type"])
-            local is_player = (ent_type == nil) or (string.lower(tostring(ent_type)) == "player")
-            if is_player then
-                local other_team = (other.get and other:get("team")) or (other.properties and other.properties["team"])
-                if other_team ~= nil and tostring(other_team) == my_team then
-                    return true
-                end
+        if other.id ~= my_entity.id and is_player_like_entity(other) then
+            local other_team = (other.get and other:get("team")) or (other.properties and other.properties["team"])
+            if other_team ~= nil and tostring(other_team) == my_team then
+                return true
             end
         end
     end
@@ -678,10 +702,30 @@ function love.load(arg)
         end
     end
 
-    loci.on_entity_despawned = function(entity_id)
+    loci.on_entity_despawned = function(entity_id, last_entity)
         print("[Event] Entity despawned: ID " .. tostring(entity_id))
         procedural_anim.clear_state(entity_id)
         sprite_anim.clear_entity_state(entity_id)
+
+        -- Projétil de blade_throw: o SDK faz snap da posição autoritativa final
+        -- (last_entity.x/y) — desenha o choque de Stun exatamente no ponto de impacto real.
+        if last_entity and is_projectile_entity(last_entity) then
+            local skill_prop = last_entity.get and last_entity:get("skill")
+                or (last_entity.properties and last_entity.properties["skill"])
+            local blueprint = last_entity.blueprint or last_entity.name or ""
+            if skill_prop == "blade_throw" or blueprint == "blade_throw" then
+                local aoe_world = tonumber(last_entity.get and last_entity:get("aoe_radius"))
+                    or tonumber(last_entity.properties and last_entity.properties["aoe_radius"])
+                    or SkillRanges.aoe("blade_throw", 8.0)
+                table.insert(impact_fx, {
+                    x = last_entity.x or 0,
+                    y = last_entity.y or 0,
+                    aoe_px = (aoe_world or 8.0) * VISUAL_SCALE,
+                    lifetime = 0.55,
+                    max_lifetime = 0.55
+                })
+            end
+        end
     end
 
     loci.on_property_changed = function(entity, key, old_val, new_val)
@@ -830,15 +874,16 @@ function love.load(arg)
             end
         end
 
-        -- Fallback procedural apenas para personagens/habilidades sem animação de sprite
-        if not has_sprite_anim then
+        -- Fallback procedural apenas para personagens/habilidades sem animação de sprite.
+        -- blade_throw é exceção: a lâmina agora é uma entidade Projectile real sincronizada
+        -- pelo servidor (trajeto autoritativo) e o impacto/Stun é desenhado no on_entity_despawned.
+        local is_blade_throw = (skill_name == "blade_throw") or (not skill_name and ability_id == 4)
+        if not has_sprite_anim and not is_blade_throw then
             local lifetime = 0.35
             if skill_name == "fireball" then
                 lifetime = 0.40
             elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
                 lifetime = 0.45 -- Whirlwind Dash
-            elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
-                lifetime = 0.60 -- Blade Throw
             end
 
             table.insert(visual_fx, {
@@ -1099,24 +1144,28 @@ function love.update(dt)
         if should_clamp_entity(ent) then
             clamp_entity_to_arena(ent, is_local, is_local)
         end
-        local is_moving = false
-        local vx = ent.vx or 0
-        local vy = ent.vy or 0
-        local speed = math.sqrt(vx * vx + vy * vy)
-        if speed > 0.05 then
-            is_moving = true
+        if is_projectile_entity(ent) then
+            -- Projéteis físicos não têm animação de personagem; o desenho é feito por draw_projectile
+        else
+            local is_moving = false
+            local vx = ent.vx or 0
+            local vy = ent.vy or 0
+            local speed = math.sqrt(vx * vx + vy * vy)
+            if speed > 0.05 then
+                is_moving = true
+            end
+            local p_state = procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
+            local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
+            local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
+            sprite_anim.update(dt, ent.id, {
+                character_name = char_name,
+                direction = p_state and p_state.direction or "south",
+                facing = p_state and p_state.facing or 1,
+                is_moving = is_moving,
+                speed = speed,
+                is_dead = is_dead
+            })
         end
-        local p_state = procedural_anim.update_walk(dt, ent.id, is_moving, vx, vy)
-        local char_name = ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
-        local is_dead = ent.is_dead or (ent.properties and ent.properties["is_dead"] == "true")
-        sprite_anim.update(dt, ent.id, {
-            character_name = char_name,
-            direction = p_state and p_state.direction or "south",
-            facing = p_state and p_state.facing or 1,
-            is_moving = is_moving,
-            speed = speed,
-            is_dead = is_dead
-        })
     end
 
     if my_entity then
@@ -1141,6 +1190,14 @@ function love.update(dt)
         visual_fx[i].lifetime = visual_fx[i].lifetime - dt
         if visual_fx[i].lifetime <= 0 then
             table.remove(visual_fx, i)
+        end
+    end
+
+    -- Update impact VFX (ponto de impacto real dos projéteis, ex.: Stun da lâmina)
+    for i = #impact_fx, 1, -1 do
+        impact_fx[i].lifetime = impact_fx[i].lifetime - dt
+        if impact_fx[i].lifetime <= 0 then
+            table.remove(impact_fx, i)
         end
     end
 
@@ -1443,15 +1500,11 @@ local function draw_hotbar(my_entity)
     local my_team = tostring((my_entity.get and my_entity:get("team")) or my_entity.team or "1")
     local all_entities = (loci.get_entities and loci.get_entities()) or {}
     for _, other in ipairs(all_entities) do
-        if other.id ~= my_entity.id then
-            local ent_type = (other.get and other:get("entity_type")) or (other.properties and other.properties["entity_type"])
-            local is_player = (ent_type == nil) or (string.lower(tostring(ent_type)) == "player")
-            if is_player then
-                local other_team = (other.get and other:get("team")) or (other.properties and other.properties["team"])
-                if other_team ~= nil and tostring(other_team) == my_team then
-                    has_allies = true
-                    break
-                end
+        if other.id ~= my_entity.id and is_player_like_entity(other) then
+            local other_team = (other.get and other:get("team")) or (other.properties and other.properties["team"])
+            if other_team ~= nil and tostring(other_team) == my_team then
+                has_allies = true
+                break
             end
         end
     end
@@ -1713,6 +1766,102 @@ local function draw_procedural_skill_fx(fx)
     end
 end
 
+-- Desenha um projétil físico sincronizado pelo servidor (entidade entity_type="projectile").
+-- A lâmina da Arya (blueprint "blade_throw") é renderizada como uma espada em voo ao longo
+-- da velocidade autoritativa, com rastro e brilho — o trajeto termina onde o servidor
+-- realmente colidiu, não mais no alcance máximo fixo.
+local function draw_projectile(ent)
+    local px = (ent.x or 0) * VISUAL_SCALE
+    local py = (ent.y or 0) * VISUAL_SCALE
+
+    -- Direção de voo: velocidade autoritativa com fallback nas propriedades dir_x/dir_y
+    local dir_x = tonumber(ent.vx) or 0
+    local dir_y = tonumber(ent.vy) or 0
+    local vlen = math.sqrt(dir_x * dir_x + dir_y * dir_y)
+    if vlen <= 0.0001 then
+        dir_x = tonumber(ent.get and ent:get("dir_x")) or tonumber(ent.properties and ent.properties["dir_x"]) or 1
+        dir_y = tonumber(ent.get and ent:get("dir_y")) or tonumber(ent.properties and ent.properties["dir_y"]) or 0
+        vlen = math.sqrt(dir_x * dir_x + dir_y * dir_y)
+    end
+    if vlen <= 0.0001 then
+        dir_x, dir_y = 1, 0
+    else
+        dir_x, dir_y = dir_x / vlen, dir_y / vlen
+    end
+    local angle = math.atan2(dir_y, dir_x)
+
+    local blueprint = tostring(ent.blueprint or ent.name or "")
+    local is_blade = blueprint == "blade_throw"
+        or (ent.get and ent:get("skill") == "blade_throw")
+        or (ent.properties and ent.properties["skill"] == "blade_throw")
+
+    if is_blade then
+        -- Rastro da lâmina
+        love.graphics.setColor(0.4, 0.8, 1.0, 0.30)
+        love.graphics.setLineWidth(5)
+        love.graphics.line(px - dir_x * 34, py - dir_y * 34, px, py)
+
+        -- Glow do impacto iminente
+        love.graphics.setColor(0.3, 0.7, 1.0, 0.35)
+        love.graphics.circle("fill", px, py, 11)
+
+        -- Lâmina orientada ao longo da trajetória
+        love.graphics.push()
+        love.graphics.translate(px, py)
+        love.graphics.rotate(angle)
+        love.graphics.setColor(0.95, 0.98, 1.0, 0.95)
+        love.graphics.setLineWidth(3)
+        love.graphics.line(-9, 0, 11, 0)
+        love.graphics.setColor(0.35, 0.75, 1.0, 0.9)
+        love.graphics.setLineWidth(1.5)
+        love.graphics.line(-9, -3, 9, -3)
+        love.graphics.line(-9, 3, 9, 3)
+        love.graphics.pop()
+        love.graphics.setLineWidth(1)
+    else
+        -- Projétil genérico: ponto luminoso com rastro curto
+        love.graphics.setColor(1.0, 0.85, 0.3, 0.30)
+        love.graphics.setLineWidth(4)
+        love.graphics.line(px - dir_x * 22, py - dir_y * 22, px, py)
+        love.graphics.setColor(1.0, 0.9, 0.5, 0.9)
+        love.graphics.circle("fill", px, py, 6)
+        love.graphics.setColor(1.0, 1.0, 0.9, 0.9)
+        love.graphics.circle("fill", px, py, 3)
+        love.graphics.setLineWidth(1)
+    end
+end
+
+-- Desenha o choque de impacto/Stun exatamente no ponto de impacto real do servidor
+-- (disparado por on_entity_despawned com as coordenadas finais do projétil).
+local function draw_impact_fx(fx)
+    local progress = fx.lifetime / fx.max_lifetime
+    local inv_prog = 1.0 - progress
+    local cx = (fx.x or 0) * VISUAL_SCALE
+    local cy = (fx.y or 0) * VISUAL_SCALE
+    local aoe_px = fx.aoe_px or (SkillRanges.aoe("blade_throw", 8.0) * VISUAL_SCALE)
+
+    -- Flash central nos primeiros instantes
+    if inv_prog > 0.55 then
+        local flash_t = (inv_prog - 0.55) / 0.45
+        love.graphics.setColor(1.0, 0.95, 0.6, flash_t * 0.7)
+        love.graphics.circle("fill", cx, cy, aoe_px * 0.35 * (1.0 - flash_t * 0.4))
+    end
+
+    -- Onda de choque expandindo até o raio real da AoE do Stun
+    local shock_r = aoe_px * (0.25 + 0.75 * inv_prog)
+    love.graphics.setColor(1.0, 0.9, 0.2, progress * 0.9)
+    love.graphics.setLineWidth(3)
+    love.graphics.circle("line", cx, cy, shock_r)
+
+    love.graphics.setColor(0.45, 0.85, 1.0, progress * 0.55)
+    love.graphics.setLineWidth(2)
+    love.graphics.circle("line", cx, cy, shock_r * 0.7)
+
+    love.graphics.setColor(1.0, 0.6, 0.1, progress * 0.4)
+    love.graphics.circle("fill", cx, cy, aoe_px * 0.18 * progress)
+    love.graphics.setLineWidth(1)
+end
+
 function love.draw()
     push:start()
 
@@ -1748,11 +1897,20 @@ function love.draw()
         draw_procedural_skill_fx(fx)
     end
 
+    -- Draw impact VFX nos pontos reais de impacto dos projéteis (Stun da lâmina etc.)
+    for _, fx in ipairs(impact_fx) do
+        draw_impact_fx(fx)
+    end
+
     -- Draw all network entities
     local my_entity = loci.get_my_entity()
     local entities = loci.get_entities()
     for _, ent in ipairs(entities) do
-        draw_entity(ent, my_entity and (ent.id == my_entity.id))
+        if is_projectile_entity(ent) then
+            draw_projectile(ent)
+        else
+            draw_entity(ent, my_entity and (ent.id == my_entity.id))
+        end
     end
 
     -- Draw aim indicator (drag-to-aim) dinâmico conforme o personagem e skills_list ativos

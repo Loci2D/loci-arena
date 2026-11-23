@@ -564,6 +564,7 @@ local function create_client_harness()
             push = function() end,
             pop = function() end,
             translate = function() end,
+            rotate = function() end,
             scale = function() end,
             draw = function() end,
             circle = function(mode, x, y, r)
@@ -638,6 +639,7 @@ local function create_client_harness()
                 name = e.name,
                 position = { x_bits = to_bits(e.x), y_bits = to_bits(e.y) },
                 velocity = { x_bits = to_bits(e.vx or 0), y_bits = to_bits(e.vy or 0) },
+                entity_type = e.entity_type,
                 properties = props
             })
         end
@@ -872,28 +874,62 @@ do
     end
     assert(fury_found, "Expected fury_reward shockwave circle sized by the server aoe_radius")
 
-    -- Blade Throw (habilidade 4, lifetime 0.60s): em inv_prog = 0.8 a lamina chegou ao alcance maximo
-    -- e o choque do Stun tem raio aoe * (0.8 - 0.45) / 0.55
+    -- Blade Throw (habilidade 4): a lâmina agora é uma entidade Projectile real
+    -- (EntityType::Projectile = 3) sincronizada pelo servidor. O VFX procedural de
+    -- trajeto/impacto máximo foi substituído: a lâmina é desenhada via draw_projectile
+    -- e o choque de Stun aparece no on_entity_despawned exatamente no ponto de impacto.
     local c2 = create_client_harness()
     c2.push_snapshot(1, 100, {
         { id = 1, name = "LocalHero", x = 0.0, y = 0.0, vx = 0, vy = 0 }
     })
     local me2 = c2.loci.get_my_entity()
     c2.loci.on_action_cast(me2, 4, 1, 0)
+
+    -- Nenhum VFX procedural legado (trajeto até range máximo) é criado para blade_throw
     c2.advance_time(0.48)
     love.update(0.48)
     for i = #c2.drawn_ops, 1, -1 do c2.drawn_ops[i] = nil end
     love.draw()
-    local shock_r = BLADE_DATA.aoe_radius * 8.0 * ((0.8 - 0.45) / 0.55)
-    local blade_found = false
+    local legacy_shock_r = BLADE_DATA.aoe_radius * 8.0 * ((0.8 - 0.45) / 0.55)
     for _, op in ipairs(c2.drawn_ops) do
-        if op.kind == "circle" and op.mode == "line" and math.abs(op.r - shock_r) < 0.05 then
-            blade_found = true
-            assert_near(op.x, BLADE_DATA.range * 8.0, 1e-2, "Blade VFX reaches the server range")
+        assert(not (op.kind == "circle" and op.mode == "line" and math.abs(op.r - legacy_shock_r) < 0.05),
+            "blade_throw must not spawn the legacy max-range procedural shockwave")
+    end
+
+    -- O servidor sincroniza o projétil físico em voo até o ponto de impacto real (x=30,
+    -- colisão antecipada com inimigo — bem antes do alcance máximo de 56)
+    c2.push_snapshot(2, 133, {
+        { id = 1, name = "LocalHero", x = 0.0, y = 0.0, vx = 0, vy = 0 },
+        { id = 2, name = "blade_throw", entity_type = 3, x = 30.0, y = 0.0, vx = 6.0, vy = 0,
+          props = { skill = "blade_throw", aoe_radius = "8", team = "1" } }
+    })
+    for i = #c2.drawn_ops, 1, -1 do c2.drawn_ops[i] = nil end
+    love.draw()
+    local blade_line_found = false
+    for _, op in ipairs(c2.drawn_ops) do
+        if op.kind == "line" then blade_line_found = true end
+    end
+    assert(blade_line_found, "Expected synced blade_throw projectile to be drawn in flight")
+
+    -- O servidor destrói o projétil no impacto: on_entity_despawned(id, last_entity)
+    -- entrega as coordenadas finais e o cliente desenha o choque de Stun ali mesmo
+    c2.push_snapshot(3, 166, {
+        { id = 1, name = "LocalHero", x = 0.0, y = 0.0, vx = 0, vy = 0 }
+    })
+    c2.advance_time(0.05)
+    love.update(0.05)
+    for i = #c2.drawn_ops, 1, -1 do c2.drawn_ops[i] = nil end
+    love.draw()
+    local impact_found = false
+    for _, op in ipairs(c2.drawn_ops) do
+        if op.kind == "circle" and op.mode == "line"
+            and math.abs(op.x - 30.0 * 8.0) < 1.0 and math.abs(op.y - 0.0) < 1.0
+            and op.r > 0 and op.r <= BLADE_DATA.aoe_radius * 8.0 + 0.5 then
+            impact_found = true
         end
     end
-    assert(blade_found, "Expected blade_throw stun shockwave sized by the server aoe_radius")
-    print("  OK fury_reward and blade_throw VFX follow the server range and aoe_radius")
+    assert(impact_found, "Expected stun shockwave drawn exactly at the real projectile impact point")
+    print("  OK fury_reward VFX follows server range; blade_throw uses synced projectile impact point")
 end
 
 -- Client Test F5: Inward reconciliation error preserved while pushing against wall (review item 1)

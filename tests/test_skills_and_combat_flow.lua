@@ -24,6 +24,7 @@ end
 local function make_server_env(load_main)
     local entities = {}
     local logs = {}
+    local next_dynamic_id = 1000
 
     local function make_pos_ud(ent)
         return {
@@ -44,6 +45,10 @@ local function make_server_env(load_main)
         get_entity_position = function(id)
             local e = entities[id]
             return e and make_pos_ud(e) or nil
+        end,
+        get_entity_type = function(id)
+            local e = entities[id]
+            return e and e.etype or nil
         end,
         get_velocity = function(id)
             local e = entities[id]
@@ -90,6 +95,30 @@ local function make_server_env(load_main)
             destroy_entity = function(id)
                 entities[id] = nil
             end,
+            spawn_entity = function(params)
+                next_dynamic_id = next_dynamic_id + 1
+                local id = next_dynamic_id
+                local etype = "Prop"
+                if params.entity_type == "Projectile" or params.entity_type == "projectile" then
+                    etype = "Projectile"
+                elseif params.entity_type == "Player" or params.entity_type == "player" then
+                    etype = "Player"
+                end
+                local e = {
+                    id = id,
+                    x = params.position and params.position.x or 0,
+                    y = params.position and params.position.y or 0,
+                    vx = params.velocity and params.velocity.x or 0,
+                    vy = params.velocity and params.velocity.y or 0,
+                    etype = etype,
+                    props = {},
+                }
+                for k, v in pairs(params.properties or {}) do
+                    e.props[k] = tostring(v)
+                end
+                entities[id] = e
+                return id
+            end,
         },
     }
 
@@ -118,6 +147,7 @@ local function make_server_env(load_main)
             y = y or 0,
             vx = 0,
             vy = 0,
+            etype = "Player",
             props = { team = tostring(team or "1"), kills = "0", deaths = "0", is_dead = "false" },
         }
         CharacterFactory.create_character(id, char_name or "default")
@@ -131,10 +161,21 @@ local function make_server_env(load_main)
             y = y or 0,
             vx = 0,
             vy = 0,
+            etype = "Player",
             props = {},
         }
         on_player_join(id)
         return entities[id]
+    end
+
+    -- Retorna o id do projétil físico ativo (entity_type "Projectile"), se houver
+    local function find_projectile()
+        for id, e in pairs(entities) do
+            if e.etype == "Projectile" then
+                return id
+            end
+        end
+        return nil
     end
 
     local function step_ticks(start_tick, end_tick)
@@ -156,6 +197,7 @@ local function make_server_env(load_main)
         spawn_entity = spawn_entity,
         join_player = join_player,
         step_ticks = step_ticks,
+        find_projectile = find_projectile,
     }
 end
 
@@ -216,34 +258,113 @@ run_test("fireball deals magical AoE damage at 70% range and spares allies", fun
     assert(enemy_out.props.hp == "6000", "enemy outside blast spared")
 end)
 
-run_test("blade_throw stops at first enemy, stuns AoE targets, and disarms caster", function()
-    local env = make_server_env(false)
-    local CF = env.CharacterFactory
+run_test("blade_throw spawns a real projectile that stops at first enemy and stuns AoE at the real impact point", function()
+    local env = make_server_env(true)
 
-    CF.update_tick(100)
+    env.CharacterFactory.update_tick(100)
     env.spawn_entity(1, "arya", "1", 0, 0)
     local ally_path = env.spawn_entity(2, "default", "1", 6, 0)    -- ally in flight path must NOT stop blade
-    local enemy_hit = env.spawn_entity(3, "default", "2", 12, 0)   -- first enemy at d=12 -> impact at x=12
+    local enemy_hit = env.spawn_entity(3, "default", "2", 12, 0)   -- first enemy blocking the path
     enemy_hit.vx, enemy_hit.vy = 2.0, 1.0
-    local enemy_splash = env.spawn_entity(4, "default", "2", 16, 0) -- within aoe_radius=8.0 of x=12
-    local enemy_far = env.spawn_entity(5, "default", "2", 25, 0)   -- beyond impact AoE -> unharmed
+    local enemy_splash = env.spawn_entity(4, "default", "2", 16, 0) -- within aoe_radius=8.0 of the impact
+    local enemy_far = env.spawn_entity(5, "default", "2", 54, 0)   -- near max range: spared by early impact
 
     with_fixed_random(0.99, function()
-        local ok = CF.execute_skill(1, "blade_throw", 1, 0)
-        assert(ok == true)
+        assert(env.CharacterFactory.execute_skill(1, "blade_throw", 1, 0) == true)
     end)
 
-    -- Caster disarmed for 60 ticks (100 + 60 = 160)
+    -- Caster disarmed for 60 ticks already at cast time (100 + 60 = 160)
     assert(env.entities[1].props.disarmed_until == "160", "caster must be disarmed for 60 ticks")
+
+    -- A lâmina é um projétil físico real: nasce em x=2.0 e avança 6.0 u/tick
+    local proj_id = env.find_projectile()
+    assert(proj_id ~= nil, "blade_throw must spawn a Projectile entity")
+    assert(env.entities[proj_id].etype == "Projectile")
+    assert_near(env.entities[proj_id].x, 2.0, 1e-4, "blade spawns 2.0 units ahead of the caster")
+    assert_near(env.entities[proj_id].vx, 6.0, 1e-4, "blade velocity is authoritative (6.0 u/tick)")
+
+    -- Aliado no caminho não detém a lâmina
+    assert(on_collision(proj_id, 2) == nil, "blade vs ally must not resolve impact")
+    assert(env.entities[proj_id] ~= nil, "blade must keep flying through allies")
     assert(ally_path.props.hp == "5000", "ally in path must not take damage")
 
-    -- Both enemy_hit and enemy_splash take 400 phys damage, 36-tick stun, and velocity reset
+    -- Avança até o projétil alcançar o inimigo (x=14 após 2 ticks; contato com raio 1.5+2.0)
+    env.step_ticks(101, 102)
+    assert_near(env.entities[proj_id].x, 14.0, 1e-4, "blade travels 6.0 u/tick")
+
+    -- Colisão sensor real do servidor no ponto de impacto (x≈14, antes do alcance máximo 56)
+    on_collision(proj_id, 3)
+
+    -- O projétil é destruído no impacto — não continua até o alcance máximo
+    assert(env.entities[proj_id] == nil, "blade projectile must be destroyed on impact")
+
+    -- Impacto antecipado: enemy_hit (x=12) e enemy_splash (x=16) sofrem dano/stun na AoE real;
+    -- enemy_far (x=54, perto do alcance máximo) está fora da AoE do impacto antecipado
     local expected_dmg = 400 * (100 / 180)
     assert_near(tonumber(enemy_hit.props.hp), 5000 - expected_dmg, 1e-4)
     assert_near(tonumber(enemy_splash.props.hp), 5000 - expected_dmg, 1e-4)
-    assert(enemy_hit.props.stunned_until == "136" and enemy_splash.props.stunned_until == "136")
+    assert(enemy_hit.props.stunned_until == "138" and enemy_splash.props.stunned_until == "138",
+        "stun must be applied at the real impact tick (102 + 36)")
     assert(enemy_hit.vx == 0 and enemy_hit.vy == 0)
-    assert(enemy_far.props.hp == "5000" and enemy_far.props.stunned_until == "0")
+    assert(enemy_far.props.hp == "5000" and enemy_far.props.stunned_until == "0",
+        "enemy near max range must be spared when the blade stops early")
+end)
+
+run_test("blade_throw resolves AoE at max range when no enemy blocks the path", function()
+    local env = make_server_env(true)
+
+    env.CharacterFactory.update_tick(200)
+    env.spawn_entity(1, "arya", "1", 0, 0)
+    -- Inimigo fora do corredor da lâmina (y=6 > proj_radius+player_radius), mas dentro da AoE do fim
+    local enemy_end = env.spawn_entity(2, "default", "2", 56, 6)
+    local enemy_mid_offpath = env.spawn_entity(3, "default", "2", 30, 6) -- fora da AoE do impacto final
+
+    with_fixed_random(0.99, function()
+        assert(env.CharacterFactory.execute_skill(1, "blade_throw", 1, 0) == true)
+    end)
+    assert(env.entities[1].props.disarmed_until == "260")
+
+    local proj_id = env.find_projectile()
+    assert(proj_id ~= nil, "blade_throw must spawn a Projectile entity")
+
+    -- Sem colisões: a lâmina viaja 54 u (range 56 - spawn offset 2) em 9 ticks e resolve no tick 210
+    env.step_ticks(201, 210)
+
+    assert(env.entities[proj_id] == nil, "blade must despawn after resolving max-range impact")
+
+    -- AoE aplicada exatamente no ponto de alcance máximo (56, 0): cobre (56,6) mas não (30,6)
+    local expected_dmg = 400 * (100 / 180)
+    assert_near(tonumber(enemy_end.props.hp), 5000 - expected_dmg, 1e-4,
+        "enemy within aoe_radius of the max-range endpoint must be hit")
+    assert(enemy_end.props.stunned_until == "246", "stun applied at resolution tick 210 + 36")
+    assert(enemy_mid_offpath.props.hp == "5000" and enemy_mid_offpath.props.stunned_until == "0",
+        "enemy far from the endpoint must be spared")
+end)
+
+run_test("blade_throw detonates on wall/boundary collision at the projectile position", function()
+    local env = make_server_env(true)
+
+    env.CharacterFactory.update_tick(300)
+    env.spawn_entity(1, "arya", "1", 0, 0)
+    local enemy_near = env.spawn_entity(2, "default", "2", 10, 0)
+
+    with_fixed_random(0.99, function()
+        assert(env.CharacterFactory.execute_skill(1, "blade_throw", 1, 0) == true)
+    end)
+
+    local proj_id = env.find_projectile()
+    assert(proj_id ~= nil)
+
+    env.step_ticks(301, 302) -- projétil avança para x=14
+    assert_near(env.entities[proj_id].x, 14.0, 1e-4)
+
+    -- Impacto em obstáculo estático: AoE resolve na posição real do projétil
+    on_static_collision(proj_id, 999, -1, 0)
+    assert(env.entities[proj_id] == nil, "blade must be destroyed on wall impact")
+    local expected_dmg = 400 * (100 / 180)
+    assert_near(tonumber(enemy_near.props.hp), 5000 - expected_dmg, 1e-4,
+        "AoE must apply at the wall impact point (14,0) covering enemy at x=10")
+    assert(enemy_near.props.stunned_until == "338", "stun at resolution tick 302 + 36")
 end)
 
 run_test("fury_reward enforces ally lock in team games, unlocks in 1v1, and forces crit when fury_active", function()
@@ -382,17 +503,26 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
 
     env.step_ticks(1, 10)
 
-    -- 1. p1 casts blade_throw (slot 4) hitting p2: stuns p2 (36 ticks), disarms p1 (60 ticks)
+    -- 1. p1 casts blade_throw (slot 4): spawns a real Projectile that flies and collides with p2,
+    --    stunning p2 (36 ticks from the real impact tick) and disarming p1 (60 ticks from cast)
     with_fixed_random(0.99, function()
         assert(on_action(1, 4, 1, 0) == true)
     end)
-    assert(p2.props.stunned_until == "46")
     assert(p1.props.disarmed_until == "70")
+    local blade_id = env.find_projectile()
+    assert(blade_id ~= nil, "blade_throw must spawn a synced Projectile entity")
+
+    -- Blade spawns at x=2.0 moving 6.0 u/tick; after 1 tick it overlaps p2 (x=10, contact dist 3.5)
+    env.step_ticks(11, 11)
+    assert_near(env.entities[blade_id].x, 8.0, 1e-4, "blade advanced one tick")
+    on_collision(blade_id, 2)
+    assert(env.entities[blade_id] == nil, "blade projectile destroyed on enemy impact")
+    assert(p2.props.stunned_until == "47", "p2 stunned 36 ticks from the real impact tick (11 + 36)")
     assert(on_action(2, 1, 1, 0) == false, "stunned p2 cannot cast")
     assert(on_action(1, 1, 1, 0) == false, "disarmed p1 cannot cast")
 
     -- 2. Advance to tick 70 (both stun and disarm expired)
-    env.step_ticks(11, 70)
+    env.step_ticks(12, 70)
 
     -- 3. Low-HP p3 gets eliminated by p2's fireball -> KDA updates + p1 (allied Arya) gets passive paralysis + fury
     p3.props.hp = "100"

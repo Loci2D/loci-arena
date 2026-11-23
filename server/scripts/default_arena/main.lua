@@ -70,6 +70,7 @@ end
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("systems.character_factory")
 local RespawnSystem = require("respawn_system")
+local BladeThrow = require("data.skills.blade_throw")
 
 local function is_player_alive(entity_id)
     if not connected_players[entity_id] then return false end
@@ -146,6 +147,7 @@ end
 function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
+    BladeThrow.process_tick()
 
     -- 1. Salva posições antes da integração de física do tick (apenas para vivos)
     --    e projeta dash ativo para impedir avanço contínuo contra a borda após atingi-la.
@@ -377,6 +379,11 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
 end
 
 function on_collision(entity_a, entity_b)
+    -- Projéteis de habilidade (ex.: lâmina da Arya) resolvem impacto antes do body-block de jogadores
+    if BladeThrow.on_collision(entity_a, entity_b) then
+        return
+    end
+
     -- Só processa colisão sólida e body-blocking se ambos forem jogadores conectados e vivos
     if not (connected_players[entity_a] and connected_players[entity_b]) then
         return
@@ -553,6 +560,15 @@ function on_collision(entity_a, entity_b)
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
     end
+end
+
+-- Callbacks de projéteis físicos (loci2d v0.6.5-rev.6+): impacto em parede estática e borda da arena
+function on_static_collision(entity_id, obstacle_id, nx, ny)
+    BladeThrow.on_static_collision(entity_id, obstacle_id, nx, ny)
+end
+
+function on_boundary_collision(entity_id, nx, ny)
+    BladeThrow.on_boundary_collision(entity_id, nx, ny)
 end
 
 function on_player_leave(entity_id)
