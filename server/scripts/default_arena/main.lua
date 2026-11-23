@@ -90,6 +90,13 @@ local function is_entity_dashing(entity_id)
     return current_tick < dashing_until
 end
 
+local function is_entity_casting(entity_id)
+    if not (Loci and Loci.get_entity_property) then return false end
+    local casting_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
+    local current_tick = (CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0
+    return current_tick < casting_until
+end
+
 local function is_blocked_by_player(entity_id, dir_x, dir_y)
     if not dir_x or not dir_y or (dir_x == 0 and dir_y == 0) then
         return false
@@ -181,8 +188,9 @@ function on_tick(current_tick)
             if not is_entity_dashing(entity_id) then
                 local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
                 local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
-                
-                if current_tick >= paralyzed_until and current_tick >= stunned_until then
+                local casting_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
+
+                if current_tick >= paralyzed_until and current_tick >= stunned_until and current_tick >= casting_until then
                     if is_blocked_by_player(entity_id, intent.dir_x, intent.dir_y) then
                         -- Se já está em contato bloqueado com outro jogador, mantém 100% estático (sem jitter)
                         Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
@@ -288,6 +296,13 @@ function on_move_intent(entity_id, dir_x, dir_y)
     if CharacterFactory.get_current_tick() < dashing_until then
         -- Durante o dash ativo, mantém a velocidade física do impulso sem cancelá-la;
         -- player_intents já foi atualizado acima para refletir soltura/troca de tecla no fim do dash.
+        return true
+    end
+
+    if is_entity_casting(entity_id) then
+        -- Cast lock: a intenção fica registrada para retomar o movimento ao fim da
+        -- conjuração, mas a velocidade é zerada enquanto casting_until estiver ativo.
+        Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
         return true
     end
 
@@ -402,8 +417,10 @@ function on_collision(entity_a, entity_b)
     local intent_a = player_intents[entity_a]
     local intent_b = player_intents[entity_b]
 
-    local moving_a = intent_a and (intent_a.dir_x ~= 0 or intent_a.dir_y ~= 0)
-    local moving_b = intent_b and (intent_b.dir_x ~= 0 or intent_b.dir_y ~= 0)
+    -- Jogador em cast lock tem intenção registrada mas está enraizado: trata como parado
+    -- para não sofrer o split de posição do "ambos se movendo" durante a conjuração.
+    local moving_a = intent_a and (intent_a.dir_x ~= 0 or intent_a.dir_y ~= 0) and not is_entity_casting(entity_a)
+    local moving_b = intent_b and (intent_b.dir_x ~= 0 or intent_b.dir_y ~= 0) and not is_entity_casting(entity_b)
 
     -- Raio dos personagens da arena derivado de ArenaBounds.PLAYER_COLLIDER_RADIUS + folga de 0.05
     local MIN_DIST = MIN_COLLISION_DIST

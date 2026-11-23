@@ -337,6 +337,10 @@ run_test("main.lua on_action enforces CC/death guards and character swap 999", f
     end)
     assert(tonumber(p2.props.hp) < 5500)
 
+    -- O slash aplica cast_lock_ticks (casting_until = 24): expira o lock aqui para
+    -- não interferir nas asserções de move_speed dos próximos ticks
+    p1.props.casting_until = "0"
+
     -- Swap character via ability_id == 999 cycles arya -> default -> mage -> warrior -> arya
     assert(on_move_intent(1, -1, 0) == true)
     assert_near(p1.vx, -2.2, 1e-5, "arya base move_speed")
@@ -470,6 +474,90 @@ run_test("server publishes skill_ranges from data/skills and the client defaults
         assert_near(meta.cooldown * 30, data.cooldown, 1e-3, "client SKILL_META cooldown drifted from server for " .. name)
         assert_near(meta.mana_cost, data.mana_cost or 0, 1e-3, "client SKILL_META mana_cost drifted from server for " .. name)
     end
+end)
+
+run_test("cast_lock_ticks: attacks root via casting_until while whirlwind_dash and shield do not", function()
+    local env = make_server_env(false)
+    local CF = env.CharacterFactory
+
+    CF.update_tick(200)
+    local e = env.spawn_entity(1, "arya", "1", 0, 0)
+    e.props.skills_list = e.props.skills_list .. ",shield"
+    assert(e.props.casting_until == "0", "casting_until must be initialized to 0")
+
+    -- Slash: cast_lock_ticks = 9 -> casting_until = 209, velocity zerada
+    with_fixed_random(0.99, function()
+        assert(CF.execute_skill(1, "slash", 1, 0) == true)
+    end)
+    assert(e.props.casting_until == "209", "slash must set casting_until = tick + 9")
+    assert(e.vx == 0 and e.vy == 0, "cast lock must zero velocity")
+
+    -- Fury reward (1v1: sem aliados na entidade -> desbloqueada): cast_lock_ticks = 24
+    with_fixed_random(0.99, function()
+        assert(CF.execute_skill(1, "fury_reward", 1, 0) == true)
+    end)
+    assert(e.props.casting_until == "224", "fury_reward must set casting_until = tick + 24")
+
+    -- Blade throw: cast_lock_ticks = 24
+    with_fixed_random(0.99, function()
+        assert(CF.execute_skill(1, "blade_throw", 1, 0) == true)
+    end)
+    assert(e.props.casting_until == "224", "blade_throw must set casting_until = tick + 24")
+
+    -- Expira o cast lock e avança tick
+    CF.update_tick(300)
+    assert(e.props.casting_until == "0", "casting_until must reset to 0 after expiry")
+
+    -- Whirlwind dash: mobilidade via dashing_until, SEM casting_until
+    with_fixed_random(0.99, function()
+        assert(CF.execute_skill(1, "whirlwind_dash", 1, 0) == true)
+    end)
+    assert(e.props.casting_until == "0", "whirlwind_dash must not set casting_until")
+    assert(e.props.dashing_until == "306", "whirlwind_dash must keep dashing_until mobility")
+
+    -- Shield: buff instantâneo, sem cast lock
+    CF.update_tick(400)
+    assert(CF.execute_skill(1, "shield", 0, 0) == true)
+    assert(e.props.casting_until == "0", "shield must not set casting_until")
+end)
+
+run_test("on_move_intent/on_tick root the caster during casting_until and resume the held intent after", function()
+    local env = make_server_env(true)
+    local p1 = env.join_player(1, 0, 0)  -- Time 1 (Arya)
+    local p2 = env.join_player(2, 40, 0) -- Time 2, longe para não colidir
+
+    env.step_ticks(1, 5)
+
+    -- Slash no tick 5 -> casting_until = 14 (5 + 9)
+    with_fixed_random(0.99, function()
+        assert(on_action(1, 1, 1, 0) == true)
+    end)
+    assert(p1.props.casting_until == "14")
+
+    -- Intenção de movimento durante o cast lock: aceita, mas zera velocidade
+    assert(on_move_intent(1, 1, 0) == true)
+    assert(p1.vx == 0 and p1.vy == 0, "cast lock must zero velocity on move intent")
+
+    -- Ticks 6..13: enraizado, não avança
+    env.step_ticks(6, 13)
+    assert_near(p1.x, 0, 1e-4, "caster must not move while casting_until is active")
+    assert(p1.vx == 0 and p1.vy == 0)
+
+    -- Tick 14: lock expira -> intenção registrada retoma o movimento sem novo input
+    env.step_ticks(14, 16)
+    assert(p1.x > 0.5, "movement must resume right after cast lock expires")
+
+    -- Whirlwind dash (slot 3): mobilidade preservada via dashing_until, sem cast lock
+    with_fixed_random(0.99, function()
+        assert(on_action(1, 3, 1, 0) == true)
+    end)
+    assert(p1.props.casting_until == "0", "whirlwind_dash must not set casting_until")
+    assert(tostring(p1.props.dashing_until) == "22", "dash must last 6 ticks (16 + 6)")
+
+    -- Durante o dash, o impulso físico prevalece sobre a intenção de movimento
+    on_move_intent(1, -1, 0)
+    env.step_ticks(17, 18)
+    assert(p1.vx > 5, "dash velocity must prevail during whirlwind_dash, got vx=" .. tostring(p1.vx))
 end)
 
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

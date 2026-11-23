@@ -19,6 +19,7 @@ return {
     description = "Arremessa a espada. Causa dano físico e Stun em área no impacto, mas aplica Desarme na Arya por 2.0s.",
     mana_cost = 45,
     cooldown = 420, -- 14 segundos a 30Hz
+    cast_lock_ticks = 24, -- 0.8s a 30Hz: enraíza durante o arremesso (duração da animação Habilidade_4)
     range = 56.0,                   -- unidades do mundo (cabe na tela: +-45 na vertical, +-80 na horizontal)
     damage = 400,
     damage_type = CombatSystem.DamageType.PHYSICAL,

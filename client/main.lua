@@ -264,6 +264,18 @@ end
 local function predict_local_movement(ent, dx, dy, dt)
     if not ent then return end
 
+    -- Cast lock autoritativo (casting_until, publicado pelo servidor em ticks):
+    -- zera a predição local durante a conjuração para não divergir do servidor.
+    local cur_tick = tonumber(loci._last_state_tick) or 0
+    local casting_until = tonumber((ent.get and ent:get("casting_until"))
+        or (ent.properties and ent.properties["casting_until"])) or 0
+    if casting_until > cur_tick then
+        ent.vx = 0
+        ent.vy = 0
+        clamp_entity_to_arena(ent, true, false)
+        return
+    end
+
     local in_dx = dx or 0
     local in_dy = dy or 0
     local len = math.sqrt(in_dx * in_dx + in_dy * in_dy)

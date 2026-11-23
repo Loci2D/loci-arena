@@ -74,6 +74,11 @@ function CharacterFactory.update_tick(tick)
                 Loci.Commands.set_velocity(entity_id, {x = 0, y = 0})
             end
 
+            local casting_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
+            if casting_until > 0 and current_tick >= casting_until then
+                Loci.Commands.set_property(entity_id, "casting_until", "0")
+            end
+
             local shield_end = tonumber(Loci.get_entity_property(entity_id, "shield_end_tick")) or 0
             if shield_end > 0 and current_tick >= shield_end then
                 Loci.Commands.set_property(entity_id, "shield", "0")
@@ -183,6 +188,7 @@ function CharacterFactory.create_character(entity_id, character_name)
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
+    Loci.Commands.set_property(entity_id, "casting_until", "0")
     Loci.Commands.set_property(entity_id, "shield", "0")
     Loci.Commands.set_property(entity_id, "shield_active", "0")
     Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
@@ -342,6 +348,19 @@ function CharacterFactory.execute_skill(entity_id, skill_name, aim_x, aim_y)
 
     if skill_data.cooldown and skill_data.cooldown > 0 then
         CharacterFactory.trigger_cooldown(entity_id, skill_data.id, skill_data.cooldown)
+    end
+
+    -- Cast lock autoritativo: durante `casting_until` o jogador fica enraizado
+    -- (ver main.lua on_move_intent/on_tick). Habilidades de mobilidade como
+    -- whirlwind_dash não definem cast_lock_ticks e seguem via dashing_until.
+    local cast_lock_ticks = tonumber(skill_data.cast_lock_ticks) or 0
+    if cast_lock_ticks > 0 then
+        -- Mantém o maior casting_until ativo: cooldowns são por habilidade e uma
+        -- skill de lock curto não pode encurtar o lock de uma conjuração anterior.
+        local existing_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
+        local new_until = math.max(existing_until, current_tick + cast_lock_ticks)
+        Loci.Commands.set_property(entity_id, "casting_until", tostring(new_until))
+        Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
     end
 
     return true

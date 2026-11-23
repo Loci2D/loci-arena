@@ -54,6 +54,20 @@ local DEFAULT_FPS = 11
 local MAX_IMAGE_CACHE = 512
 local SPRITE_BASE_SIZE = 32
 
+-- Skills cuja animação de ataque pode ser cancelada por input de movimento
+-- (animation canceling). O cast lock autoritativo do servidor (casting_until)
+-- é mais curto que a animação nesses casos; ao expirar, andar interrompe o
+-- recovery em vez de deslizar reproduzindo o golpe. Demais golpes esperam a
+-- animação terminar (o servidor os enraíza pela duração total).
+local CANCELABLE_ATTACK_SKILLS = {
+    slash = true,
+}
+
+-- Frames mínimos da animação antes de aceitar cancelamento por movimento.
+-- Cobre a janela em que o casting_until ainda não chegou do servidor e a
+-- predição local continua deslocando o personagem logo após o cast.
+local MIN_CANCEL_FRAME_INDEX = 3
+
 -- Cache de sprite_set por char_name em lowercase
 local loaded_characters = {}
 
@@ -828,7 +842,8 @@ function SpriteAnim.get_entity_state(entity_id, char_name)
             is_dead = false,
             is_moving = false,
             speed = 0,
-            death_finished = false
+            death_finished = false,
+            cancelable_action = false
         }
         entity_states[entity_id] = state
     end
@@ -904,6 +919,8 @@ function SpriteAnim.trigger_action(entity_id, skill_name, ability_id, dir_x, dir
         state.frame_index = 1
         state.timer = 0
         state.is_locked = true
+        state.cancelable_action = (skill_name ~= nil
+            and CANCELABLE_ATTACK_SKILLS[string.lower(tostring(skill_name))] == true) or false
 
         if dir_x and dir_y and (dir_x ~= 0 or dir_y ~= 0) then
             state.direction = calc_direction_8way(dir_x, dir_y, state.direction)
@@ -936,6 +953,7 @@ function SpriteAnim.trigger_ally_death(entity_id, char_name)
         state.frame_index = 1
         state.timer = 0
         state.is_locked = true
+        state.cancelable_action = false
         print(string.format("[Client] Entity %s playing '%s' mourning animation", tostring(entity_id), mapped_state))
     end
 end
@@ -955,6 +973,7 @@ function SpriteAnim.set_dead(entity_id, is_dead, char_name)
             state.frame_index = 1
             state.timer = 0
             state.is_locked = false
+            state.cancelable_action = false
             state.death_finished = false
         end
     else
@@ -966,6 +985,7 @@ function SpriteAnim.set_dead(entity_id, is_dead, char_name)
             state.frame_index = 1
             state.timer = 0
             state.is_locked = false
+            state.cancelable_action = false
         end
     end
 end
@@ -1057,31 +1077,43 @@ function SpriteAnim.update(dt, entity_id, data)
 
     -- Se estiver executando uma ação bloqueante (ataque ou aliado_morre)
     if state.is_locked and state.current_action then
-        local total_frames = get_state_frame_count(sprite_set, state.current_action, state.direction)
-        local cur_frame_dur = frame_duration
-        local state_durations = sprite_set and sprite_set.anim_map and sprite_set.anim_map.state_durations
-        local custom_dur = state_durations and (state_durations[state.current_action] or state_durations[state.current_state])
-        if custom_dur and custom_dur > 0 and total_frames > 0 then
-            cur_frame_dur = custom_dur / total_frames
-        end
-
-        state.timer = state.timer + dt
-        while state.timer >= cur_frame_dur do
-            state.timer = state.timer - cur_frame_dur
-            state.frame_index = state.frame_index + 1
-            if state.frame_index > total_frames then
-                -- Fim da animação one-shot: desbloquear e retornar ao estado de locomoção/idle
-                state.is_locked = false
-                state.current_action = nil
-                state.current_state = "idle"
-                state.frame_index = 1
-                state.timer = 0
-                if data.direction then state.direction = data.direction end
-                if data.facing then state.facing = data.facing end
-                break
+        -- Animation canceling: golpe básico (slash) interrompe o recovery ao mover,
+        -- mas só depois dos frames de impacto (evita cancelar no gap de sync do cast lock)
+        if state.cancelable_action and data.is_moving and state.frame_index >= MIN_CANCEL_FRAME_INDEX then
+            state.is_locked = false
+            state.current_action = nil
+            state.current_state = "idle"
+            state.cancelable_action = false
+            state.frame_index = 1
+            state.timer = 0
+        else
+            local total_frames = get_state_frame_count(sprite_set, state.current_action, state.direction)
+            local cur_frame_dur = frame_duration
+            local state_durations = sprite_set and sprite_set.anim_map and sprite_set.anim_map.state_durations
+            local custom_dur = state_durations and (state_durations[state.current_action] or state_durations[state.current_state])
+            if custom_dur and custom_dur > 0 and total_frames > 0 then
+                cur_frame_dur = custom_dur / total_frames
             end
+
+            state.timer = state.timer + dt
+            while state.timer >= cur_frame_dur do
+                state.timer = state.timer - cur_frame_dur
+                state.frame_index = state.frame_index + 1
+                if state.frame_index > total_frames then
+                    -- Fim da animação one-shot: desbloquear e retornar ao estado de locomoção/idle
+                    state.is_locked = false
+                    state.current_action = nil
+                    state.current_state = "idle"
+                    state.cancelable_action = false
+                    state.frame_index = 1
+                    state.timer = 0
+                    if data.direction then state.direction = data.direction end
+                    if data.facing then state.facing = data.facing end
+                    break
+                end
+            end
+            return
         end
-        return
     end
 
     -- Locomoção ou Idle
