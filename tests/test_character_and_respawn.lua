@@ -101,20 +101,20 @@ run_test("create_character initializes attributes, falls back to default, and av
 
     assert(CF.create_character(1, "arya") == true)
     assert(env.props[1].character_name == "arya")
-    assert(env.props[1].role == "tank")
-    assert(env.props[1].max_hp == "5500" and env.props[1].hp == "5500")
-    assert(env.props[1].phys_def == "130" and env.props[1].mag_def == "50")
+    assert(env.props[1].role == "fighter")
+    assert(env.props[1].max_hp == "5000" and env.props[1].hp == "5000")
+    assert(env.props[1].phys_def == "85" and env.props[1].mag_def == "55")
     assert(env.props[1].mana == "100" and env.props[1].max_mana == "100")
     assert(env.props[1].move_speed == "2.2")
-    assert(env.props[1].hp_regen == "20" and env.props[1].mana_regen == "10")
+    assert(env.props[1].hp_regen == "12" and env.props[1].mana_regen == "10")
     assert(env.props[1].skills_list == "slash,fury_reward,whirlwind_dash,blade_throw")
     assert(env.props[1].fury_active == "false")
 
     -- Re-creating same entity must not duplicate it in active_entities (regen ticks once)
     assert(CF.create_character(1, "arya") == true)
-    env.props[1].hp = "5000"
+    env.props[1].hp = "4800"
     CF.update_tick(30)
-    assert(env.props[1].hp == "5020", "regen should apply exactly once (+20), got " .. tostring(env.props[1].hp))
+    assert(env.props[1].hp == "4812", "regen should apply exactly once (+12), got " .. tostring(env.props[1].hp))
 
     -- Unknown character falls back to default
     assert(CF.create_character(2, "unknown_hero_xyz") == true)
@@ -230,8 +230,8 @@ run_test("update_tick handles 30-tick HP/mana regen caps and status/dash/shield 
     local CF = env.CharacterFactory
     local CS = env.CombatSystem
 
-    CF.create_character(1, "arya") -- max_hp=5500, hp_regen=20, max_mana=100, mana_regen=10
-    env.props[1].hp = "5490"
+    CF.create_character(1, "arya") -- max_hp=5000, hp_regen=12, max_mana=100, mana_regen=10
+    env.props[1].hp = "4990"
     env.props[1].mana = "95"
     env.props[1].stunned_until = "10"
     env.props[1].disarmed_until = "12"
@@ -241,7 +241,7 @@ run_test("update_tick handles 30-tick HP/mana regen caps and status/dash/shield 
 
     -- Tick 9: nothing expired yet, no regen
     CF.update_tick(9)
-    assert(env.props[1].hp == "5490" and env.props[1].mana == "95")
+    assert(env.props[1].hp == "4990" and env.props[1].mana == "95")
     assert(env.props[1].stunned_until == "10")
 
     -- Tick 10: stun expires
@@ -272,7 +272,7 @@ run_test("update_tick handles 30-tick HP/mana regen caps and status/dash/shield 
 
     -- Tick 30: regen applies and clamps to max_hp / max_mana
     CF.update_tick(30)
-    assert(env.props[1].hp == "5500", "hp regen must clamp to max_hp")
+    assert(env.props[1].hp == "5000", "hp regen must clamp to max_hp")
     assert(env.props[1].mana == "100", "mana regen must clamp to max_mana")
 
     -- Dead entity skips regen and status expiration; on_entity_remove unregisters entity
