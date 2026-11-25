@@ -1243,7 +1243,7 @@ function love.keypressed(key)
     elseif key == "r" then
         cast_ability_at_mouse(4)
     elseif key == "k" then
-        -- Troca de personagem provisória (cicla: arya -> default -> mage -> warrior -> arya)
+        -- Troca de personagem provisória (cicla: arya -> warrior -> archer -> mage -> cleric -> enchanter -> arya)
         request_swap_hero()
     elseif key == "m" then
         local enabled = AudioSystem.toggle_mute()

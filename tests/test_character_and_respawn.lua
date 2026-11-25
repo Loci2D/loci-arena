@@ -77,7 +77,7 @@ run_test("All character definitions have valid attributes and loadable skills", 
     local env = make_env()
     local CF = env.CharacterFactory
 
-    for _, char_name in ipairs({ "arya", "default", "mage", "warrior" }) do
+    for _, char_name in ipairs({ "arya", "warrior", "archer", "mage", "cleric", "enchanter", "default" }) do
         local data = CF.load_character(char_name)
         assert(type(data) == "table", "failed to load character: " .. char_name)
         assert(type(data.name) == "string" and #data.name > 0)
