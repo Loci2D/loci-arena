@@ -491,6 +491,36 @@ do
     print("  OK on_move_intent updates intent mid-dash (stop & redirect after dash ends)")
 end
 
+-- Test E3: Slow CC & SlowZone [20,30]x[20,30] under deferred CommandBuffer
+do
+    local h = create_server_harness()
+    local p = h.spawn_player(1, 17.0, 25.0, 2.0)
+    h.move_intent(1, 1, 0) -- Continuous straight East input (2.0 u/tick)
+
+    -- Tick 1: integrates 17.0 -> 19.0; post_x during on_tick(1) was 19.0 (still outside [20,30])
+    h.step_tick()
+    assert_near(p.x, 19.0, 1e-5)
+    assert_near(p.vx, 2.0, 1e-5)
+    assert(p.props["slowed_until"] == "0")
+
+    -- Tick 2: integrates 19.0 -> 21.0 (enters [20,30]!); post_x during on_tick(2) is 21.0 -> CommandBuffer flushes vx=1.0 on arrival tick!
+    h.step_tick()
+    assert_near(p.x, 21.0, 1e-5, "Enters slow zone at x=21.0")
+    assert_near(p.vx, 1.0, 1e-5, "Zero-lag CommandBuffer slow reduces vx to 1.0 on exact arrival tick")
+    assert(tonumber(p.props["slowed_until"]) > h.state.tick, "slowed_until set on arrival tick")
+
+    -- Tick 3: integrates at slowed speed (21.0 + 1.0 = 22.0)
+    h.step_tick()
+    assert_near(p.x, 22.0, 1e-5, "Displaces by slowed 1.0 u/tick inside [20,30]x[20,30]")
+    assert_near(p.vx, 1.0, 1e-5, "Does not compound slow across ticks")
+
+    -- Force slow to expire on next tick while still inside [20,30]x[20,30] (tests same-tick expiry + re-apply under deferred CommandBuffer)
+    p.props["slowed_until"] = tostring(h.state.tick + 1)
+    h.step_tick()
+    assert_near(p.vx, 1.0, 1e-5, "Same-tick expiry + SlowZone reapply preserves exact 1.0 slowed velocity under deferred CommandBuffer")
+    print("  OK SlowZone [20,30]x[20,30] applies 0-lag deceleration under deferred CommandBuffer")
+end
+
 -- ============================================================================
 -- CLIENT NETCODE & MAIN.LUA INTEGRATION HARNESS
 -- ============================================================================

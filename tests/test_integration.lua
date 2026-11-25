@@ -996,4 +996,43 @@ love.update(0.1)
 love.draw()
 print("  -> Passed: VfxSystem projectile rendering and despawn impact synchronization verified.")
 
+print("[Test 12] Testing Slow CC Visual Indicator (* SLOW *), Prediction & Slow Zone Floor Rendering...")
+loci._last_state_tick = 200
+my_ent.properties.is_dead = false
+my_ent.properties.stunned_until = 0
+my_ent.properties.disarmed_until = 0
+my_ent.properties.slowed_until = 260
+my_ent.properties.slow_multiplier = 0.5
+my_ent.properties.move_speed = 2.0
+
+reset_draw_captures()
+love.draw()
+assert(contains_text(captured_prints, "* SLOW *"), "Entity with active slowed_until must render * SLOW * above head")
+assert(contains_text(captured_prints, "SLOW ZONE"), "Arena floor must render SLOW ZONE marker at [20,30]x[20,30]")
+
+-- Verify predicted speed is scaled while slowed
+my_ent.x = 0.0
+my_ent.y = 0.0
+keys_down = { d = true }
+loci._mock_time = 110.0
+_G.love.timer._time = 110.0
+loci._last_state_received_time = 110.0
+love.update(0.016)
+loci._mock_time = 110.116
+_G.love.timer._time = 110.116
+loci._last_state_received_time = 110.116
+love.update(0.100) -- 2.0 * 0.5 * 30 Hz * 0.1s = 3.0 units
+assert(math.abs(my_ent.x - 3.0) < 0.05, string.format("Slowed local prediction expected ~3.0, got %.4f", my_ent.x))
+keys_down = {}
+love.update(0.016)
+
+-- Once slowed_until expires (tick >= slowed_until), * SLOW * disappears
+loci._last_state_tick = 260
+my_ent.properties.slowed_until = 0
+my_ent.properties.slow_multiplier = 1.0
+reset_draw_captures()
+love.draw()
+assert(not contains_text(captured_prints, "* SLOW *"), "* SLOW * indicator must clear once slow expires")
+print("  -> Passed: Slow CC visual feedback, floor zone rendering, and local prediction verified.")
+
 print("\n>>> ALL CLIENT INTEGRATION TESTS PASSED SUCCESSFULLY! <<<")

@@ -115,6 +115,10 @@ local function execute_default_aoe_impact(proj, impact_x, impact_y, direct_targe
                         Loci.Commands.set_velocity(target_id, { x = 0, y = 0 })
                     end
 
+                    if proj.slow_duration_ticks and proj.slow_duration_ticks > 0 and not is_entity_dead(target_id) then
+                        CombatSystem.apply_slow(target_id, proj.slow_multiplier or 0.5, proj.slow_duration_ticks, current_tick)
+                    end
+
                     hit_count = hit_count + 1
                 end
             end
@@ -301,6 +305,8 @@ function ProjectileSystem.spawn(params)
         damage = tonumber(params.damage) or 0,
         damage_type = params.damage_type or CombatSystem.DamageType.PHYSICAL,
         stun_duration_ticks = tonumber(params.stun_duration_ticks) or 0,
+        slow_duration_ticks = tonumber(params.slow_duration_ticks) or 0,
+        slow_multiplier = tonumber(params.slow_multiplier) or 0.5,
         lifetime_ticks = lifetime_ticks,
         spawn_tick = current_tick,
         steps_taken = 0,

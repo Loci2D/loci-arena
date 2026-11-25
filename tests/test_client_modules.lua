@@ -597,6 +597,21 @@ run_test("LocalPrediction normal kinematics: diagonal normalization, idle stop a
     }
     LocalPrediction.predict_local_movement(sdk_like, 1, 0, 0.016, { cur_tick = 3, tick_rate = 30, default_speed = 2 })
     assert(sdk_like.vx == 0 and sdk_like.x == 0, "ent:get('casting_until') must gate prediction")
+
+    -- Slow CC prediction: slowed_until > cur_tick scales predicted velocity and displacement by slow_multiplier
+    local slowed_ent = {
+        id = 10, x = 0, y = 0,
+        properties = { move_speed = "2.0", slowed_until = "50", slow_multiplier = "0.5" },
+    }
+    LocalPrediction.predict_local_movement(slowed_ent, 1, 0, 0.1, { cur_tick = 20, tick_rate = 30, default_speed = 2 })
+    assert_near(slowed_ent.vx, 1.0, 1e-5, "slowed vx scaled by 0.5")
+    assert_near(slowed_ent.x, 1.0 * 30 * 0.1, 1e-4, "slowed displacement scaled by 0.5")
+
+    -- Expired slow (cur_tick >= slowed_until) predicts full speed
+    slowed_ent.x = 0
+    LocalPrediction.predict_local_movement(slowed_ent, 1, 0, 0.1, { cur_tick = 50, tick_rate = 30, default_speed = 2 })
+    assert_near(slowed_ent.vx, 2.0, 1e-5, "expired slow restores full predicted vx")
+    assert_near(slowed_ent.x, 2.0 * 30 * 0.1, 1e-4, "expired slow restores full predicted displacement")
 end)
 
 -- ---------------------------------------------------------------------------

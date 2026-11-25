@@ -1,6 +1,10 @@
 -- Character Factory
 -- Responsável por carregar tabelas de dados e instanciar personagens e habilidades.
 local CombatSystem = require("core.combat_system")
+local ok_bounds, ArenaBounds = pcall(require, "core.arena_bounds")
+if not ok_bounds then
+    ArenaBounds = nil
+end
 
 local CharacterFactory = {}
 
@@ -79,6 +83,41 @@ function CharacterFactory.update_tick(tick)
                 Loci.Commands.set_property(entity_id, "casting_until", "0")
             end
 
+            local slowed_until = tonumber(Loci.get_entity_property(entity_id, "slowed_until")) or 0
+            if slowed_until > 0 and current_tick >= slowed_until then
+                local old_mult = tonumber(Loci.get_entity_property(entity_id, "slow_multiplier")) or 1.0
+                CombatSystem.clear_slow(entity_id, current_tick)
+
+                -- Restaurar velocidade normal se ainda estiver em movimento e sem CC incapacitante/dash
+                local active_stun = (stunned_until > 0 and current_tick < stunned_until)
+                local active_paralyze = (paralyzed_until > 0 and current_tick < paralyzed_until)
+                local active_dash = (dashing_until > 0 and current_tick < dashing_until)
+                local active_cast = (casting_until > 0 and current_tick < casting_until)
+
+                if not active_stun and not active_paralyze and not active_dash and not active_cast
+                    and old_mult > 0 and old_mult < 1.0 and Loci and Loci.get_velocity then
+                    local vel = Loci.get_velocity(entity_id)
+                    if vel then
+                        local vx = (type(vel.x_float) == "function") and vel:x_float() or (tonumber(vel.x) or 0)
+                        local vy = (type(vel.y_float) == "function") and vel:y_float() or (tonumber(vel.y) or 0)
+                        if vx ~= 0 or vy ~= 0 then
+                            local rest_vx = vx / old_mult
+                            local rest_vy = vy / old_mult
+                            if ArenaBounds and Loci.get_entity_position then
+                                local pos = Loci.get_entity_position(entity_id)
+                                if pos then
+                                    local px = (type(pos.x_float) == "function") and pos:x_float() or (pos.x or 0)
+                                    local py = (type(pos.y_float) == "function") and pos:y_float() or (pos.y or 0)
+                                    local post_x, post_y = ArenaBounds.predict_post_step_xy(entity_id, px, py, vx, vy)
+                                    rest_vx, rest_vy = ArenaBounds.project_velocity(post_x, post_y, rest_vx, rest_vy)
+                                end
+                            end
+                            CombatSystem.set_velocity_tracked(entity_id, rest_vx, rest_vy, current_tick)
+                        end
+                    end
+                end
+            end
+
             local shield_end = tonumber(Loci.get_entity_property(entity_id, "shield_end_tick")) or 0
             if shield_end > 0 and current_tick >= shield_end then
                 Loci.Commands.set_property(entity_id, "shield", "0")
@@ -91,6 +130,16 @@ end
 
 function CharacterFactory.get_current_tick()
     return current_tick
+end
+
+-- Helper para aplicar Slow CC usando o tick atual do CharacterFactory
+function CharacterFactory.apply_slow(entity_id, slow_multiplier, duration_ticks)
+    return CombatSystem.apply_slow(entity_id, slow_multiplier, duration_ticks, current_tick)
+end
+
+-- Helper para limpar Slow CC de uma entidade
+function CharacterFactory.clear_slow(entity_id)
+    CombatSystem.clear_slow(entity_id, current_tick)
 end
 
 -- Carregar arquivo de personagem via require
@@ -189,6 +238,7 @@ function CharacterFactory.create_character(entity_id, character_name)
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
     Loci.Commands.set_property(entity_id, "casting_until", "0")
+    CombatSystem.clear_slow(entity_id, current_tick)
     Loci.Commands.set_property(entity_id, "shield", "0")
     Loci.Commands.set_property(entity_id, "shield_active", "0")
     Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
@@ -221,6 +271,7 @@ end
 -- Limpa estado da entidade ao sair
 function CharacterFactory.on_entity_remove(entity_id)
     entity_cooldowns[entity_id] = nil
+    CombatSystem.clear_slow(entity_id)
     
     for i = #active_entities, 1, -1 do
         if active_entities[i] == entity_id then
@@ -230,8 +281,9 @@ function CharacterFactory.on_entity_remove(entity_id)
     end
 end
 
--- Hook chamado quando uma entidade morre para processar passivas
+-- Hook chamado quando uma entidade morre para processar limpeza e passivas
 function CharacterFactory.on_entity_die(dead_entity_id)
+    CombatSystem.clear_slow(dead_entity_id, current_tick)
     local dead_team = Loci.get_entity_property(dead_entity_id, "team")
     
     for i = 1, #active_entities do

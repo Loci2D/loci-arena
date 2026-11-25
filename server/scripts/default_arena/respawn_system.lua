@@ -28,9 +28,15 @@ function respawn_system.mark_dead(entity_id)
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
+    Loci.Commands.set_property(entity_id, "slowed_until", "0")
+    Loci.Commands.set_property(entity_id, "slow_multiplier", "1")
     Loci.Commands.set_property(entity_id, "shield", "0")
     Loci.Commands.set_property(entity_id, "shield_active", "0")
     Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
+    local cs = package.loaded["core.combat_system"]
+    if cs and cs.clear_slow then
+        cs.clear_slow(entity_id, current_tick_internal)
+    end
 end
 
 -- Remover jogador da lista de mortos (quando reviver)
@@ -44,9 +50,15 @@ function respawn_system.mark_alive(entity_id)
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
+    Loci.Commands.set_property(entity_id, "slowed_until", "0")
+    Loci.Commands.set_property(entity_id, "slow_multiplier", "1")
     Loci.Commands.set_property(entity_id, "shield", "0")
     Loci.Commands.set_property(entity_id, "shield_active", "0")
     Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
+    local cs = package.loaded["core.combat_system"]
+    if cs and cs.clear_slow then
+        cs.clear_slow(entity_id, current_tick_internal)
+    end
 end
 
 -- Verificar se um jogador está morto

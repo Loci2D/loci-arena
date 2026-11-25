@@ -23,6 +23,17 @@ function LocalPrediction.is_casting(ent, cur_tick)
     return casting_until > (tonumber(cur_tick) or 0)
 end
 
+function LocalPrediction.get_slow_multiplier(ent, cur_tick)
+    local slowed_until = tonumber(get_entity_prop(ent, "slowed_until")) or 0
+    if slowed_until > (tonumber(cur_tick) or 0) then
+        local mult = tonumber(get_entity_prop(ent, "slow_multiplier"))
+        if mult ~= nil and mult >= 0.0 and mult <= 1.0 then
+            return mult
+        end
+    end
+    return 1.0
+end
+
 -- env:
 --   cur_tick        tick autoritativo do servidor (loci._last_state_tick)
 --   tick_rate       ticks por segundo (loci.get_server_tick_rate())
@@ -50,7 +61,7 @@ function LocalPrediction.predict_local_movement(ent, dx, dy, dt, env)
         local raw_speed = get_entity_prop(ent, "move_speed")
             or get_entity_prop(ent, "speed")
             or default_speed
-        local move_speed = tonumber(raw_speed) or 2.0
+        local move_speed = (tonumber(raw_speed) or 2.0) * LocalPrediction.get_slow_multiplier(ent, env.cur_tick)
         local tick_rate = tonumber(env.tick_rate) or 30.0
         local speed_sec = move_speed * tick_rate
 
