@@ -520,4 +520,83 @@ run_test("AutoAim targets nearest living enemy of another team within range", fu
     assert(AutoAim.find_nearest_enemy(me, { me, hp_zero_enemy }, 50) == nil, "enemy with hp <= 0 must be ignored as dead")
 end)
 
+-- ----------------------------------------------------------------------------
+-- LocalPrediction tests (cast lock casting_until + cinemática de predição)
+-- ----------------------------------------------------------------------------
+run_test("LocalPrediction blocks displacement during casting_until and resumes after expiry", function()
+    package.loaded["local_prediction"] = nil
+    local LocalPrediction = require("local_prediction")
+
+    local env = {
+        cur_tick = 100,
+        tick_rate = 30.0,
+        default_speed = 2.0,
+        clamp = function() end,
+    }
+
+    -- Entidade "casting" até o tick 109 (casting_until > cur_tick)
+    local casting_ent = {
+        id = 1, x = 10, y = 20, vx = 5, vy = 5,
+        properties = { casting_until = "109", move_speed = "2.2" },
+    }
+
+    -- Durante o cast lock: não desloca e zera velocidade mesmo com input ativo
+    LocalPrediction.predict_local_movement(casting_ent, 1, 0, 0.016, env)
+    assert_near(casting_ent.x, 10, 1e-6, "x must not move during cast lock")
+    assert_near(casting_ent.y, 20, 1e-6, "y must not move during cast lock")
+    assert(casting_ent.vx == 0 and casting_ent.vy == 0, "velocity must be zeroed during cast lock")
+
+    -- Último tick do lock (cur_tick = 108 < 109): ainda bloqueado
+    env.cur_tick = 108
+    LocalPrediction.predict_local_movement(casting_ent, 1, 0, 0.016, env)
+    assert_near(casting_ent.x, 10, 1e-6, "still locked at tick 108")
+
+    -- Lock expira (cur_tick = 109 >= casting_until): predição normal retoma
+    env.cur_tick = 109
+    casting_ent.properties.casting_until = "0"
+    LocalPrediction.predict_local_movement(casting_ent, 1, 0, 0.016, env)
+    -- move_speed 2.2 * tick_rate 30 * dt 0.016 = 1.056 unidade para +x
+    assert_near(casting_ent.x, 10 + 2.2 * 30 * 0.016, 1e-4, "prediction resumes after cast lock")
+    assert_near(casting_ent.vx, 2.2, 1e-4, "vx reflects move_speed after lock")
+    assert_near(casting_ent.vy, 0, 1e-6, "vy stays 0 for pure +x input")
+end)
+
+run_test("LocalPrediction normal kinematics: diagonal normalization, idle stop and clamp hook", function()
+    package.loaded["local_prediction"] = nil
+    local LocalPrediction = require("local_prediction")
+
+    local clamp_calls = 0
+    local env = {
+        cur_tick = 0,
+        tick_rate = 30.0,
+        default_speed = 2.0,
+        clamp = function() clamp_calls = clamp_calls + 1 end,
+    }
+
+    -- Sem casting_until: diagonal (1,1) normaliza para ~0.707 e move na velocidade da entidade
+    local ent = { id = 2, x = 0, y = 0, properties = { move_speed = "2.0" } }
+    LocalPrediction.predict_local_movement(ent, 1, 1, 0.016, env)
+    local step = 2.0 * 30 * 0.016
+    assert_near(ent.x, step / math.sqrt(2), 1e-4, "diagonal x normalized")
+    assert_near(ent.y, step / math.sqrt(2), 1e-4, "diagonal y normalized")
+    assert_near(math.sqrt(ent.vx^2 + ent.vy^2), 2.0, 1e-4, "velocity magnitude = move_speed")
+    assert(clamp_calls == 1, "clamp hook must run once per prediction")
+
+    -- Input zerado: para a entidade
+    LocalPrediction.predict_local_movement(ent, 0, 0, 0.016, env)
+    assert(ent.vx == 0 and ent.vy == 0, "idle input must zero velocity")
+    assert(clamp_calls == 2, "clamp hook must run on idle frame too")
+
+    -- Entidade nil é no-op seguro
+    LocalPrediction.predict_local_movement(nil, 1, 0, 0.016, env)
+
+    -- casting_until como string numérica via ent.get (formato Entity do SDK)
+    local sdk_like = {
+        x = 0, y = 0, vx = 0, vy = 0,
+        get = function(_, key) return ({ casting_until = "5", move_speed = "1.5" })[key] end,
+    }
+    LocalPrediction.predict_local_movement(sdk_like, 1, 0, 0.016, { cur_tick = 3, tick_rate = 30, default_speed = 2 })
+    assert(sdk_like.vx == 0 and sdk_like.x == 0, "ent:get('casting_until') must gate prediction")
+end)
+
 print(string.format("\n>>> Phase 4: All %d Client Module unit tests passed! <<<", passed))

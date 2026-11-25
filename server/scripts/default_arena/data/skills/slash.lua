@@ -18,6 +18,7 @@ return {
     description = "Ataque corporal com dano físico em área frontal",
     mana_cost = 10,
     cooldown = 15, -- 0.5s a 30Hz
+    cast_lock_ticks = 9, -- 0.3s a 30Hz: janela de impacto; a animação de recovery é cancelável no cliente
     range = 16.0,      -- unidades do mundo (~2 alturas de personagem, corpo a corpo)
     damage = 350,
     damage_type = CombatSystem.DamageType.PHYSICAL,

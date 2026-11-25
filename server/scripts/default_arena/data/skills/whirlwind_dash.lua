@@ -45,6 +45,9 @@ return {
         local current_tick = CharacterFactory.get_current_tick()
         local dash_duration_ticks = skill_data.dash_duration_ticks or 6
         Loci.Commands.set_property(entity_id, "dashing_until", tostring(current_tick + dash_duration_ticks))
+        -- A investida é mobilidade: cancela o cast lock de uma conjuração anterior
+        -- para não congelar o jogador pelos ticks restantes de casting_until após o dash.
+        Loci.Commands.set_property(entity_id, "casting_until", "0")
 
         local dash_speed = skill_data.dash_speed or (skill_data.range / dash_duration_ticks) -- Desloca exatamente o alcance da habilidade durante a investida
         local proj_vx, proj_vy = ArenaBounds.project_velocity(caster_x, caster_y, aim_x * dash_speed, aim_y * dash_speed)
