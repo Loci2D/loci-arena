@@ -72,9 +72,6 @@ local CharacterFactory = require("systems.character_factory")
 local RespawnSystem = require("respawn_system")
 local ArenaObstacles = require("data.arena_obstacles")
 
--- Flag para rastrear se os obstáculos já foram inicializados
-local obstacles_initialized = false
-
 local function is_player_alive(entity_id)
     if not connected_players[entity_id] then return false end
     if RespawnSystem and RespawnSystem.is_dead(entity_id) then return false end
@@ -200,6 +197,11 @@ function on_tick(current_tick)
     end
 end
 
+function on_init()
+    -- Inicializa obstáculos da arena
+    ArenaObstacles.initialize()
+end
+
 function on_player_join(entity_id)
     -- Proteção contra chamadas duplicadas ([Join] inicial seguido por [Session] re-joined)
     local existing_record = connected_players[entity_id]
@@ -220,12 +222,6 @@ function on_player_join(entity_id)
 
     if Loci and Loci.Log then
         Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
-    end
-
-    -- Inicializa obstáculos da arena no primeiro jogador (apenas uma vez)
-    if not obstacles_initialized then
-        ArenaObstacles.initialize()
-        obstacles_initialized = true
     end
 
     -- Aloca jogadores no time com menor quantidade ativa para manter o equilíbrio

@@ -84,8 +84,10 @@ function ArenaObstacles.initialize()
         }
 
         -- Adicionar dimensões específicas por forma
+        -- Nota: AABB exige width e height diretamente na raiz da tabela
         if blueprint.shape == "aabb" then
-            obstacle_data.dimensions = blueprint.dimensions
+            obstacle_data.width = blueprint.dimensions.width
+            obstacle_data.height = blueprint.dimensions.height
         elseif blueprint.shape == "circle" then
             obstacle_data.radius = blueprint.radius
         end
@@ -105,7 +107,11 @@ function ArenaObstacles.initialize()
     end
 
     if Loci and Loci.Log then
-        Loci.Log.info(string.format("[ArenaObstacles] %d obstáculos criados com sucesso", #ArenaObstacles.created_ids))
+        local count = 0
+        for _ in pairs(ArenaObstacles.created_ids) do
+            count = count + 1
+        end
+        Loci.Log.info(string.format("[ArenaObstacles] %d obstáculos criados com sucesso", count))
     end
 
     return true
