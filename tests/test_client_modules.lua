@@ -599,4 +599,78 @@ run_test("LocalPrediction normal kinematics: diagonal normalization, idle stop a
     assert(sdk_like.vx == 0 and sdk_like.x == 0, "ent:get('casting_until') must gate prediction")
 end)
 
+-- ---------------------------------------------------------------------------
+-- VfxSystem: desacoplamento de VFX, renderização de projéteis e impacto no despawn (Cards #100 e #105)
+-- ---------------------------------------------------------------------------
+run_test("VfxSystem handles floating damage, screen shake, projectile tracking, and despawn impact at server coordinates", function()
+    package.loaded["src.vfx_system"] = nil
+    local VfxSystem = require("src.vfx_system")
+    VfxSystem.reset()
+    VfxSystem.configure({
+        visual_scale = 8.0,
+        sprite_base_size = 32,
+        sprite_scale = 2,
+    })
+
+    -- 1. Floating damage & screen shake
+    VfxSystem.add_floating_damage({ x = 10, y = 20 }, 420, { is_critical = true, is_shield = false })
+    assert(#VfxSystem.get_floating_damage() == 1)
+    assert(VfxSystem.get_floating_damage()[1].value == 420 and VfxSystem.get_floating_damage()[1].is_critical == true)
+
+    VfxSystem.trigger_shake(300, 0.2)
+    local sx, sy = VfxSystem.get_shake_offset()
+    assert(type(sx) == "number" and type(sy) == "number")
+    VfxSystem.update(0.25)
+    sx, sy = VfxSystem.get_shake_offset()
+    assert(sx == 0 and sy == 0, "shake must decay to zero after duration")
+
+    -- 2. Blade Throw cast + Projectile spawn -> early despawn at obstacle/enemy (18.0, -5.0)
+    VfxSystem.spawn_skill_fx({
+        x = 0, y = 0,
+        dir_x = 1, dir_y = 0,
+        ability_id = 4,
+        skill_name = "blade_throw",
+        character_name = "arya",
+        caster_id = 1,
+    })
+    assert(#VfxSystem.get_visual_fx() == 1 and VfxSystem.get_visual_fx()[1].is_impact == false)
+
+    local proj_ent = {
+        id = 777,
+        blueprint = "blade_throw",
+        entity_type = "projectile",
+        x = 4.0,
+        y = 0.0,
+        vx = 4.0,
+        vy = 0.0,
+        is_projectile = function() return true end,
+        properties = { skill_name = "blade_throw", aoe_radius = "8" },
+    }
+    assert(VfxSystem.is_projectile_entity(proj_ent) == true)
+    assert(VfxSystem.on_entity_spawned(proj_ent) == true)
+    assert(VfxSystem.get_tracked_projectiles()[777] ~= nil)
+
+    -- Simulate server despawn at impact point (18.0, -5.0) well before max range (56.0)
+    local last_ent = {
+        id = 777,
+        blueprint = "blade_throw",
+        entity_type = "projectile",
+        x = 18.0,
+        y = -5.0,
+        is_projectile = function() return true end,
+        properties = { skill_name = "blade_throw", aoe_radius = "8" },
+    }
+    assert(VfxSystem.on_entity_despawned(777, last_ent) == true)
+    assert(VfxSystem.get_tracked_projectiles()[777] == nil, "despawned projectile removed from active tracking")
+
+    -- Flight VFX must be terminated and replaced by the impact Stun shockwave at (18.0, -5.0)
+    local fx_list = VfxSystem.get_visual_fx()
+    assert(#fx_list == 1, "in-flight blade_throw VFX must be terminated on despawn")
+    local impact_fx = fx_list[1]
+    assert(impact_fx.is_impact == true and impact_fx.skill_name == "blade_throw")
+    assert_near(impact_fx.x, 18.0, 1e-6, "impact VFX X matches server despawn X")
+    assert_near(impact_fx.y, -5.0, 1e-6, "impact VFX Y matches server despawn Y")
+    assert(#VfxSystem.get_particles() > 0, "despawn must emit impact particles")
+end)
+
 print(string.format("\n>>> Phase 4: All %d Client Module unit tests passed! <<<", passed))

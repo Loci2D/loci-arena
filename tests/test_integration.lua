@@ -942,4 +942,58 @@ end
 loci.send_action = orig_send_action
 print("  -> Passed: Real cooldown sync, dynamic SkillRanges on character swap, and stopped facing fallback verified.")
 
+-- ============================================================================
+-- Test 11: VfxSystem Projectile Rendering & Despawn Impact Sync (Cards #100 & #105)
+-- ============================================================================
+print("[Test 11] Testing VfxSystem Projectile Rendering & on_entity_despawned Impact Sync...")
+local VfxSystem = require("src.vfx_system")
+VfxSystem.reset()
+
+-- 1. Spawn a blade_throw projectile entity and verify it is tracked and rendered as a projectile
+local blade_proj = {
+    id = 901,
+    blueprint = "blade_throw",
+    entity_type = "projectile",
+    x = 12.0,
+    y = 0.0,
+    vx = 4.0,
+    vy = 0.0,
+    is_projectile = function() return true end,
+    properties = {
+        entity_type = "projectile",
+        skill_name = "blade_throw",
+        aoe_radius = "8",
+        dir_x = "1",
+        dir_y = "0",
+    },
+}
+loci.entities[901] = blade_proj
+loci.on_entity_spawned(blade_proj)
+assert(VfxSystem.get_tracked_projectiles()[901] ~= nil, "Blade projectile must be tracked on spawn")
+
+-- Trigger a blade_throw cast VFX and then despawn the projectile at (14.5, -3.0)
+VfxSystem.spawn_skill_fx({
+    x = 0, y = 0,
+    dir_x = 1, dir_y = 0,
+    ability_id = 4,
+    skill_name = "blade_throw",
+    character_name = "arya",
+    caster_id = 42,
+})
+love.draw()
+
+-- Despawn at authoritative impact point (14.5, -3.0)
+blade_proj.x = 14.5
+blade_proj.y = -3.0
+loci.entities[901] = nil
+loci.on_entity_despawned(901, blade_proj)
+
+local active_fx = VfxSystem.get_visual_fx()
+assert(#active_fx == 1 and active_fx[1].is_impact == true, "Blade flight FX must terminate and spawn impact shockwave")
+assert(math.abs(active_fx[1].x - 14.5) < 1e-4 and math.abs(active_fx[1].y - (-3.0)) < 1e-4,
+    "Impact shockwave must be placed at exact server despawn coordinates")
+love.update(0.1)
+love.draw()
+print("  -> Passed: VfxSystem projectile rendering and despawn impact synchronization verified.")
+
 print("\n>>> ALL CLIENT INTEGRATION TESTS PASSED SUCCESSFULLY! <<<")
