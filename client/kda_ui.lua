@@ -105,9 +105,17 @@ function kda_ui.draw(entities, my_entity)
     love.graphics.print("K/D", x + PADDING + 595, y + PADDING + 70)
 
     -- Ordenar jogadores por ranking: Kills > Deaths <
+    -- Entidades não-jogador (projéteis físicos, props, NPCs) não entram no placar.
     local sorted_entities = {}
     for i, ent in ipairs(entities) do
-        table.insert(sorted_entities, ent)
+        local et = ent.entity_type
+            or (ent.get and ent:get("entity_type"))
+            or (ent.properties and ent.properties["entity_type"])
+        local lt = et ~= nil and string.lower(tostring(et)) or nil
+        local is_non_player = lt == "projectile" or lt == "npc"
+        if not is_non_player then
+            table.insert(sorted_entities, ent)
+        end
     end
 
     table.sort(sorted_entities, function(a, b)
