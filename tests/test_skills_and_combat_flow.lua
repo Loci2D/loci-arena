@@ -453,7 +453,8 @@ run_test("ProjectileSystem destroys projectiles on static obstacle and boundary 
     assert(p2.props.hp == p2.props.max_hp, "enemy behind static wall must not take damage")
 
     -- 2. Cast fireball near map boundary (+X = 500) and verify on_boundary_collision destroys it
-    assert(on_action(2, 999, 0, 0) == true) -- default
+    assert(on_action(2, 999, 0, 0) == true) -- warrior
+    assert(on_action(2, 999, 0, 0) == true) -- archer
     assert(on_action(2, 999, 0, 0) == true) -- mage
     p2.x, p2.y = 492.0, 0.0
     assert(on_action(2, 1, 1, 0) == true) -- fireball towards +X wall
@@ -558,24 +559,34 @@ run_test("main.lua on_action enforces CC/death guards and character swap 999", f
     -- não interferir nas asserções de move_speed dos próximos ticks
     p1.props.casting_until = "0"
 
-    -- Swap character via ability_id == 999 cycles arya -> default -> mage -> warrior -> arya
+    -- Swap character via ability_id == 999 cycles arya -> warrior -> archer -> mage -> cleric -> enchanter -> arya
     assert(on_move_intent(1, -1, 0) == true)
     assert_near(p1.vx, -2.2, 1e-5, "arya base move_speed")
 
     assert(on_action(1, 999, 0, 0) == true)
-    assert(p1.props.character_name == "default")
+    assert(p1.props.character_name == "warrior")
     env.step_ticks(16, 16)
-    assert_near(p1.vx, -2.0, 1e-5, "intent speed updates to default move_speed=2.0")
+    assert_near(p1.vx, -1.9, 1e-5, "intent speed updates to warrior move_speed=1.9")
+
+    assert(on_action(1, 999, 0, 0) == true)
+    assert(p1.props.character_name == "archer")
+    env.step_ticks(17, 17)
+    assert_near(p1.vx, -2.1, 1e-5, "intent speed updates to archer move_speed=2.1")
 
     assert(on_action(1, 999, 0, 0) == true)
     assert(p1.props.character_name == "mage")
-    env.step_ticks(17, 17)
+    env.step_ticks(18, 18)
     assert_near(p1.vx, -2.0, 1e-5, "intent speed updates to mage move_speed=2.0")
 
     assert(on_action(1, 999, 0, 0) == true)
-    assert(p1.props.character_name == "warrior")
-    env.step_ticks(18, 18)
-    assert_near(p1.vx, -1.9, 1e-5, "intent speed updates to warrior move_speed=1.9")
+    assert(p1.props.character_name == "cleric")
+    env.step_ticks(19, 19)
+    assert_near(p1.vx, -2.0, 1e-5, "intent speed updates to cleric move_speed=2.0")
+
+    assert(on_action(1, 999, 0, 0) == true)
+    assert(p1.props.character_name == "enchanter")
+    env.step_ticks(20, 20)
+    assert_near(p1.vx, -2.05, 1e-5, "intent speed updates to enchanter move_speed=2.05")
 
     assert(on_action(1, 999, 0, 0) == true)
     assert(p1.props.character_name == "arya")
@@ -597,7 +608,8 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     assert(p1.props.team == "1" and p2.props.team == "2" and p3.props.team == "1")
 
     -- Swap p2 to Mage so it has ranged fireball
-    assert(on_action(2, 999, 0, 0) == true) -- default
+    assert(on_action(2, 999, 0, 0) == true) -- warrior
+    assert(on_action(2, 999, 0, 0) == true) -- archer
     assert(on_action(2, 999, 0, 0) == true) -- mage
     assert(p2.props.character_name == "mage")
 
@@ -660,6 +672,9 @@ run_test("server publishes skill_ranges from data/skills and the client defaults
     local expected_by_char = {
         arya = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" },
         mage = { "fireball" },
+        archer = { "quick_shot" },
+        cleric = { "smite" },
+        enchanter = { "kinetic_pulse" },
     }
     local id = 0
     for char_name, skills in pairs(expected_by_char) do

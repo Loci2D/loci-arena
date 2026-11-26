@@ -1,0 +1,62 @@
+-- Quick Shot Skill Data (Habilidade Básica do Archer)
+-- Dispara uma flecha veloz em linha reta com dano físico
+local CombatSystem = require("core.combat_system")
+local ProjectileSystem = require("systems.projectile_system")
+
+local function get_coords(pos)
+    if not pos then return 0, 0 end
+    if type(pos.x_float) == "function" then
+        return pos:x_float(), pos:y_float()
+    elseif pos.x and pos.y then
+        return pos.x, pos.y
+    end
+    return 0, 0
+end
+
+return {
+    id = "quick_shot",
+    name = "Tiro Rápido",
+    description = "Dispara uma flecha veloz com dano físico",
+    mana_cost = 5,
+    cooldown = 18,        -- 0.6s a 30Hz
+    cast_lock_ticks = 6,  -- 0.2s a 30Hz
+    range = 52.0,         -- unidades do mundo
+    projectile_speed = 5.0,
+    projectile_radius = 1.2,
+    damage = 280,
+    damage_type = CombatSystem.DamageType.PHYSICAL,
+    aoe_radius = 4.0,
+
+    on_execute = function(entity_id, aim_x, aim_y, skill_data)
+        local len = math.sqrt(aim_x * aim_x + aim_y * aim_y)
+        if len > 0 then
+            aim_x = aim_x / len
+            aim_y = aim_y / len
+        else
+            aim_x, aim_y = 1, 0
+        end
+
+        local pos = Loci.get_entity_position(entity_id)
+        local caster_x, caster_y = get_coords(pos)
+        local caster_team = Loci.get_entity_property(entity_id, "team") or "1"
+
+        ProjectileSystem.spawn({
+            caster_id = entity_id,
+            skill_id = skill_data.id,
+            blueprint = "quick_shot",
+            x = caster_x,
+            y = caster_y,
+            dir_x = aim_x,
+            dir_y = aim_y,
+            speed = skill_data.projectile_speed or 5.0,
+            range = skill_data.range,
+            radius = skill_data.projectile_radius or 1.2,
+            aoe_radius = skill_data.aoe_radius,
+            damage = skill_data.damage,
+            damage_type = skill_data.damage_type,
+            team = caster_team,
+            detonate_on_max_range = true,
+        })
+        return true
+    end
+}

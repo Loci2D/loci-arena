@@ -109,10 +109,75 @@ local function create_character_placeholder(r, g, b, accent_r, accent_g, accent_
     return canvas
 end
 
+-- Paleta de cores distintivas para os robôs placeholders dos 6 arquétipos da arena 3v3
+local ARCHETYPE_PALETTES = {
+    tank = { 0.35, 0.45, 0.58 },     -- Aço Ardósia / Azul Blindado (Warrior)
+    fighter = { 0.85, 0.30, 0.22 },  -- Carmesim de Combate (Arya / Default)
+    marksman = { 0.18, 0.68, 0.32 }, -- Verde Esmeralda / Caçador (Archer)
+    mage = { 0.58, 0.22, 0.88 },     -- Violeta Arcano (Mage)
+    healer = { 0.94, 0.76, 0.18 },   -- Dourado Solar / Sagrado (Cleric)
+    support = { 0.10, 0.72, 0.75 },  -- Turquesa Tático / Ciano (Enchanter)
+}
+
+local TEAM_VISOR_COLORS = {
+    me = { 0.20, 0.95, 1.00 },       -- Ciano elétrico (Jogador local)
+    team1 = { 0.30, 0.80, 1.00 },    -- Azul celeste (Aliado / Time 1)
+    team2 = { 1.00, 0.30, 0.25 },    -- Vermelho vibrante (Inimigo / Time 2)
+}
+
+local function normalize_archetype_key(role, char_name)
+    local r = string.lower(tostring(role or ""))
+    local c = string.lower(tostring(char_name or ""))
+    if r == "tank" or c == "warrior" then
+        return "tank"
+    elseif r == "marksman" or r == "archer" or c == "archer" then
+        return "marksman"
+    elseif r == "mage" or c == "mage" then
+        return "mage"
+    elseif r == "healer" or r == "cleric" or c == "cleric" then
+        return "healer"
+    elseif r == "support" or r == "enchanter" or c == "enchanter" then
+        return "support"
+    else
+        return "fighter" -- Arya, default, fighter fallback
+    end
+end
+
 local function init_placeholders()
     placeholder_canvases["me"] = create_character_placeholder(0.2, 0.6, 0.95, 0.3, 0.9, 1.0)
     placeholder_canvases["enemy"] = create_character_placeholder(0.9, 0.3, 0.25, 1.0, 0.85, 0.2)
     placeholder_canvases["dead"] = create_character_placeholder(0.35, 0.35, 0.38, 0.5, 0.5, 0.5)
+
+    -- Robôs customizados por arquétipo com visores de identificação de time
+    for arch_key, body_rgb in pairs(ARCHETYPE_PALETTES) do
+        for team_key, visor_rgb in pairs(TEAM_VISOR_COLORS) do
+            local key = arch_key .. "_" .. team_key
+            placeholder_canvases[key] = create_character_placeholder(
+                body_rgb[1], body_rgb[2], body_rgb[3],
+                visor_rgb[1], visor_rgb[2], visor_rgb[3]
+            )
+        end
+    end
+end
+
+local function get_placeholder_for_entity(ent, is_me, is_dead)
+    if is_dead then
+        return placeholder_canvases["dead"]
+    end
+    local role = (type(ent.get) == "function" and ent:get("role", "")) or ent.role or (ent.properties and ent.properties["role"]) or ""
+    local char_name = (type(ent.get) == "function" and ent:get("character_name", "")) or ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
+    local arch_key = normalize_archetype_key(role, char_name)
+
+    local team_key = "team2"
+    if is_me then
+        team_key = "me"
+    else
+        local team = tostring((type(ent.get) == "function" and ent:get("team", "2")) or ent.team or (ent.properties and ent.properties["team"]) or "2")
+        team_key = (team == "1") and "team1" or "team2"
+    end
+
+    local key = arch_key .. "_" .. team_key
+    return placeholder_canvases[key] or (is_me and placeholder_canvases["me"] or placeholder_canvases["enemy"])
 end
 
 local function get_entity_skill_by_slot(entity, slot_index)
@@ -1178,7 +1243,7 @@ function love.keypressed(key)
     elseif key == "r" then
         cast_ability_at_mouse(4)
     elseif key == "k" then
-        -- Troca de personagem provisória (cicla: arya -> default -> mage -> warrior -> arya)
+        -- Troca de personagem provisória (cicla: arya -> warrior -> archer -> mage -> cleric -> enchanter -> arya)
         request_swap_hero()
     elseif key == "m" then
         local enabled = AudioSystem.toggle_mute()
@@ -1819,9 +1884,8 @@ function draw_entity(ent, is_me)
             ox, oy
         )
     else
-        -- Renderizar placeholder padronizado de 32x32 com indicador de facing
-        local ph = is_dead and placeholder_canvases["dead"] or 
-                   (is_me and placeholder_canvases["me"] or placeholder_canvases["enemy"])
+        -- Renderizar placeholder padronizado de 32x32 com cor por arquétipo e indicador de facing
+        local ph = get_placeholder_for_entity(ent, is_me, is_dead)
         love.graphics.setColor(1, 1, 1, 1)
         love.graphics.draw(
             ph,
