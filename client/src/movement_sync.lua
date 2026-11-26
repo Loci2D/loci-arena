@@ -26,6 +26,13 @@ function MovementSync.is_entity_incapacitated(ent, cur_tick)
         return true
     end
 
+    -- Cast lock autoritativo do servidor (casting_until): suprime send_move durante
+    -- a conjuração e força resync ao expirar para retomar a tecla/joystick pressionado.
+    local casting_until = tonumber(ent.casting_until or (props and props["casting_until"])) or 0
+    if casting_until > 0 and cur_tick < casting_until then
+        return true
+    end
+
     return false
 end
 

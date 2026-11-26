@@ -53,8 +53,33 @@ run_test("ProceduralAnim computes 8-way directions, facing, legacy mode, and sta
     -- Legacy facing_dir signature
     local leg_left = ProceduralAnim.update_walk(0.016, 2, true, -1)
     assert(leg_left.direction == "west" and leg_left.facing == -1)
+    local fx, fy = ProceduralAnim.get_facing_vector(2)
+    assert_near(fx, -1.0, 1e-4, "legacy left facing vector dx")
+    assert_near(fy, 0.0, 1e-4, "legacy left facing vector dy")
+
     local leg_right = ProceduralAnim.update_walk(0.016, 2, true, 1)
     assert(leg_right.direction == "east" and leg_right.facing == 1)
+    fx, fy = ProceduralAnim.get_facing_vector(2)
+    assert_near(fx, 1.0, 1e-4, "legacy right facing vector dx")
+    assert_near(fy, 0.0, 1e-4, "legacy right facing vector dy")
+
+    -- resolve_cast_direction: stopped fallback uses last direction/facing instead of hardcoded (0, -1),
+    -- and integrates cleanly with active movement and auto-aim target vector
+    ProceduralAnim.update_walk(0.016, 1, true, 0, 1) -- move south
+    ProceduralAnim.update_walk(0.016, 1, false, 0, 0) -- stop
+    local cdx, cdy = ProceduralAnim.resolve_cast_direction(1, 0, 0)
+    assert_near(cdx, 0.0, 1e-4, "stopped cast dx uses last facing (south)")
+    assert_near(cdy, 1.0, 1e-4, "stopped cast dy uses last facing (south)")
+
+    -- Active movement overrides stopped facing
+    cdx, cdy = ProceduralAnim.resolve_cast_direction(1, -1, 0)
+    assert_near(cdx, -1.0, 1e-4, "active movement cast dx")
+    assert_near(cdy, 0.0, 1e-4, "active movement cast dy")
+
+    -- Auto-aim target vector takes priority when provided (Card #92 integration)
+    cdx, cdy = ProceduralAnim.resolve_cast_direction(1, 0, 0, 3, 4)
+    assert_near(cdx, 0.6, 1e-4, "auto-aim cast dx")
+    assert_near(cdy, 0.8, 1e-4, "auto-aim cast dy")
 
     -- clear_state resets entity
     ProceduralAnim.clear_state(1)
@@ -151,11 +176,20 @@ run_test("VirtualJoystick drag-to-aim, cancellation, quick tap, and non-aiming b
     events = VJ.pop_release_events()
     assert(#events == 1 and events[1].was_aiming == false and events[1].is_cancelled == false)
 
-    -- 4. Non-aiming button 1 (1152, 612, r=75) cancels when dragged outside radius
+    -- 4. Botão 1 (hold_to_cast): permanece ativo mesmo arrastando para fora do raio
+    --    (ataque contínuo enquanto segurado); botão 2 sem aiming cancela ao sair do raio
     assert(VJ.handle_mousepressed(1152, 612, 1) == true)
     assert(VJ.is_skill_1_active() == true)
     VJ.handle_mousemoved(1152 + 100, 612)
-    assert(VJ.is_skill_1_active() == false, "button without aiming must deactivate when dragged outside radius")
+    assert(VJ.is_skill_1_active() == true, "button 1 hold_to_cast must stay active while held")
+    VJ.handle_mousereleased(1152 + 100, 612, 1)
+    assert(VJ.is_skill_1_active() == false, "button 1 must deactivate on release")
+
+    -- Botão 2 (sem aiming e sem hold_to_cast) desativa ao sair do raio
+    assert(VJ.handle_mousepressed(1152, 432, 1) == true)
+    assert(VJ.is_skill_2_active() == true)
+    VJ.handle_mousemoved(1152 + 100, 432)
+    assert(VJ.is_skill_2_active() == false, "button without aiming must deactivate when dragged outside radius")
     assert(VJ.handle_mousepressed(1152, 612, 2) == false, "right-click must be ignored")
 end)
 
@@ -182,6 +216,51 @@ run_test("VirtualJoystick cooldowns and push coordinate transform", function()
     assert(VJ.is_skill_active(1) == true)
     VJ.handle_touchrelease("t_push")
     VJ.set_push(nil)
+
+    -- Real skill cooldown synchronization (whirlwind_dash=6.0s, blade_throw=14.0s) and disabled slot blocking
+    VJ.reset()
+    VJ.sync_skill_slot(3, {
+        enabled = true,
+        skill_name = "whirlwind_dash",
+        label = "Dash",
+        cooldown = 6.0,
+        cooldown_remaining = 4.2,
+        cooldown_duration = 6.0,
+    })
+    assert(VJ.can_trigger_skill(3, 10.0) == false, "slot on active server cooldown must block trigger")
+    local st3 = VJ.get_skill_state(3)
+    assert(st3.skill_name == "whirlwind_dash" and math.abs(st3.action_cooldown - 6.0) < 1e-6 and math.abs(st3.cooldown_remaining - 4.2) < 1e-6)
+
+    -- While on cooldown, dragging button 3 must not enter aiming state
+    assert(VJ.handle_touchpress("t_cd_drag", 1024, 489.6) == true)
+    VJ.handle_touchmove("t_cd_drag", 1024 + 60, 489.6)
+    assert(VJ.is_aiming(3) == false, "button on cooldown must not enter drag-to-aim")
+    VJ.handle_touchrelease("t_cd_drag")
+    VJ.pop_release_events()
+
+    -- Unequipped slot (e.g. slot 4 on mage/default/warrior) blocks press activation and trigger
+    VJ.sync_skill_slot(4, { enabled = false, skill_name = nil, cooldown_remaining = 0 })
+    assert(VJ.can_trigger_skill(4, 20.0) == false, "disabled/unequipped slot must not trigger")
+    assert(VJ.handle_touchpress("t_dis", 960, 612) == true)
+    assert(VJ.is_skill_active(4) == false, "disabled slot must consume touch without activating")
+
+    -- Slot with locked_reason ("MANA" or "BLOQ.") must block trigger and drag-to-aim
+    VJ.sync_skill_slot(2, {
+        enabled = true,
+        skill_name = "fury_reward",
+        label = "Fúria",
+        cooldown = 5.0,
+        cooldown_remaining = 0,
+        locked_reason = "BLOQ.",
+    })
+    assert(VJ.can_trigger_skill(2, 30.0) == false, "slot with locked_reason must block trigger")
+    local st2 = VJ.get_skill_state(2)
+    assert(st2.locked_reason == "BLOQ.", "locked_reason must be preserved in state")
+    assert(VJ.handle_touchpress("t_lock_drag", 1152, 432) == true)
+    VJ.handle_touchmove("t_lock_drag", 1152 + 60, 432)
+    assert(VJ.is_aiming(2) == false, "locked slot must not enter drag-to-aim")
+    VJ.handle_touchrelease("t_lock_drag")
+    VJ.pop_release_events()
 end)
 
 -- ----------------------------------------------------------------------------
@@ -347,6 +426,251 @@ run_test("ConnectScreen invokes love.keyboard.setTextInput(true/false) on focus 
     assert(text_input_calls[#text_input_calls] == false, "setTextInput(false) called when blurred")
 
     _G.love = prev_love
+end)
+
+-- ---------------------------------------------------------------------------
+-- 8. AutoAim: mira automática no inimigo vivo mais próximo
+-- ---------------------------------------------------------------------------
+run_test("AutoAim targets nearest living enemy of another team within range", function()
+    package.loaded["auto_aim"] = nil
+    local AutoAim = require("auto_aim")
+
+    local function ent(id, x, y, team, is_dead, entity_type)
+        return {
+            id = id, x = x, y = y,
+            team = team,
+            is_dead = is_dead,
+            properties = entity_type and { entity_type = entity_type } or nil,
+        }
+    end
+
+    local me = ent(1, 0, 0, "1", false)
+    local entities = {
+        me,
+        ent(2, 0, 10, "2", false),   -- inimigo a 10u (norte)
+        ent(3, 30, 0, "2", false),   -- inimigo mais longe a 30u (leste)
+        ent(4, 0, -8, "1", false),   -- aliado mais perto: ignorado
+        ent(5, 0, 5, "2", true),     -- inimigo morto: ignorado
+        ent(6, 0, 4, "2", false, "projectile"), -- não-jogador: ignorado
+        ent(7, 0, 6, nil, false),    -- sem time: ignorado
+    }
+
+    -- Inimigo válido mais próximo é o id 2 (dist 10 < 30)
+    local target = AutoAim.find_nearest_enemy(me, entities, 20)
+    assert(target and target.id == 2, "nearest enemy must be entity 2, got " .. tostring(target and target.id))
+
+    -- Vetor normalizado aponta para (0, +1)
+    local dx, dy = AutoAim.aim_at_nearest_enemy(me, entities, 20)
+    assert_near(dx, 0.0, 1e-6, "aim dx")
+    assert_near(dy, 1.0, 1e-6, "aim dy")
+
+    -- Diagonal normalizada
+    entities[2].x, entities[2].y = 30, 40
+    entities[3].x, entities[3].y = 300, 0 -- fora de qualquer range
+    dx, dy = AutoAim.aim_at_nearest_enemy(me, entities, 100)
+    assert_near(dx, 0.6, 1e-6, "diagonal aim dx")
+    assert_near(dy, 0.8, 1e-6, "diagonal aim dy")
+
+    -- Fora de alcance -> nil (fallback do chamador assume)
+    dx, dy = AutoAim.aim_at_nearest_enemy(me, entities, 10)
+    assert(dx == nil and dy == nil, "out of range must return nil")
+
+    -- Sem time próprio -> nunca mira (não dá para distinguir inimigos)
+    local teamless = ent(9, 0, 0, nil, false)
+    assert(AutoAim.find_nearest_enemy(teamless, entities, 100) == nil, "caster without team must not aim")
+
+    -- Alvo na mesma posição do caster -> nil (vetor degenerado)
+    local stacked = ent(10, 0, 0, "2", false)
+    assert(AutoAim.aim_at_nearest_enemy(me, { me, stacked }, 50) == nil, "stacked target must not aim")
+
+    -- Suporta entidades com API ent:get(key) (estilo SDK do cliente)
+    local sdk_me = {
+        id = 20, x = 0, y = 0,
+        get = function(_, key)
+            return ({ team = "1", is_dead = "false" })[key]
+        end,
+    }
+    local sdk_enemy = {
+        id = 21, x = 0, y = -12,
+        get = function(_, key)
+            return ({ team = "2", is_dead = "false" })[key]
+        end,
+    }
+    dx, dy = AutoAim.aim_at_nearest_enemy(sdk_me, { sdk_me, sdk_enemy }, 20)
+    assert_near(dx, 0.0, 1e-6, "sdk aim dx")
+    assert_near(dy, -1.0, 1e-6, "sdk aim dy")
+
+    -- Suporta tabelas de entidades associativas/mapas indexadas por ID (pairs)
+    local map_entities = {
+        [99] = me,
+        [101] = ent(101, 0, 15, "2", false),
+        [102] = ent(102, 50, 0, "2", false),
+    }
+    local map_target = AutoAim.find_nearest_enemy(me, map_entities, 50)
+    assert(map_target and map_target.id == 101, "map_entities must target id 101")
+
+    -- Caster ou inimigo com time vazio ("") -> ignorado
+    local empty_team_me = ent(30, 0, 0, "", false)
+    assert(AutoAim.find_nearest_enemy(empty_team_me, entities, 100) == nil, "caster with empty team must not aim")
+    local empty_team_enemy = ent(31, 0, 5, "", false)
+    assert(AutoAim.find_nearest_enemy(me, { me, empty_team_enemy }, 50) == nil, "enemy with empty team must not be aimed")
+
+    -- Inimigo com hp <= 0 é ignorado como morto mesmo sem is_dead explícito
+    local hp_zero_enemy = { id = 32, x = 0, y = 5, team = "2", hp = 0 }
+    assert(AutoAim.find_nearest_enemy(me, { me, hp_zero_enemy }, 50) == nil, "enemy with hp <= 0 must be ignored as dead")
+end)
+
+-- ----------------------------------------------------------------------------
+-- LocalPrediction tests (cast lock casting_until + cinemática de predição)
+-- ----------------------------------------------------------------------------
+run_test("LocalPrediction blocks displacement during casting_until and resumes after expiry", function()
+    package.loaded["local_prediction"] = nil
+    local LocalPrediction = require("local_prediction")
+
+    local env = {
+        cur_tick = 100,
+        tick_rate = 30.0,
+        default_speed = 2.0,
+        clamp = function() end,
+    }
+
+    -- Entidade "casting" até o tick 109 (casting_until > cur_tick)
+    local casting_ent = {
+        id = 1, x = 10, y = 20, vx = 5, vy = 5,
+        properties = { casting_until = "109", move_speed = "2.2" },
+    }
+
+    -- Durante o cast lock: não desloca e zera velocidade mesmo com input ativo
+    LocalPrediction.predict_local_movement(casting_ent, 1, 0, 0.016, env)
+    assert_near(casting_ent.x, 10, 1e-6, "x must not move during cast lock")
+    assert_near(casting_ent.y, 20, 1e-6, "y must not move during cast lock")
+    assert(casting_ent.vx == 0 and casting_ent.vy == 0, "velocity must be zeroed during cast lock")
+
+    -- Último tick do lock (cur_tick = 108 < 109): ainda bloqueado
+    env.cur_tick = 108
+    LocalPrediction.predict_local_movement(casting_ent, 1, 0, 0.016, env)
+    assert_near(casting_ent.x, 10, 1e-6, "still locked at tick 108")
+
+    -- Lock expira (cur_tick = 109 >= casting_until): predição normal retoma
+    env.cur_tick = 109
+    casting_ent.properties.casting_until = "0"
+    LocalPrediction.predict_local_movement(casting_ent, 1, 0, 0.016, env)
+    -- move_speed 2.2 * tick_rate 30 * dt 0.016 = 1.056 unidade para +x
+    assert_near(casting_ent.x, 10 + 2.2 * 30 * 0.016, 1e-4, "prediction resumes after cast lock")
+    assert_near(casting_ent.vx, 2.2, 1e-4, "vx reflects move_speed after lock")
+    assert_near(casting_ent.vy, 0, 1e-6, "vy stays 0 for pure +x input")
+end)
+
+run_test("LocalPrediction normal kinematics: diagonal normalization, idle stop and clamp hook", function()
+    package.loaded["local_prediction"] = nil
+    local LocalPrediction = require("local_prediction")
+
+    local clamp_calls = 0
+    local env = {
+        cur_tick = 0,
+        tick_rate = 30.0,
+        default_speed = 2.0,
+        clamp = function() clamp_calls = clamp_calls + 1 end,
+    }
+
+    -- Sem casting_until: diagonal (1,1) normaliza para ~0.707 e move na velocidade da entidade
+    local ent = { id = 2, x = 0, y = 0, properties = { move_speed = "2.0" } }
+    LocalPrediction.predict_local_movement(ent, 1, 1, 0.016, env)
+    local step = 2.0 * 30 * 0.016
+    assert_near(ent.x, step / math.sqrt(2), 1e-4, "diagonal x normalized")
+    assert_near(ent.y, step / math.sqrt(2), 1e-4, "diagonal y normalized")
+    assert_near(math.sqrt(ent.vx^2 + ent.vy^2), 2.0, 1e-4, "velocity magnitude = move_speed")
+    assert(clamp_calls == 1, "clamp hook must run once per prediction")
+
+    -- Input zerado: para a entidade
+    LocalPrediction.predict_local_movement(ent, 0, 0, 0.016, env)
+    assert(ent.vx == 0 and ent.vy == 0, "idle input must zero velocity")
+    assert(clamp_calls == 2, "clamp hook must run on idle frame too")
+
+    -- Entidade nil é no-op seguro
+    LocalPrediction.predict_local_movement(nil, 1, 0, 0.016, env)
+
+    -- casting_until como string numérica via ent.get (formato Entity do SDK)
+    local sdk_like = {
+        x = 0, y = 0, vx = 0, vy = 0,
+        get = function(_, key) return ({ casting_until = "5", move_speed = "1.5" })[key] end,
+    }
+    LocalPrediction.predict_local_movement(sdk_like, 1, 0, 0.016, { cur_tick = 3, tick_rate = 30, default_speed = 2 })
+    assert(sdk_like.vx == 0 and sdk_like.x == 0, "ent:get('casting_until') must gate prediction")
+end)
+
+-- ---------------------------------------------------------------------------
+-- VfxSystem: desacoplamento de VFX, renderização de projéteis e impacto no despawn (Cards #100 e #105)
+-- ---------------------------------------------------------------------------
+run_test("VfxSystem handles floating damage, screen shake, projectile tracking, and despawn impact at server coordinates", function()
+    package.loaded["src.vfx_system"] = nil
+    local VfxSystem = require("src.vfx_system")
+    VfxSystem.reset()
+    VfxSystem.configure({
+        visual_scale = 8.0,
+        sprite_base_size = 32,
+        sprite_scale = 2,
+    })
+
+    -- 1. Floating damage & screen shake
+    VfxSystem.add_floating_damage({ x = 10, y = 20 }, 420, { is_critical = true, is_shield = false })
+    assert(#VfxSystem.get_floating_damage() == 1)
+    assert(VfxSystem.get_floating_damage()[1].value == 420 and VfxSystem.get_floating_damage()[1].is_critical == true)
+
+    VfxSystem.trigger_shake(300, 0.2)
+    local sx, sy = VfxSystem.get_shake_offset()
+    assert(type(sx) == "number" and type(sy) == "number")
+    VfxSystem.update(0.25)
+    sx, sy = VfxSystem.get_shake_offset()
+    assert(sx == 0 and sy == 0, "shake must decay to zero after duration")
+
+    -- 2. Blade Throw cast + Projectile spawn -> early despawn at obstacle/enemy (18.0, -5.0)
+    VfxSystem.spawn_skill_fx({
+        x = 0, y = 0,
+        dir_x = 1, dir_y = 0,
+        ability_id = 4,
+        skill_name = "blade_throw",
+        character_name = "arya",
+        caster_id = 1,
+    })
+    assert(#VfxSystem.get_visual_fx() == 1 and VfxSystem.get_visual_fx()[1].is_impact == false)
+
+    local proj_ent = {
+        id = 777,
+        blueprint = "blade_throw",
+        entity_type = "projectile",
+        x = 4.0,
+        y = 0.0,
+        vx = 4.0,
+        vy = 0.0,
+        is_projectile = function() return true end,
+        properties = { skill_name = "blade_throw", aoe_radius = "8" },
+    }
+    assert(VfxSystem.is_projectile_entity(proj_ent) == true)
+    assert(VfxSystem.on_entity_spawned(proj_ent) == true)
+    assert(VfxSystem.get_tracked_projectiles()[777] ~= nil)
+
+    -- Simulate server despawn at impact point (18.0, -5.0) well before max range (56.0)
+    local last_ent = {
+        id = 777,
+        blueprint = "blade_throw",
+        entity_type = "projectile",
+        x = 18.0,
+        y = -5.0,
+        is_projectile = function() return true end,
+        properties = { skill_name = "blade_throw", aoe_radius = "8" },
+    }
+    assert(VfxSystem.on_entity_despawned(777, last_ent) == true)
+    assert(VfxSystem.get_tracked_projectiles()[777] == nil, "despawned projectile removed from active tracking")
+
+    -- Flight VFX must be terminated and replaced by the impact Stun shockwave at (18.0, -5.0)
+    local fx_list = VfxSystem.get_visual_fx()
+    assert(#fx_list == 1, "in-flight blade_throw VFX must be terminated on despawn")
+    local impact_fx = fx_list[1]
+    assert(impact_fx.is_impact == true and impact_fx.skill_name == "blade_throw")
+    assert_near(impact_fx.x, 18.0, 1e-6, "impact VFX X matches server despawn X")
+    assert_near(impact_fx.y, -5.0, 1e-6, "impact VFX Y matches server despawn Y")
+    assert(#VfxSystem.get_particles() > 0, "despawn must emit impact particles")
 end)
 
 print(string.format("\n>>> Phase 4: All %d Client Module unit tests passed! <<<", passed))

@@ -810,4 +810,190 @@ AudioSystem.set_sfx_volume(1.0)
 
 print("  -> Passed: BGM streaming, loop, track switching, pause/mute/unmute state, volume control, missing file and headless verified.")
 
+print("[Test 10] Testing VirtualControls Sync: Real Cooldowns, Dynamic SkillRanges on Character Swap & Stopped Facing Fallback...")
+local virtual_joystick = require("virtual_joystick")
+local procedural_anim = require("src.procedural_anim")
+local SkillRanges = require("src.skill_ranges")
+
+virtual_joystick.reset()
+my_ent.properties.is_dead = false
+my_ent.properties.character_name = "arya"
+my_ent.properties.skills_list = "slash,fury_reward,whirlwind_dash,blade_throw"
+my_ent.properties.skill_ranges = "slash=16:7,fury_reward=24:9,whirlwind_dash=40:10,blade_throw=56:8"
+my_ent.properties.mana = 200
+my_ent.properties.max_mana = 200
+my_ent.properties.fury_active = true
+loci.on_property_changed(my_ent, "character_name", "mage", "arya")
+
+local captured_actions = {}
+local orig_send_action = loci.send_action
+loci.send_action = function(slot, dx, dy)
+    table.insert(captured_actions, { slot = slot, dx = dx, dy = dy })
+end
+
+-- 1. Move south (0, 1), then stop -> stopped quick-cast on slot 1 must use last facing (0, 1), NOT hardcoded (0, -1)
+_G.love.timer._time = 200.0
+keys_down = { s = true }
+love.update(0.016)
+keys_down = {}
+love.update(0.016)
+
+-- Touch press slot 1 (center: 1152, 612) while movement stick is neutral
+assert(virtual_joystick.handle_touchpress("t_s1", 1152, 612) == true)
+love.update(0.016)
+virtual_joystick.handle_touchrelease("t_s1")
+assert(#captured_actions == 1, "Slot 1 touch press must send action")
+assert(captured_actions[1].slot == 1, "Expected slot 1")
+assert(math.abs(captured_actions[1].dx - 0.0) < 1e-4 and math.abs(captured_actions[1].dy - 1.0) < 1e-4,
+    string.format("Stopped touch cast must use last facing (0, 1), got (%.3f, %.3f)", captured_actions[1].dx, captured_actions[1].dy))
+
+-- 2. Move west (-1, 0), then stop -> quick-cast on slot 2 (fury_reward, 5.0s cooldown) uses (-1, 0) and locks for 5.0s (not 0.5s)
+_G.love.timer._time = 201.0
+keys_down = { a = true }
+love.update(0.016)
+keys_down = {}
+love.update(0.016)
+
+captured_actions = {}
+-- Slot 2 center: (1152, 432)
+assert(virtual_joystick.handle_touchpress("t_s2", 1152, 432) == true)
+love.update(0.016)
+virtual_joystick.handle_touchrelease("t_s2")
+assert(#captured_actions == 1 and captured_actions[1].slot == 2)
+assert(math.abs(captured_actions[1].dx - (-1.0)) < 1e-4 and math.abs(captured_actions[1].dy - 0.0) < 1e-4,
+    string.format("Stopped touch cast on slot 2 must use last facing (-1, 0), got (%.3f, %.3f)", captured_actions[1].dx, captured_actions[1].dy))
+
+-- At +1.0s (past old 0.5s fixed cooldown, but inside real 5.0s cooldown), slot 2 must remain blocked and render remaining cooldown on button
+_G.love.timer._time = 202.0
+captured_actions = {}
+assert(virtual_joystick.handle_touchpress("t_s2_retry", 1152, 432) == true)
+love.update(0.016)
+virtual_joystick.handle_touchrelease("t_s2_retry")
+assert(#captured_actions == 0, "Slot 2 must be blocked by real 5.0s cooldown after 1.0s")
+local st2 = virtual_joystick.get_skill_state(2)
+assert(st2 and math.abs(st2.cooldown_remaining - 4.0) < 0.05, "Virtual button 2 must track ~4.0s remaining cooldown")
+
+-- 3. Slot 3 (whirlwind_dash = 6.0s) and Slot 4 (blade_throw = 14.0s) drag-to-aim and real cooldowns
+_G.love.timer._time = 210.0
+love.update(0.016)
+captured_actions = {}
+-- Slot 3 center: (1024, 489.6), drag right
+assert(virtual_joystick.handle_touchpress("t_s3", 1024, 489.6) == true)
+assert(virtual_joystick.handle_touchmove("t_s3", 1024 + 60, 489.6) == true)
+assert(virtual_joystick.is_aiming(3) == true)
+assert(virtual_joystick.handle_touchrelease("t_s3") == true)
+love.update(0.016)
+assert(#captured_actions == 1 and captured_actions[1].slot == 3)
+assert(math.abs(captured_actions[1].dx - 1.0) < 1e-4)
+
+-- Slot 4 center: (960, 612), quick tap (no drag) uses updated facing from slot 3 cast (1, 0) and locks for 14.0s
+assert(virtual_joystick.handle_touchpress("t_s4", 960, 612) == true)
+assert(virtual_joystick.handle_touchrelease("t_s4") == true)
+love.update(0.016)
+assert(#captured_actions == 2 and captured_actions[2].slot == 4)
+assert(math.abs(captured_actions[2].dx - 1.0) < 1e-4 and math.abs(captured_actions[2].dy - 0.0) < 1e-4)
+local st4 = virtual_joystick.get_skill_state(4)
+assert(st4 and math.abs(st4.action_cooldown - 14.0) < 1e-4 and st4.cooldown_remaining > 13.5, "Button 4 must track 14.0s blade_throw cooldown")
+
+-- 4. Swap characters (arya -> default -> mage -> warrior) and verify dynamic SkillRanges & unequipped slots (2..4)
+local swap_configs = {
+    { name = "default", skills = "slash",    ranges = "slash=16:7",    s1 = "slash",    cd = 0.5, range = 16.0 },
+    { name = "mage",    skills = "fireball", ranges = "fireball=64:9", s1 = "fireball", cd = 1.5, range = 64.0 },
+    { name = "warrior", skills = "slash",    ranges = "slash=16:7",    s1 = "slash",    cd = 0.5, range = 16.0 },
+}
+for idx, cfg in ipairs(swap_configs) do
+    local prev_name = my_ent.properties.character_name
+    my_ent.properties.character_name = cfg.name
+    my_ent.properties.skills_list = cfg.skills
+    my_ent.properties.skill_ranges = cfg.ranges
+    loci.on_property_changed(my_ent, "character_name", prev_name, cfg.name)
+    _G.love.timer._time = 230.0 + idx * 10.0
+    love.update(0.016)
+
+    assert(SkillRanges.resolve_entity_skill(my_ent, 1) == cfg.s1, "Slot 1 skill for " .. cfg.name)
+    assert(SkillRanges.resolve_entity_skill(my_ent, 2) == nil, "Slot 2 must be nil for " .. cfg.name)
+    assert(SkillRanges.resolve_entity_skill(my_ent, 3) == nil, "Slot 3 must be nil for " .. cfg.name)
+    assert(SkillRanges.resolve_entity_skill(my_ent, 4) == nil, "Slot 4 must be nil for " .. cfg.name)
+    assert(math.abs(SkillRanges.range(cfg.s1) - cfg.range) < 1e-4, "Dynamic range for " .. cfg.name)
+
+    local s1_state = virtual_joystick.get_skill_state(1)
+    assert(s1_state.enabled == true and s1_state.skill_name == cfg.s1 and math.abs(s1_state.action_cooldown - cfg.cd) < 1e-4)
+    for slot = 2, 4 do
+        local s_state = virtual_joystick.get_skill_state(slot)
+        assert(s_state.enabled == false, string.format("Slot %d must be disabled for %s", slot, cfg.name))
+    end
+
+    -- Attempting to drag-to-aim on slot 3 when character has no slot 3 skill must not enter aiming or send action
+    captured_actions = {}
+    virtual_joystick.handle_touchpress("t_unequip_" .. cfg.name, 1024, 489.6)
+    virtual_joystick.handle_touchmove("t_unequip_" .. cfg.name, 1024 + 60, 489.6)
+    assert(virtual_joystick.is_aiming(3) == false, "Disabled slot 3 must not aim on " .. cfg.name)
+    virtual_joystick.handle_touchrelease("t_unequip_" .. cfg.name)
+    love.update(0.016)
+    assert(#captured_actions == 0, "Disabled slot 3 must not send action on " .. cfg.name)
+
+    -- Slot 1 must cast normally for each swapped character
+    virtual_joystick.handle_touchpress("t_cast1_" .. cfg.name, 1152, 612)
+    love.update(0.016)
+    virtual_joystick.handle_touchrelease("t_cast1_" .. cfg.name)
+    assert(#captured_actions == 1 and captured_actions[1].slot == 1, "Slot 1 must cast on " .. cfg.name)
+end
+
+loci.send_action = orig_send_action
+print("  -> Passed: Real cooldown sync, dynamic SkillRanges on character swap, and stopped facing fallback verified.")
+
+-- ============================================================================
+-- Test 11: VfxSystem Projectile Rendering & Despawn Impact Sync (Cards #100 & #105)
+-- ============================================================================
+print("[Test 11] Testing VfxSystem Projectile Rendering & on_entity_despawned Impact Sync...")
+local VfxSystem = require("src.vfx_system")
+VfxSystem.reset()
+
+-- 1. Spawn a blade_throw projectile entity and verify it is tracked and rendered as a projectile
+local blade_proj = {
+    id = 901,
+    blueprint = "blade_throw",
+    entity_type = "projectile",
+    x = 12.0,
+    y = 0.0,
+    vx = 4.0,
+    vy = 0.0,
+    is_projectile = function() return true end,
+    properties = {
+        entity_type = "projectile",
+        skill_name = "blade_throw",
+        aoe_radius = "8",
+        dir_x = "1",
+        dir_y = "0",
+    },
+}
+loci.entities[901] = blade_proj
+loci.on_entity_spawned(blade_proj)
+assert(VfxSystem.get_tracked_projectiles()[901] ~= nil, "Blade projectile must be tracked on spawn")
+
+-- Trigger a blade_throw cast VFX and then despawn the projectile at (14.5, -3.0)
+VfxSystem.spawn_skill_fx({
+    x = 0, y = 0,
+    dir_x = 1, dir_y = 0,
+    ability_id = 4,
+    skill_name = "blade_throw",
+    character_name = "arya",
+    caster_id = 42,
+})
+love.draw()
+
+-- Despawn at authoritative impact point (14.5, -3.0)
+blade_proj.x = 14.5
+blade_proj.y = -3.0
+loci.entities[901] = nil
+loci.on_entity_despawned(901, blade_proj)
+
+local active_fx = VfxSystem.get_visual_fx()
+assert(#active_fx == 1 and active_fx[1].is_impact == true, "Blade flight FX must terminate and spawn impact shockwave")
+assert(math.abs(active_fx[1].x - 14.5) < 1e-4 and math.abs(active_fx[1].y - (-3.0)) < 1e-4,
+    "Impact shockwave must be placed at exact server despawn coordinates")
+love.update(0.1)
+love.draw()
+print("  -> Passed: VfxSystem projectile rendering and despawn impact synchronization verified.")
+
 print("\n>>> ALL CLIENT INTEGRATION TESTS PASSED SUCCESSFULLY! <<<")

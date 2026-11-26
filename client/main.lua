@@ -18,15 +18,14 @@ local virtual_joystick = require("virtual_joystick")
 local procedural_anim = require("src.procedural_anim")
 local sprite_anim = require("src.sprite_anim")
 local MovementSync = require("src.movement_sync")
+local LocalPrediction = require("src.local_prediction")
 local AudioSystem = require("src.audio_system")
 local SkillRanges = require("src.skill_ranges")
+local AutoAim = require("src.auto_aim")
 local SessionStore = require("src.session_store")
 local ConnectScreen = require("src.ui.connect_screen")
+local VfxSystem = require("src.vfx_system")
 local GAME_WIDTH, GAME_HEIGHT = 1280, 720
-
--- Fontes para efeitos visuais (criadas uma vez)
-local font_damage_normal = love.graphics.newFont(18)
-local font_damage_critical = love.graphics.newFont(24)
 
 -- Configurar push no sistema de joystick para conversão de coordenadas
 virtual_joystick.set_push(push)
@@ -50,8 +49,6 @@ local is_connection_lost = false
 local movement_sync = MovementSync.new()
 local rejection_msg = ""
 local rejection_timer = 0
-local visual_fx = {}
-local floating_damage = {}
 local show_debug_overlay = false
 local show_character_sheet = false
 local show_touch_controls = true
@@ -112,15 +109,83 @@ local function create_character_placeholder(r, g, b, accent_r, accent_g, accent_
     return canvas
 end
 
+-- Paleta de cores distintivas para os robôs placeholders dos 6 arquétipos da arena 3v3
+local ARCHETYPE_PALETTES = {
+    tank = { 0.35, 0.45, 0.58 },     -- Aço Ardósia / Azul Blindado (Warrior)
+    fighter = { 0.85, 0.30, 0.22 },  -- Carmesim de Combate (Arya / Default)
+    marksman = { 0.18, 0.68, 0.32 }, -- Verde Esmeralda / Caçador (Archer)
+    mage = { 0.58, 0.22, 0.88 },     -- Violeta Arcano (Mage)
+    healer = { 0.94, 0.76, 0.18 },   -- Dourado Solar / Sagrado (Cleric)
+    support = { 0.10, 0.72, 0.75 },  -- Turquesa Tático / Ciano (Enchanter)
+}
+
+local TEAM_VISOR_COLORS = {
+    me = { 0.20, 0.95, 1.00 },       -- Ciano elétrico (Jogador local)
+    team1 = { 0.30, 0.80, 1.00 },    -- Azul celeste (Aliado / Time 1)
+    team2 = { 1.00, 0.30, 0.25 },    -- Vermelho vibrante (Inimigo / Time 2)
+}
+
+local function normalize_archetype_key(role, char_name)
+    local r = string.lower(tostring(role or ""))
+    local c = string.lower(tostring(char_name or ""))
+    if r == "tank" or c == "warrior" then
+        return "tank"
+    elseif r == "marksman" or r == "archer" or c == "archer" then
+        return "marksman"
+    elseif r == "mage" or c == "mage" then
+        return "mage"
+    elseif r == "healer" or r == "cleric" or c == "cleric" then
+        return "healer"
+    elseif r == "support" or r == "enchanter" or c == "enchanter" then
+        return "support"
+    else
+        return "fighter" -- Arya, default, fighter fallback
+    end
+end
+
 local function init_placeholders()
     placeholder_canvases["me"] = create_character_placeholder(0.2, 0.6, 0.95, 0.3, 0.9, 1.0)
     placeholder_canvases["enemy"] = create_character_placeholder(0.9, 0.3, 0.25, 1.0, 0.85, 0.2)
     placeholder_canvases["dead"] = create_character_placeholder(0.35, 0.35, 0.38, 0.5, 0.5, 0.5)
+
+    -- Robôs customizados por arquétipo com visores de identificação de time
+    for arch_key, body_rgb in pairs(ARCHETYPE_PALETTES) do
+        for team_key, visor_rgb in pairs(TEAM_VISOR_COLORS) do
+            local key = arch_key .. "_" .. team_key
+            placeholder_canvases[key] = create_character_placeholder(
+                body_rgb[1], body_rgb[2], body_rgb[3],
+                visor_rgb[1], visor_rgb[2], visor_rgb[3]
+            )
+        end
+    end
+end
+
+local function get_placeholder_for_entity(ent, is_me, is_dead)
+    if is_dead then
+        return placeholder_canvases["dead"]
+    end
+    local role = (type(ent.get) == "function" and ent:get("role", "")) or ent.role or (ent.properties and ent.properties["role"]) or ""
+    local char_name = (type(ent.get) == "function" and ent:get("character_name", "")) or ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
+    local arch_key = normalize_archetype_key(role, char_name)
+
+    local team_key = "team2"
+    if is_me then
+        team_key = "me"
+    else
+        local team = tostring((type(ent.get) == "function" and ent:get("team", "2")) or ent.team or (ent.properties and ent.properties["team"]) or "2")
+        team_key = (team == "1") and "team1" or "team2"
+    end
+
+    local key = arch_key .. "_" .. team_key
+    return placeholder_canvases[key] or (is_me and placeholder_canvases["me"] or placeholder_canvases["enemy"])
 end
 
 local function get_entity_skill_by_slot(entity, slot_index)
     if not entity or not slot_index then return nil end
-    local list_str = entity:get("skills_list", "")
+    local list_str = (type(entity.get) == "function" and entity:get("skills_list", ""))
+        or entity.skills_list
+        or (entity.properties and entity.properties["skills_list"])
+        or ""
     if not list_str or list_str == "" then return nil end
 
     local idx = 1
@@ -132,11 +197,6 @@ local function get_entity_skill_by_slot(entity, slot_index)
     end
     return nil
 end
-
--- Screen shake state
-local shake_duration = 0
-local shake_total_duration = 0.2
-local shake_intensity = 0
 
 -- Camera state (tracked directly in world coordinates)
 local cam_x, cam_y = 0, 0
@@ -166,8 +226,19 @@ local function clamp_arena_coords(x, y)
     return cx, cy
 end
 
+VfxSystem.configure({
+    visual_scale = VISUAL_SCALE,
+    sprite_base_size = SPRITE_BASE_SIZE,
+    sprite_scale = SPRITE_SCALE,
+    clamp_fn = clamp_arena_coords,
+})
+VfxSystem.reset()
+
 local function should_clamp_entity(ent)
     if not ent then return false end
+    if VfxSystem.is_projectile_entity(ent) then
+        return false
+    end
     local ent_type = (ent.get and ent:get("entity_type"))
         or (ent.properties and ent.properties["entity_type"])
     if ent_type ~= nil then
@@ -257,35 +328,14 @@ end
 -- e `reconcile_position`, evitando que passos maiores (FPS baixo ou buff de velocidade)
 -- ultrapassem ±498 e distorçam a reconciliação contra a parede. Se o SDK passar a expor
 -- um hook de pós-predição/clamp antes da reconciliação, esta cópia pode ser removida.
+-- A lógica vive em src/local_prediction.lua (inclui o cast lock `casting_until`).
 local function predict_local_movement(ent, dx, dy, dt)
-    if not ent then return end
-
-    local in_dx = dx or 0
-    local in_dy = dy or 0
-    local len = math.sqrt(in_dx * in_dx + in_dy * in_dy)
-
-    if len > 0 then
-        local ndx = in_dx / len
-        local ndy = in_dy / len
-        local default_speed = (loci.netcode and loci.netcode.default_move_speed) or 2.0
-        local raw_speed = (ent.get and (ent:get("move_speed") or ent:get("speed")))
-            or (ent.properties and (ent.properties.move_speed or ent.properties.speed))
-            or default_speed
-        local move_speed = tonumber(raw_speed) or 2.0
-        local tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0
-        local speed_sec = move_speed * tick_rate
-
-        ent.x = (ent.x or 0) + ndx * speed_sec * dt
-        ent.y = (ent.y or 0) + ndy * speed_sec * dt
-        ent.vx = ndx * move_speed
-        ent.vy = ndy * move_speed
-    else
-        ent.vx = 0
-        ent.vy = 0
-    end
-
-    -- Roda antes de decay_error e poll_network: preserva erro corretivo para dentro e bloqueia erro para fora
-    clamp_entity_to_arena(ent, true, false)
+    LocalPrediction.predict_local_movement(ent, dx, dy, dt, {
+        cur_tick = tonumber(loci._last_state_tick) or 0,
+        tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0,
+        default_speed = loci.netcode and loci.netcode.default_move_speed,
+        clamp = function(e) clamp_entity_to_arena(e, true, false) end,
+    })
 end
 
 -- Metadados de habilidades para HUD/Hotbar (alinhados a server/scripts/default_arena/data/skills/*.lua a 30 Hz)
@@ -314,7 +364,30 @@ local cooldown_slots = {
     [4] = { active = false, start_time = 0, duration = 0 },
 }
 
+-- Gate de cast por slot (tempo do cliente): evita spam de ações rejeitadas pelo
+-- servidor quando uma habilidade é segurada (hold-to-cast) com cooldown > 0.5s.
+local skill_cast_gate = {}
+
 local respawn_state = { active = false, start_time = 0, duration = RESPAWN_DURATION_SECONDS }
+
+-- Última direção de movimento conhecida (fallback de mira quando não há input atual)
+local last_move_dir_x, last_move_dir_y = 0, -1
+
+local function normalize_dir(dx, dy, min_len)
+    local ax, ay = dx or 0, dy or 0
+    local len = math.sqrt(ax * ax + ay * ay)
+    if len > (min_len or 1e-6) then
+        return ax / len, ay / len
+    end
+    return nil
+end
+
+local function update_last_move_dir(dx, dy)
+    local ndx, ndy = normalize_dir(dx, dy, 0.01)
+    if ndx then
+        last_move_dir_x, last_move_dir_y = ndx, ndy
+    end
+end
 
 local function get_client_time()
     return (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
@@ -325,6 +398,99 @@ local function reset_cooldown_slots()
         cooldown_slots[slot].active = false
         cooldown_slots[slot].start_time = 0
         cooldown_slots[slot].duration = 0
+        skill_cast_gate[slot] = nil
+    end
+    if virtual_joystick and virtual_joystick.reset_cooldowns then
+        virtual_joystick.reset_cooldowns()
+    end
+end
+
+local function start_slot_cooldown(slot, duration, now)
+    if not slot or slot < 1 or slot > 4 then return end
+    local cd = tonumber(duration) or 0
+    if cd <= 0 then return end
+    local t = now or get_client_time()
+    cooldown_slots[slot].active = true
+    cooldown_slots[slot].start_time = t
+    cooldown_slots[slot].duration = cd
+    if virtual_joystick and virtual_joystick.trigger_skill then
+        virtual_joystick.trigger_skill(slot, t, cd)
+    end
+end
+
+local function get_slot_cooldown_remaining(slot, current_time)
+    local entry = cooldown_slots[slot]
+    if not entry or not entry.active then
+        return 0
+    end
+    local now = current_time or get_client_time()
+    local rem = (entry.duration or 0) - (now - (entry.start_time or 0))
+    if rem <= 0 then
+        entry.active = false
+        return 0
+    end
+    return rem
+end
+
+local function has_team_allies(my_entity)
+    if not my_entity then return false end
+    local my_team = tostring((my_entity.get and my_entity:get("team")) or my_entity.team or "1")
+    local all_entities = (loci.get_entities and loci.get_entities()) or {}
+    for _, other in ipairs(all_entities) do
+        if other.id ~= my_entity.id then
+            local ent_type = (other.get and other:get("entity_type")) or (other.properties and other.properties["entity_type"])
+            local is_player = (ent_type == nil) or (string.lower(tostring(ent_type)) == "player")
+            if is_player then
+                local other_team = (other.get and other:get("team")) or (other.properties and other.properties["team"])
+                if other_team ~= nil and tostring(other_team) == my_team then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function sync_virtual_joystick_slots(my_entity, current_time)
+    if not my_entity or not virtual_joystick or not virtual_joystick.sync_skill_slot then
+        return
+    end
+    local now = current_time or get_client_time()
+    local mana = tonumber((my_entity.get and my_entity:get("mana", 0)) or my_entity.mana or 0) or 0
+    local fury_val = (my_entity.get and my_entity:get("fury_active")) or my_entity.fury_active
+    local fury_active = (fury_val == true or fury_val == "true")
+    local has_allies = nil
+
+    for slot = 1, 4 do
+        local skill_name = SkillRanges.resolve_entity_skill(my_entity, slot)
+        local meta = skill_name and (SKILL_HUD_META[skill_name] or SkillRanges.meta(skill_name)) or nil
+        local cd_remaining = get_slot_cooldown_remaining(slot, now)
+        local cd_total = (meta and meta.cooldown) or 0.5
+
+        local locked_reason = nil
+        if skill_name then
+            if skill_name == "fury_reward" and not fury_active then
+                if has_allies == nil then
+                    has_allies = has_team_allies(my_entity)
+                end
+                if has_allies then
+                    locked_reason = "BLOQ."
+                end
+            end
+            if not locked_reason and meta and (meta.mana_cost or 0) > mana then
+                locked_reason = "MANA"
+            end
+        end
+
+        virtual_joystick.sync_skill_slot(slot, {
+            enabled = (skill_name ~= nil),
+            skill_name = skill_name,
+            label = (meta and meta.label) or skill_name,
+            cooldown = cd_total,
+            cooldown_remaining = cd_remaining,
+            cooldown_duration = (cooldown_slots[slot].duration > 0 and cooldown_slots[slot].duration) or cd_total,
+            locked_reason = locked_reason,
+        })
     end
 end
 
@@ -550,6 +716,7 @@ function love.load(arg)
     -- Event hooks
     loci.on_entity_spawned = function(entity)
         print(string.format("[Event] Entity spawned: ID %s at (%.1f, %.1f)", tostring(entity.id), entity.x, entity.y))
+        VfxSystem.on_entity_spawned(entity)
 
         -- Iniciar BGM quando o jogador local spawnar
         local my_entity = loci.get_my_entity()
@@ -558,8 +725,9 @@ function love.load(arg)
         end
     end
 
-    loci.on_entity_despawned = function(entity_id)
+    loci.on_entity_despawned = function(entity_id, last_entity)
         print("[Event] Entity despawned: ID " .. tostring(entity_id))
+        VfxSystem.on_entity_despawned(entity_id, last_entity)
         procedural_anim.clear_state(entity_id)
         sprite_anim.clear_entity_state(entity_id)
     end
@@ -578,25 +746,13 @@ function love.load(arg)
                 -- 1. Screen shake apenas para dano significativo no jogador local
                 local my_entity = loci.get_my_entity()
                 if my_entity and entity and entity.id == my_entity.id and damage > 50 then
-                    shake_total_duration = 0.2
-                    shake_duration = 0.2
-                    local intensity = math.min(8, 2.5 + (damage / 120))
-                    shake_intensity = math.max(shake_intensity, intensity)
+                    VfxSystem.trigger_shake(damage, 0.2)
                 end
 
                 -- 2. Dano flutuante para qualquer entidade (local ou inimiga)
-                -- Ataques normais variam de ~150 a 300 de dano após mitigação de defesa;
-                -- Golpes com dano >= 350 são críticos reais (multiplicador 2.25x)
-                local hud_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) + 32 -- Inicia acima da cabeça e HUD do modelo escalado
-                table.insert(floating_damage, {
-                    value = damage,
-                    x = entity.x,
-                    y = entity.y,
-                    offset_y = hud_offset_y,
-                    lifetime = 1.0,
-                    max_lifetime = 1.0,
+                VfxSystem.add_floating_damage(entity, damage, {
                     is_critical = is_critical,
-                    is_shield = false
+                    is_shield = false,
                 })
             end
         elseif key == "shield" then
@@ -609,22 +765,12 @@ function love.load(arg)
 
                 local my_entity = loci.get_my_entity()
                 if my_entity and entity and entity.id == my_entity.id and damage > 50 then
-                    shake_total_duration = 0.2
-                    shake_duration = 0.2
-                    local intensity = math.min(8, 2.5 + (damage / 120))
-                    shake_intensity = math.max(shake_intensity, intensity)
+                    VfxSystem.trigger_shake(damage, 0.2)
                 end
 
-                local hud_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) + 32 -- Inicia acima da cabeça e HUD do modelo escalado
-                table.insert(floating_damage, {
-                    value = damage,
-                    x = entity.x,
-                    y = entity.y,
-                    offset_y = hud_offset_y,
-                    lifetime = 1.0,
-                    max_lifetime = 1.0,
+                VfxSystem.add_floating_damage(entity, damage, {
                     is_critical = false,
-                    is_shield = true
+                    is_shield = true,
                 })
             end
         elseif key == "is_dead" then
@@ -698,37 +844,21 @@ function love.load(arg)
         -- Rastrear cooldown local pelo nome real da skill (ou fallback se skills_list ainda não chegou)
         local my_entity = loci.get_my_entity()
         if entity and my_entity and entity.id == my_entity.id then
+            procedural_anim.set_facing_vector(entity.id, dx, dy)
             local slot = ability_id
             if slot >= 1 and slot <= 4 then
-                local resolved_skill = skill_name
-                if not resolved_skill then
-                    local raw_list = entity.get and entity:get("skills_list", "") or ""
-                    if raw_list == "" then
-                        local default_slots = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" }
-                        resolved_skill = (slot == 1 and character_name == "mage") and "fireball" or default_slots[slot]
-                    end
-                end
-                local meta = resolved_skill and SKILL_HUD_META[resolved_skill]
+                local resolved_skill = skill_name or SkillRanges.resolve_entity_skill(entity, slot)
+                local meta = resolved_skill and (SKILL_HUD_META[resolved_skill] or SkillRanges.meta(resolved_skill))
                 if meta and meta.cooldown and meta.cooldown > 0 then
-                    cooldown_slots[slot].active = true
-                    cooldown_slots[slot].start_time = get_client_time()
-                    cooldown_slots[slot].duration = meta.cooldown
+                    start_slot_cooldown(slot, meta.cooldown, get_client_time())
                 end
+                sync_virtual_joystick_slots(entity, get_client_time())
             end
         end
 
         -- Fallback procedural apenas para personagens/habilidades sem animação de sprite
         if not has_sprite_anim then
-            local lifetime = 0.35
-            if skill_name == "fireball" then
-                lifetime = 0.40
-            elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
-                lifetime = 0.45 -- Whirlwind Dash
-            elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
-                lifetime = 0.60 -- Blade Throw
-            end
-
-            table.insert(visual_fx, {
+            VfxSystem.spawn_skill_fx({
                 x = entity and entity.x or 0,
                 y = entity and entity.y or 0,
                 dir_x = dx,
@@ -736,8 +866,7 @@ function love.load(arg)
                 ability_id = ability_id,
                 skill_name = skill_name,
                 character_name = character_name,
-                lifetime = lifetime,
-                max_lifetime = lifetime
+                caster_id = entity and entity.id or nil,
             })
         end
     end
@@ -782,9 +911,60 @@ end
 
 local function update_movement(my_entity)
     local dx, dy = read_move_input()
+    update_last_move_dir(dx, dy)
+    if my_entity and (math.abs(dx) >= 0.1 or math.abs(dy) >= 0.1) then
+        procedural_anim.set_facing_vector(my_entity.id, dx, dy)
+    end
     local cur_tick = tonumber(loci._last_state_tick) or 0
     local now = (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
     movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
+end
+
+-- Alcance de detecção de auto-aim para o slot:
+-- Para o ataque básico (slot 1), utiliza alcance de detecção amplo (estilo MOBA,
+-- DEFAULT_MAX_RANGE = 64.0) para que o herói corpo a corpo (ex: Arya) sempre
+-- vire e ataque na direção do alvo enquanto se aproxima, evitando golpear no vazio.
+-- Para as demais habilidades (slots 2-4), utiliza o alcance autoritativo da skill
+-- com fallback para o alcance padrão.
+local function auto_aim_range_for_slot(my_entity, slot)
+    local skill_name = get_entity_skill_by_slot(my_entity, slot)
+    local range = skill_name and SkillRanges.range(skill_name) or nil
+    if slot == 1 then
+        return math.max(range or 0, AutoAim.DEFAULT_MAX_RANGE)
+    end
+    return (range and range > 0) and range or AutoAim.DEFAULT_MAX_RANGE
+end
+
+-- Resolve a direção de mira para casts rápidos (sem aim manual explícita):
+-- 1) inimigo vivo mais próximo de outro time dentro do alcance da habilidade do slot;
+-- 2) direção de movimento atual (joystick/teclado);
+-- 3) última direção/facing do personagem (fallback dinâmico, evitando norte fixo).
+local function resolve_quick_cast_aim(my_entity, slot)
+    local aaim_dx, aaim_dy = AutoAim.aim_at_nearest_enemy(my_entity, loci.get_entities(), auto_aim_range_for_slot(my_entity, slot))
+    local move_dx, move_dy = read_move_input()
+    return procedural_anim.resolve_cast_direction(my_entity and my_entity.id, move_dx, move_dy, aaim_dx, aaim_dy)
+end
+
+-- Ataque básico (slot 1) compartilhado entre touch (botão 1 segurado) e
+-- teclado (Espaço segurado): dispara no ritmo do cooldown da skill, com
+-- auto-aim no inimigo mais próximo e fallback de direção de movimento/facing.
+-- `use_button_gate` aplica também o cooldown interno do botão virtual.
+local function cast_basic_attack(my_entity, now, use_button_gate)
+    if now < (skill_cast_gate[1] or 0) then return end
+    if use_button_gate then
+        if not virtual_joystick.can_trigger_skill(1, now) then return end
+        virtual_joystick.trigger_skill(1, now)
+    end
+
+    local skill_name = SkillRanges.resolve_entity_skill(my_entity, 1) or get_entity_skill_by_slot(my_entity, 1)
+    local meta = skill_name and (SKILL_HUD_META[skill_name] or SkillRanges.meta(skill_name))
+    local cast_interval = (meta and meta.cooldown and meta.cooldown > 0) and meta.cooldown or 0.5
+    skill_cast_gate[1] = now + cast_interval
+    start_slot_cooldown(1, cast_interval, now)
+    sync_virtual_joystick_slots(my_entity, now)
+
+    local action_dx, action_dy = resolve_quick_cast_aim(my_entity, 1)
+    loci.send_action(1, action_dx, action_dy)
 end
 
 function love.update(dt)
@@ -852,47 +1032,56 @@ function love.update(dt)
         end
         update_movement(my_entity)
 
+        local now = get_client_time()
+        sync_virtual_joystick_slots(my_entity, now)
+
         -- Processar habilidades dos botões virtuais (slots 1 a 4)
         local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
         if not is_dead and show_touch_controls then
-            local now = love.timer.getTime()
+            local move_dx, move_dy = read_move_input()
 
-            -- Botões 1 e 2: comportamento original (disparo imediato ao pressionar)
-            for slot = 1, 2 do
-                if virtual_joystick.is_skill_active(slot) and virtual_joystick.can_trigger_skill(slot, now) then
-                    virtual_joystick.trigger_skill(slot, now)
-
-                    -- Usar a direção do joystick de movimento, ou direção padrão se parado
-                    local action_dx, action_dy = virtual_joystick.get_move_vector()
-                    if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
-                        action_dx, action_dy = 0, -1
-                    end
-
-                    -- Direção de mira enviada diretamente via vetor do joystick
-                    loci.send_action(slot, action_dx, action_dy)
-                end
+            -- Botão 1: ataque básico com mira automática no inimigo mais próximo.
+            -- Segurar o botão mantém o personagem atacando (hold-to-cast) no ritmo
+            -- do cooldown da skill; cada disparo reavalia o alvo mais próximo.
+            -- Fallback de mira: direção de movimento/última direção (facing).
+            if virtual_joystick.is_skill_active(1) then
+                cast_basic_attack(my_entity, now, true)
             end
 
-            -- Botões 3 e 4: sempre disparam no release (drag-to-aim)
+            -- Botão 2: quick cast com mira automática no inimigo mais próximo no alcance da skill (fallback: movimento/facing)
+            local s2_name = SkillRanges.resolve_entity_skill(my_entity, 2)
+            if s2_name and virtual_joystick.is_skill_active(2) and virtual_joystick.can_trigger_skill(2, now) then
+                local meta = SKILL_HUD_META[s2_name] or SkillRanges.meta(s2_name)
+                local cd_dur = (meta and meta.cooldown) or 0.5
+                start_slot_cooldown(2, cd_dur, now)
+                sync_virtual_joystick_slots(my_entity, now)
+                virtual_joystick.trigger_skill(2, now)
+                local action_dx, action_dy = resolve_quick_cast_aim(my_entity, 2)
+                loci.send_action(2, action_dx, action_dy)
+            end
+
+            -- Botões 3 e 4: sempre disparam no release (drag-to-aim ou quick-tap com fallback de facing)
             local release_events = virtual_joystick.pop_release_events()
             for _, event in ipairs(release_events) do
                 local slot = event.skill_id
-                if slot >= 3 and slot <= 4 and virtual_joystick.can_trigger_skill(slot, now) then
+                local skill_name = SkillRanges.resolve_entity_skill(my_entity, slot)
+                if skill_name and slot >= 3 and slot <= 4 and virtual_joystick.can_trigger_skill(slot, now) then
                     -- Não disparar se foi cancelado (arrastou de volta para a zona de cancelamento)
                     if not event.is_cancelled then
-                        virtual_joystick.trigger_skill(slot, now)
+                        local meta = SKILL_HUD_META[skill_name] or SkillRanges.meta(skill_name)
+                        local cd_dur = (meta and meta.cooldown) or 0.5
+                        start_slot_cooldown(slot, cd_dur, now)
+                        sync_virtual_joystick_slots(my_entity, now)
 
                         -- Determinar direção de mira
                         local action_dx, action_dy
                         if event.was_aiming then
-                            -- Release-to-cast: usar direção do arrasto
+                            -- Release-to-cast: usar direção do arrasto e atualizar facing
                             action_dx, action_dy = event.aim_dx, event.aim_dy
+                            procedural_anim.set_facing_vector(my_entity.id, action_dx, action_dy)
                         else
-                            -- Quick tap: usar direção do joystick de movimento, ou padrão se parado
-                            action_dx, action_dy = virtual_joystick.get_move_vector()
-                            if math.abs(action_dx) < 0.1 and math.abs(action_dy) < 0.1 then
-                                action_dx, action_dy = 0, -1
-                            end
+                            -- Quick tap: mira automática no inimigo mais próximo no alcance da skill (fallback: movimento/facing)
+                            action_dx, action_dy = resolve_quick_cast_aim(my_entity, slot)
                         end
 
                         loci.send_action(slot, action_dx, action_dy)
@@ -904,6 +1093,11 @@ function love.update(dt)
             if is_dead and show_touch_controls then
                 virtual_joystick.pop_release_events()
             end
+        end
+
+        -- Segurar Espaço = ataque básico contínuo com auto-aim (paridade com o botão 1 touch)
+        if not is_dead and love.keyboard.isDown("space") then
+            cast_basic_attack(my_entity, love.timer.getTime(), false)
         end
     else
         movement_sync:on_entity_missing()
@@ -958,32 +1152,8 @@ function love.update(dt)
         rejection_timer = rejection_timer - dt
     end
 
-    -- Update visual effects (skills)
-    for i = #visual_fx, 1, -1 do
-        visual_fx[i].lifetime = visual_fx[i].lifetime - dt
-        if visual_fx[i].lifetime <= 0 then
-            table.remove(visual_fx, i)
-        end
-    end
-
-    -- Update floating damage numbers
-    for i = #floating_damage, 1, -1 do
-        local fd = floating_damage[i]
-        fd.lifetime = fd.lifetime - dt
-        fd.offset_y = fd.offset_y + 50 * dt
-        if fd.lifetime <= 0 then
-            table.remove(floating_damage, i)
-        end
-    end
-
-    -- Update screen shake timer
-    if shake_duration > 0 then
-        shake_duration = shake_duration - dt
-        if shake_duration <= 0 then
-            shake_duration = 0
-            shake_intensity = 0
-        end
-    end
+    -- Update VFX, floating damage numbers, impact particles and screen shake
+    VfxSystem.update(dt)
 end
 
 function love.resize(w, h)
@@ -1066,8 +1236,6 @@ function love.keypressed(key)
         end
     elseif key == "tab" then
         kda_ui.show()
-    elseif key == "space" then
-        cast_ability_at_mouse(1)
     elseif key == "q" then
         cast_ability_at_mouse(2)
     elseif key == "e" then
@@ -1075,7 +1243,7 @@ function love.keypressed(key)
     elseif key == "r" then
         cast_ability_at_mouse(4)
     elseif key == "k" then
-        -- Troca de personagem provisória (cicla: arya -> default -> mage -> warrior -> arya)
+        -- Troca de personagem provisória (cicla: arya -> warrior -> archer -> mage -> cleric -> enchanter -> arya)
         request_swap_hero()
     elseif key == "m" then
         local enabled = AudioSystem.toggle_mute()
@@ -1408,135 +1576,6 @@ local function draw_respawn_timer()
     love.graphics.setColor(1, 1, 1, 1)
 end
 
-local function draw_procedural_skill_fx(fx)
-    local progress = fx.lifetime / fx.max_lifetime
-    local inv_prog = 1.0 - progress
-    local fx_start_x = fx.x * VISUAL_SCALE
-    local fx_start_y = (fx.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Origem no centro do corpo do modelo escalado
-
-    -- Mapeamento de VFX desacoplado por skill_name (com fallback por ability_id / character_name)
-    local char_name = string.lower(tostring(fx.character_name or "default"))
-    local skill_name = fx.skill_name
-    if not skill_name then
-        if fx.ability_id == 1 then
-            skill_name = (char_name == "mage") and "fireball" or "slash"
-        elseif fx.ability_id == 2 then
-            skill_name = "fury_reward"
-        elseif fx.ability_id == 3 then
-            skill_name = "whirlwind_dash"
-        elseif fx.ability_id == 4 then
-            skill_name = "blade_throw"
-        end
-    end
-
-    -- Alcance e raio da AoE da habilidade em pixels (unidades do mundo * VISUAL_SCALE)
-    local range_px = SkillRanges.range(skill_name, 0) * VISUAL_SCALE
-    local aoe_px = SkillRanges.aoe(skill_name, 0) * VISUAL_SCALE
-
-    if skill_name == "fireball" then
-        -- Fireball: projétil até range * 0.7 seguido de explosão na área real (aoe_radius)
-        local max_dist = range_px * 0.7
-        local travel_t = math.min(1.0, inv_prog / 0.5)
-        local travel_dist = max_dist * travel_t
-        local fireball_x = fx_start_x + fx.dir_x * travel_dist
-        local fireball_y = fx_start_y + fx.dir_y * travel_dist
-
-        if inv_prog <= 0.5 then
-            local radius = 18 + 8 * travel_t
-            love.graphics.setColor(1.0, 0.4, 0.0, progress * 0.4)
-            love.graphics.setLineWidth(3)
-            love.graphics.line(fx_start_x, fx_start_y, fireball_x, fireball_y)
-
-            love.graphics.setColor(1.0, 0.55, 0.1, progress * 0.9)
-            love.graphics.circle("fill", fireball_x, fireball_y, radius)
-            love.graphics.setColor(1.0, 0.9, 0.3, progress * 0.75)
-            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.6)
-            love.graphics.setColor(1.0, 1.0, 0.85, progress * 0.6)
-            love.graphics.circle("fill", fireball_x, fireball_y, radius * 0.3)
-        else
-            local blast_t = (inv_prog - 0.5) / 0.5
-            local blast_alpha = 1.0 - blast_t
-            local blast_r = aoe_px * (1 / 3 + 2 / 3 * blast_t) -- cresce até o raio real da AoE
-
-            love.graphics.setColor(1.0, 0.45, 0.05, blast_alpha * 0.35)
-            love.graphics.circle("fill", fireball_x, fireball_y, blast_r)
-            love.graphics.setColor(1.0, 0.75, 0.2, blast_alpha * 0.55)
-            love.graphics.circle("fill", fireball_x, fireball_y, blast_r * 0.55)
-            love.graphics.setColor(1.0, 0.35, 0.05, blast_alpha * 0.9)
-            love.graphics.setLineWidth(3)
-            love.graphics.circle("line", fireball_x, fireball_y, blast_r)
-        end
-    elseif skill_name == "slash" then
-        local angle = math.atan2(fx.dir_y, fx.dir_x)
-        local radius = range_px * (0.6 + 0.4 * inv_prog) -- o arco abre até o alcance real do golpe
-        love.graphics.setColor(0.9, 0.95, 1.0, progress * 0.9)
-        love.graphics.setLineWidth(4)
-        love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius, angle - 0.8, angle + 0.8)
-        love.graphics.setColor(0.3, 0.7, 1.0, progress * 0.5)
-        love.graphics.setLineWidth(8)
-        love.graphics.arc("line", "open", fx_start_x, fx_start_y, radius * 0.85, angle - 0.6, angle + 0.6)
-    elseif skill_name == "fury_reward" then
-        local hit_dist = range_px * 0.5 -- ponto focal da onda de choque (igual ao do servidor: 0.5 * range)
-        local hit_x = fx_start_x + fx.dir_x * hit_dist
-        local hit_y = fx_start_y + fx.dir_y * hit_dist
-        local r = aoe_px * (0.5 + 0.5 * inv_prog) -- termina exatamente no raio real da AoE
-        love.graphics.setColor(1.0, 0.2, 0.2, progress * 0.85)
-        love.graphics.setLineWidth(3)
-        love.graphics.circle("line", hit_x, hit_y, r)
-        love.graphics.setColor(1.0, 0.5, 0.1, progress * 0.4)
-        love.graphics.circle("fill", hit_x, hit_y, r * 0.6)
-    elseif skill_name == "whirlwind_dash" then
-        local body_offset_y = (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2
-        local dash_world_dist = SkillRanges.range("whirlwind_dash", 0) * inv_prog -- unidades do mundo
-        local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
-        local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
-        local clamped_wx, clamped_wy = clamp_arena_coords(raw_wx, raw_wy)
-        local curr_x = clamped_wx * VISUAL_SCALE
-        local curr_y = (clamped_wy * VISUAL_SCALE) - body_offset_y
-        local r = aoe_px * (0.7 + 0.3 * inv_prog) -- termina exatamente no raio real da AoE
-        local spin_angle = inv_prog * math.pi * 5
-        love.graphics.setColor(1.0, 0.85, 0.3, progress * 0.85)
-        love.graphics.setLineWidth(3)
-        love.graphics.circle("line", curr_x, curr_y, r)
-        love.graphics.setColor(1.0, 0.9, 0.5, progress * 0.6)
-        for i = 0, 3 do
-            local a = spin_angle + (i * math.pi / 2)
-            love.graphics.line(
-                curr_x, curr_y,
-                curr_x + math.cos(a) * r,
-                curr_y + math.sin(a) * r
-            )
-        end
-    elseif skill_name == "blade_throw" then
-        local max_dist = range_px
-        local travel_dist = max_dist * math.min(1.0, inv_prog * 2.2)
-        local blade_x = fx_start_x + fx.dir_x * travel_dist
-        local blade_y = fx_start_y + fx.dir_y * travel_dist
-
-        love.graphics.setColor(0.4, 0.8, 1.0, progress * 0.7)
-        love.graphics.setLineWidth(2)
-        love.graphics.line(fx_start_x, fx_start_y, blade_x, blade_y)
-
-        love.graphics.setColor(1.0, 1.0, 1.0, progress)
-        love.graphics.circle("fill", blade_x, blade_y, 7)
-        love.graphics.setColor(0.2, 0.6, 1.0, progress)
-        love.graphics.circle("line", blade_x, blade_y, 7)
-
-        if inv_prog > 0.45 then
-            local shock_r = aoe_px * ((inv_prog - 0.45) / 0.55) -- termina no raio real do Stun em área
-            love.graphics.setColor(1.0, 0.9, 0.2, progress * 0.9)
-            love.graphics.setLineWidth(3)
-            love.graphics.circle("line", blade_x, blade_y, shock_r)
-        end
-    else
-        local fx_end_x = fx_start_x + fx.dir_x * 50 * VISUAL_SCALE
-        local fx_end_y = fx_start_y + fx.dir_y * 50 * VISUAL_SCALE
-        love.graphics.setColor(1, 0.85, 0.2, progress)
-        love.graphics.line(fx_start_x, fx_start_y, fx_end_x, fx_end_y)
-        love.graphics.circle("fill", fx_end_x, fx_end_y, 5 * progress)
-    end
-end
-
 function love.draw()
     push:start()
 
@@ -1555,22 +1594,14 @@ function love.draw()
     love.graphics.translate(center_x, center_y)
 
     -- Apply screen shake offset when active (smooth linear damping over duration)
-    local shake_offset_x = 0
-    local shake_offset_y = 0
-    if shake_duration > 0 and shake_intensity > 0 then
-        local current_intensity = shake_intensity * (shake_duration / shake_total_duration)
-        shake_offset_x = (love.math.random() - 0.5) * 2 * current_intensity
-        shake_offset_y = (love.math.random() - 0.5) * 2 * current_intensity
-    end
+    local shake_offset_x, shake_offset_y = VfxSystem.get_shake_offset()
     love.graphics.translate(-cam_x + shake_offset_x, -cam_y + shake_offset_y)
 
     -- Draw background grid & physical collision boundaries
     draw_arena_grid()
 
-    -- Draw transient procedural fallback effects (apenas para personagens/skills sem sprite animado)
-    for _, fx in ipairs(visual_fx) do
-        draw_procedural_skill_fx(fx)
-    end
+    -- Draw transient procedural fallback effects & despawn impact VFX
+    VfxSystem.draw_world_effects()
 
     -- Draw all network entities
     local my_entity = loci.get_my_entity()
@@ -1579,19 +1610,17 @@ function love.draw()
         draw_entity(ent, my_entity and (ent.id == my_entity.id))
     end
 
-    -- Draw aim indicator (drag-to-aim) enquanto botões 3 ou 4 estão aiming ou cancelando
+    -- Draw aim indicator (drag-to-aim) dinâmico conforme o personagem e skills_list ativos
     if my_entity and show_touch_controls then
-        -- Habilidade padrão de cada slot de mira (usada se skills_list ainda não chegou)
-        local DEFAULT_AIM_SKILLS = { [3] = "whirlwind_dash", [4] = "blade_throw" }
-
-        for slot = 3, 4 do
-            if virtual_joystick.is_aiming(slot) or virtual_joystick.is_skill_cancelled(slot) then
+        for slot = 1, 4 do
+            local aim_skill = SkillRanges.resolve_entity_skill(my_entity, slot)
+            local skill_range_world = aim_skill and SkillRanges.range(aim_skill) or nil
+            if aim_skill and skill_range_world and (virtual_joystick.is_aiming(slot) or virtual_joystick.is_skill_cancelled(slot)) then
                 local aim_dx, aim_dy = virtual_joystick.get_aim_vector(slot)
                 if math.abs(aim_dx) > 0.01 or math.abs(aim_dy) > 0.01 then
                     local player_x = my_entity.x * VISUAL_SCALE
                     local player_y = (my_entity.y * VISUAL_SCALE) - (SPRITE_BASE_SIZE * SPRITE_SCALE) / 2 -- Centro do corpo a partir dos pés do modelo escalado
-                    local aim_skill = get_entity_skill_by_slot(my_entity, slot) or DEFAULT_AIM_SKILLS[slot]
-                    local aim_length = SkillRanges.range(aim_skill, 200 / VISUAL_SCALE) * VISUAL_SCALE
+                    local aim_length = skill_range_world * VISUAL_SCALE
                     local end_x = player_x + aim_dx * aim_length
                     local end_y = player_y + aim_dy * aim_length
 
@@ -1643,43 +1672,7 @@ function love.draw()
     end
 
     -- Draw floating damage numbers (renderizado sobre os personagens)
-    if #floating_damage > 0 then
-        local original_font = love.graphics.getFont()
-        for _, fd in ipairs(floating_damage) do
-            local progress = fd.lifetime / fd.max_lifetime
-            local alpha = progress
-            local scale = 1.0 + (1.0 - progress) * 0.3
-
-            local text_x = fd.x * VISUAL_SCALE
-            local text_y = (fd.y * VISUAL_SCALE) - fd.offset_y
-
-            love.graphics.push()
-            love.graphics.translate(text_x, text_y)
-            love.graphics.scale(scale, scale)
-
-            if fd.is_shield then
-                -- Dano absorvido pelo escudo - azul ciano
-                love.graphics.setColor(0.3, 0.75, 1.0, alpha)
-                love.graphics.setFont(font_damage_normal)
-            elseif fd.is_critical then
-                -- Dano crítico - vermelho brilhante, maior
-                love.graphics.setColor(1.0, 0.15, 0.15, alpha)
-                love.graphics.setFont(font_damage_critical)
-            else
-                -- Dano normal - branco
-                love.graphics.setColor(1.0, 1.0, 1.0, alpha)
-                love.graphics.setFont(font_damage_normal)
-            end
-
-            local damage_text = string.format("%d", fd.value)
-            local tw = love.graphics.getFont():getWidth(damage_text)
-            love.graphics.print(damage_text, -tw / 2, 0)
-
-            love.graphics.pop()
-        end
-        love.graphics.setFont(original_font)
-        love.graphics.setColor(1.0, 1.0, 1.0, 1.0)
-    end
+    VfxSystem.draw_floating_damage()
 
     love.graphics.pop()
 
@@ -1815,6 +1808,11 @@ local function draw_team_shadow(px, py, rx, ry, team, is_dead)
 end
 
 function draw_entity(ent, is_me)
+    if VfxSystem.is_projectile_entity(ent) then
+        VfxSystem.draw_projectile(ent)
+        return
+    end
+
     local radius = 2 * VISUAL_SCALE
     local px = ent.x * VISUAL_SCALE
     local py = ent.y * VISUAL_SCALE
@@ -1886,9 +1884,8 @@ function draw_entity(ent, is_me)
             ox, oy
         )
     else
-        -- Renderizar placeholder padronizado de 32x32 com indicador de facing
-        local ph = is_dead and placeholder_canvases["dead"] or 
-                   (is_me and placeholder_canvases["me"] or placeholder_canvases["enemy"])
+        -- Renderizar placeholder padronizado de 32x32 com cor por arquétipo e indicador de facing
+        local ph = get_placeholder_for_entity(ent, is_me, is_dead)
         love.graphics.setColor(1, 1, 1, 1)
         love.graphics.draw(
             ph,

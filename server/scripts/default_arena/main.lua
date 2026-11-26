@@ -69,6 +69,7 @@ end
 -- Importa os sistemas modulares da arena (via VFS nativo do Loci2D)
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("systems.character_factory")
+local ProjectileSystem = require("systems.projectile_system")
 local RespawnSystem = require("respawn_system")
 
 local function is_player_alive(entity_id)
@@ -88,6 +89,13 @@ local function is_entity_dashing(entity_id)
     local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
     local current_tick = (CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0
     return current_tick < dashing_until
+end
+
+local function is_entity_casting(entity_id)
+    if not (Loci and Loci.get_entity_property) then return false end
+    local casting_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
+    local current_tick = (CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0
+    return current_tick < casting_until
 end
 
 local function is_blocked_by_player(entity_id, dir_x, dir_y)
@@ -145,6 +153,7 @@ end
 
 function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
+    ProjectileSystem.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
 
     -- 1. Salva posições antes da integração de física do tick (apenas para vivos)
@@ -181,8 +190,9 @@ function on_tick(current_tick)
             if not is_entity_dashing(entity_id) then
                 local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
                 local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
-                
-                if current_tick >= paralyzed_until and current_tick >= stunned_until then
+                local casting_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
+
+                if current_tick >= paralyzed_until and current_tick >= stunned_until and current_tick >= casting_until then
                     if is_blocked_by_player(entity_id, intent.dir_x, intent.dir_y) then
                         -- Se já está em contato bloqueado com outro jogador, mantém 100% estático (sem jitter)
                         Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
@@ -291,6 +301,13 @@ function on_move_intent(entity_id, dir_x, dir_y)
         return true
     end
 
+    if is_entity_casting(entity_id) then
+        -- Cast lock: a intenção fica registrada para retomar o movimento ao fim da
+        -- conjuração, mas a velocidade é zerada enquanto casting_until estiver ativo.
+        Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
+        return true
+    end
+
     -- Se já estiver bloqueado por outro jogador nessa direção, trava estático imediatamente
     if is_blocked_by_player(entity_id, dir_x, dir_y) then
         Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
@@ -312,7 +329,7 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
             return false, "Não é possível trocar de personagem enquanto estiver morto."
         end
 
-        local char_cycle = { "arya", "default", "mage", "warrior" }
+        local char_cycle = { "arya", "warrior", "archer", "mage", "cleric", "enchanter" }
         local current_char = string.lower(Loci.get_entity_property(entity_id, "character_name") or "unknown")
 
         -- Encontra o índice atual e calcula o próximo
@@ -377,6 +394,12 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
 end
 
 function on_collision(entity_a, entity_b)
+    -- Delega colisões envolvendo projéteis para o ProjectileSystem (comportamento de sensor sem empurrão físico)
+    if ProjectileSystem.is_projectile(entity_a) or ProjectileSystem.is_projectile(entity_b) then
+        ProjectileSystem.on_collision(entity_a, entity_b)
+        return
+    end
+
     -- Só processa colisão sólida e body-blocking se ambos forem jogadores conectados e vivos
     if not (connected_players[entity_a] and connected_players[entity_b]) then
         return
@@ -402,8 +425,10 @@ function on_collision(entity_a, entity_b)
     local intent_a = player_intents[entity_a]
     local intent_b = player_intents[entity_b]
 
-    local moving_a = intent_a and (intent_a.dir_x ~= 0 or intent_a.dir_y ~= 0)
-    local moving_b = intent_b and (intent_b.dir_x ~= 0 or intent_b.dir_y ~= 0)
+    -- Jogador em cast lock tem intenção registrada mas está enraizado: trata como parado
+    -- para não sofrer o split de posição do "ambos se movendo" durante a conjuração.
+    local moving_a = intent_a and (intent_a.dir_x ~= 0 or intent_a.dir_y ~= 0) and not is_entity_casting(entity_a)
+    local moving_b = intent_b and (intent_b.dir_x ~= 0 or intent_b.dir_y ~= 0) and not is_entity_casting(entity_b)
 
     -- Raio dos personagens da arena derivado de ArenaBounds.PLAYER_COLLIDER_RADIUS + folga de 0.05
     local MIN_DIST = MIN_COLLISION_DIST
@@ -552,6 +577,18 @@ function on_collision(entity_a, entity_b)
         set_position_clamped(entity_b, mid_x - nx * (MIN_DIST * 0.5), mid_y - ny * (MIN_DIST * 0.5))
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
+    end
+end
+
+function on_static_collision(entity_id, obstacle_id, nx, ny)
+    if ProjectileSystem.is_projectile(entity_id) then
+        ProjectileSystem.on_static_collision(entity_id, obstacle_id, nx, ny)
+    end
+end
+
+function on_boundary_collision(entity_id, nx, ny)
+    if ProjectileSystem.is_projectile(entity_id) then
+        ProjectileSystem.on_boundary_collision(entity_id, nx, ny)
     end
 end
 
