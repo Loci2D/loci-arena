@@ -19,6 +19,9 @@ SkillRanges.DEFAULTS = {
     whirlwind_dash = { range = 40.0, aoe = 10.0 },
     blade_throw    = { range = 56.0, aoe = 8.0 },
     fireball       = { range = 64.0, aoe = 9.0 },
+    quick_shot     = { range = 52.0, aoe = 4.0 },
+    smite          = { range = 38.0, aoe = 4.5 },
+    kinetic_pulse  = { range = 30.0, aoe = 5.0 },
 }
 
 -- Metadados de habilidades (cooldown em segundos a 30 Hz e custo de mana, alinhados a data/skills/*.lua)
@@ -29,14 +32,20 @@ SkillRanges.SKILL_META = {
     whirlwind_dash = { label = "Dash",     cooldown = 6.0,  mana_cost = 25 },
     blade_throw    = { label = "Lâmina",   cooldown = 14.0, mana_cost = 45 },
     shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 20 },
+    quick_shot     = { label = "Tiro",     cooldown = 0.6,  mana_cost = 5  },
+    smite          = { label = "Punição",  cooldown = 0.7,  mana_cost = 10 },
+    kinetic_pulse  = { label = "Pulso",    cooldown = 0.6,  mana_cost = 8  },
 }
 
 -- Fallback de skills por personagem apenas quando a propriedade `skills_list` ainda não chegou da rede
 SkillRanges.CHARACTER_DEFAULT_SKILLS = {
-    arya    = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" },
-    default = { "slash" },
-    mage    = { "fireball" },
-    warrior = { "slash" },
+    arya      = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" },
+    default   = { "slash" },
+    warrior   = { "slash" },
+    archer    = { "quick_shot" },
+    mage      = { "fireball" },
+    cleric    = { "smite" },
+    enchanter = { "kinetic_pulse" },
 }
 
 local function get_entity_str_prop(entity, key)
