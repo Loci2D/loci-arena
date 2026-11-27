@@ -1,5 +1,5 @@
 -- Warrior Character Data
--- Foco em alta resistência física e combate corpo-a-corpo
+-- Foco em alta resistência física e combate corpo-a-corpo (Tank do roster 3v3)
 
 return {
     name = "Warrior",
@@ -17,6 +17,9 @@ return {
     },
     tags = { "MELEE", "TANK" },
     skills = {
-        "slash"
+        "slash",            -- Habilidade 1: Ataque Básico
+        "shield_bash",      -- Habilidade 2: Avanço com Stun frontal
+        "shield",           -- Habilidade 3: Escudo de absorção (auto-buff)
+        "earthquake_slam"   -- Habilidade 4: Ultimate de impacto em área
     }
 }

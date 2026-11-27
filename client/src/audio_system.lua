@@ -27,12 +27,17 @@ local SOUND_CATALOG = {
 }
 
 local SKILL_SOUND_MAP = {
-    slash          = "slash",
-    fury_reward    = "fury_reward",
-    whirlwind_dash = "whirlwind_dash",
-    blade_throw    = "blade_throw",
-    fireball       = "fireball",
-    shield         = "shield_hit",
+    slash            = "slash",
+    fury_reward      = "fury_reward",
+    whirlwind_dash   = "whirlwind_dash",
+    blade_throw      = "blade_throw",
+    fireball         = "fireball",
+    shield           = "shield_hit",
+    shield_bash      = "shield_hit",
+    earthquake_slam  = "whirlwind_dash",
+    magic_missile    = "fireball",
+    frost_nova       = "shield_hit",
+    meteor_strike    = "fireball",
 }
 
 local ABILITY_FALLBACK_MAP = {

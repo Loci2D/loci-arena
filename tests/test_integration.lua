@@ -895,11 +895,18 @@ assert(math.abs(captured_actions[2].dx - 1.0) < 1e-4 and math.abs(captured_actio
 local st4 = virtual_joystick.get_skill_state(4)
 assert(st4 and math.abs(st4.action_cooldown - 14.0) < 1e-4 and st4.cooldown_remaining > 13.5, "Button 4 must track 14.0s blade_throw cooldown")
 
--- 4. Swap characters (arya -> default -> mage -> warrior) and verify dynamic SkillRanges & unequipped slots (2..4)
+-- 4. Swap characters (arya -> default -> mage -> warrior) and verify dynamic SkillRanges & equipped slots
 local swap_configs = {
-    { name = "default", skills = "slash",    ranges = "slash=16:7",    s1 = "slash",    cd = 0.5, range = 16.0 },
-    { name = "mage",    skills = "fireball", ranges = "fireball=64:9", s1 = "fireball", cd = 1.5, range = 64.0 },
-    { name = "warrior", skills = "slash",    ranges = "slash=16:7",    s1 = "slash",    cd = 0.5, range = 16.0 },
+    { name = "default", skills = "slash",    ranges = "slash=16:7",    s1 = "slash",    cd = 0.5, range = 16.0,
+      slots = { [1] = "slash" } },
+    { name = "mage",    skills = "magic_missile,fireball,frost_nova,meteor_strike",
+      ranges = "magic_missile=46:0,fireball=64:9,frost_nova=0:14,meteor_strike=56:18",
+      s1 = "magic_missile", cd = 0.6, range = 46.0,
+      slots = { [1] = "magic_missile", [2] = "fireball", [3] = "frost_nova", [4] = "meteor_strike" } },
+    { name = "warrior", skills = "slash,shield_bash,shield,earthquake_slam",
+      ranges = "slash=16:7,shield_bash=14:6,earthquake_slam=28:14",
+      s1 = "slash",    cd = 0.5, range = 16.0,
+      slots = { [1] = "slash", [2] = "shield_bash", [3] = "shield", [4] = "earthquake_slam" } },
 }
 for idx, cfg in ipairs(swap_configs) do
     local prev_name = my_ent.properties.character_name
@@ -910,29 +917,35 @@ for idx, cfg in ipairs(swap_configs) do
     _G.love.timer._time = 230.0 + idx * 10.0
     love.update(0.016)
 
-    assert(SkillRanges.resolve_entity_skill(my_ent, 1) == cfg.s1, "Slot 1 skill for " .. cfg.name)
-    assert(SkillRanges.resolve_entity_skill(my_ent, 2) == nil, "Slot 2 must be nil for " .. cfg.name)
-    assert(SkillRanges.resolve_entity_skill(my_ent, 3) == nil, "Slot 3 must be nil for " .. cfg.name)
-    assert(SkillRanges.resolve_entity_skill(my_ent, 4) == nil, "Slot 4 must be nil for " .. cfg.name)
+    for slot = 1, 4 do
+        local expected = cfg.slots[slot]
+        assert(SkillRanges.resolve_entity_skill(my_ent, slot) == expected,
+            string.format("Slot %d skill for %s (expected %s)", slot, cfg.name, tostring(expected)))
+        local s_state = virtual_joystick.get_skill_state(slot)
+        assert(s_state.enabled == (expected ~= nil),
+            string.format("Slot %d enabled state for %s", slot, cfg.name))
+        if expected then
+            assert(s_state.skill_name == expected, string.format("Slot %d skill_name for %s", slot, cfg.name))
+        end
+    end
     assert(math.abs(SkillRanges.range(cfg.s1) - cfg.range) < 1e-4, "Dynamic range for " .. cfg.name)
 
     local s1_state = virtual_joystick.get_skill_state(1)
     assert(s1_state.enabled == true and s1_state.skill_name == cfg.s1 and math.abs(s1_state.action_cooldown - cfg.cd) < 1e-4)
-    for slot = 2, 4 do
-        local s_state = virtual_joystick.get_skill_state(slot)
-        assert(s_state.enabled == false, string.format("Slot %d must be disabled for %s", slot, cfg.name))
+
+    if not cfg.slots[3] then
+        -- Attempting to drag-to-aim on slot 3 when character has no slot 3 skill must not enter aiming or send action
+        captured_actions = {}
+        virtual_joystick.handle_touchpress("t_unequip_" .. cfg.name, 1024, 489.6)
+        virtual_joystick.handle_touchmove("t_unequip_" .. cfg.name, 1024 + 60, 489.6)
+        assert(virtual_joystick.is_aiming(3) == false, "Disabled slot 3 must not aim on " .. cfg.name)
+        virtual_joystick.handle_touchrelease("t_unequip_" .. cfg.name)
+        love.update(0.016)
+        assert(#captured_actions == 0, "Disabled slot 3 must not send action on " .. cfg.name)
     end
 
-    -- Attempting to drag-to-aim on slot 3 when character has no slot 3 skill must not enter aiming or send action
-    captured_actions = {}
-    virtual_joystick.handle_touchpress("t_unequip_" .. cfg.name, 1024, 489.6)
-    virtual_joystick.handle_touchmove("t_unequip_" .. cfg.name, 1024 + 60, 489.6)
-    assert(virtual_joystick.is_aiming(3) == false, "Disabled slot 3 must not aim on " .. cfg.name)
-    virtual_joystick.handle_touchrelease("t_unequip_" .. cfg.name)
-    love.update(0.016)
-    assert(#captured_actions == 0, "Disabled slot 3 must not send action on " .. cfg.name)
-
     -- Slot 1 must cast normally for each swapped character
+    captured_actions = {}
     virtual_joystick.handle_touchpress("t_cast1_" .. cfg.name, 1152, 612)
     love.update(0.016)
     virtual_joystick.handle_touchrelease("t_cast1_" .. cfg.name)

@@ -22,28 +22,38 @@ SkillRanges.DEFAULTS = {
     quick_shot     = { range = 52.0, aoe = 4.0 },
     smite          = { range = 38.0, aoe = 4.5 },
     kinetic_pulse  = { range = 30.0, aoe = 5.0 },
+    shield_bash    = { range = 14.0, aoe = 6.0 },
+    earthquake_slam = { range = 28.0, aoe = 14.0 },
+    magic_missile  = { range = 46.0, aoe = 0.0 },
+    frost_nova     = { range = 0.0, aoe = 14.0 },
+    meteor_strike  = { range = 56.0, aoe = 18.0 },
 }
 
 -- Metadados de habilidades (cooldown em segundos a 30 Hz e custo de mana, alinhados a data/skills/*.lua)
 SkillRanges.SKILL_META = {
     slash          = { label = "Slash",    cooldown = 0.5,  mana_cost = 10 },
-    fireball       = { label = "Fireball", cooldown = 1.5,  mana_cost = 35 },
+    fireball       = { label = "Fireball", cooldown = 5.0,  mana_cost = 35 },
     fury_reward    = { label = "Fúria",    cooldown = 5.0,  mana_cost = 0  },
     whirlwind_dash = { label = "Dash",     cooldown = 6.0,  mana_cost = 25 },
     blade_throw    = { label = "Lâmina",   cooldown = 14.0, mana_cost = 45 },
-    shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 20 },
+    shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 30 },
     quick_shot     = { label = "Tiro",     cooldown = 0.6,  mana_cost = 5  },
     smite          = { label = "Punição",  cooldown = 0.7,  mana_cost = 10 },
     kinetic_pulse  = { label = "Pulso",    cooldown = 0.6,  mana_cost = 8  },
+    shield_bash    = { label = "Escudo",   cooldown = 7.0,  mana_cost = 25 },
+    earthquake_slam = { label = "Terramoto", cooldown = 15.0, mana_cost = 50 },
+    magic_missile  = { label = "Míssil",   cooldown = 0.6,  mana_cost = 10 },
+    frost_nova     = { label = "Gelo",     cooldown = 8.0,  mana_cost = 30 },
+    meteor_strike  = { label = "Meteoro",  cooldown = 16.0, mana_cost = 65 },
 }
 
 -- Fallback de skills por personagem apenas quando a propriedade `skills_list` ainda não chegou da rede
 SkillRanges.CHARACTER_DEFAULT_SKILLS = {
     arya      = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" },
     default   = { "slash" },
-    warrior   = { "slash" },
+    warrior   = { "slash", "shield_bash", "shield", "earthquake_slam" },
     archer    = { "quick_shot" },
-    mage      = { "fireball" },
+    mage      = { "magic_missile", "fireball", "frost_nova", "meteor_strike" },
     cleric    = { "smite" },
     enchanter = { "kinetic_pulse" },
 }

@@ -342,12 +342,20 @@ end
 local RESPAWN_DURATION_SECONDS = 10.0 -- 300 ticks a 30 Hz (respawn_system.lua)
 
 local SKILL_HUD_META = {
-    slash          = { label = "Slash",    cooldown = 0.5,  mana_cost = 10 },
-    fireball       = { label = "Fireball", cooldown = 1.5,  mana_cost = 35 },
-    fury_reward    = { label = "Fúria",    cooldown = 5.0,  mana_cost = 0  },
-    whirlwind_dash = { label = "Dash",     cooldown = 6.0,  mana_cost = 25 },
-    blade_throw    = { label = "Lâmina",   cooldown = 14.0, mana_cost = 45 },
-    shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 20 },
+    slash            = { label = "Slash",     cooldown = 0.5,  mana_cost = 10 },
+    fireball         = { label = "Fireball",  cooldown = 5.0,  mana_cost = 35 },
+    fury_reward      = { label = "Fúria",     cooldown = 5.0,  mana_cost = 0  },
+    whirlwind_dash   = { label = "Dash",      cooldown = 6.0,  mana_cost = 25 },
+    blade_throw      = { label = "Lâmina",    cooldown = 14.0, mana_cost = 45 },
+    shield           = { label = "Escudo",    cooldown = 10.0, mana_cost = 30 },
+    quick_shot       = { label = "Tiro",      cooldown = 0.6,  mana_cost = 5  },
+    smite            = { label = "Punição",   cooldown = 0.7,  mana_cost = 10 },
+    kinetic_pulse    = { label = "Pulso",     cooldown = 0.6,  mana_cost = 8  },
+    shield_bash      = { label = "Escudo",    cooldown = 7.0,  mana_cost = 25 },
+    earthquake_slam  = { label = "Terramoto", cooldown = 15.0, mana_cost = 50 },
+    magic_missile    = { label = "Míssil",    cooldown = 0.6,  mana_cost = 10 },
+    frost_nova       = { label = "Gelo",      cooldown = 8.0,  mana_cost = 30 },
+    meteor_strike    = { label = "Meteoro",   cooldown = 16.0, mana_cost = 65 },
 }
 
 local HOTBAR_SLOTS = {

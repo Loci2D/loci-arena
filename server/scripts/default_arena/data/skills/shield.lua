@@ -7,7 +7,7 @@ return {
     id = "shield",
     name = "Shield",
     description = "Cria um escudo temporário que absorve até 1000 de dano por 5 segundos",
-    mana_cost = 20,
+    mana_cost = 30,
     cooldown = 300, -- 10 segundos a 30Hz
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
