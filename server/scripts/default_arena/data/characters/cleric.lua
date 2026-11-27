@@ -18,6 +18,9 @@ return {
     },
     tags = { "SUPPORT", "HEALER" },
     skills = {
-        "smite"
+        "smite",              -- Habilidade 1: smite (disparo sagrado básico)
+        "healing_light",      -- Habilidade 2: healing_light (cura direcionada no aliado mais ferido o u em si)
+        "sacred_ground",      -- Habilidade 3: sacred_ground (área de santuário com regeneração periódica e buff)
+        "divine_resurgence"   -- Habilidade 4: divine_resurgence (ultimate com pulso massivo de cura em área + escudo)
     }
 }

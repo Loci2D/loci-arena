@@ -74,6 +74,14 @@ function CombatSystem.process_hit(attacker_id, target_id, base_damage, dmg_type,
         def = tonumber(Loci.get_entity_property(target_id, "phys_def")) or 0
     elseif dmg_type == CombatSystem.DamageType.MAGICAL then
         def = tonumber(Loci.get_entity_property(target_id, "mag_def")) or 0
+        -- Bônus temporário de Defesa Mágica (ex.: Santuário Sagrado do Cleric)
+        local mag_def_bonus_until = tonumber(Loci.get_entity_property(target_id, "mag_def_bonus_until")) or 0
+        if mag_def_bonus_until > 0 then
+            local CF = require("systems.character_factory")
+            if CF.get_current_tick() < mag_def_bonus_until then
+                def = def + (tonumber(Loci.get_entity_property(target_id, "mag_def_bonus")) or 0)
+            end
+        end
     end
     -- Dano Verdadeiro (TRUE) fica com def = 0
 
