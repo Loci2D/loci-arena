@@ -245,6 +245,7 @@ function ProjectileSystem.spawn(params)
         dir_y = tostring(dir_y),
         aoe_radius = tostring(aoe_radius),
         range = tostring(range),
+        target_id = tostring(params.target_id or ""),
     }
     if type(params.properties) == "table" then
         for k, v in pairs(params.properties) do
@@ -306,6 +307,7 @@ function ProjectileSystem.spawn(params)
         steps_taken = 0,
         detonate_on_max_range = params.detonate_on_max_range == true,
         on_impact = params.on_impact,
+        target_id = params.target_id, -- target-lock: projétil teleguiado persegue o alvo travado
         resolved = false,
     }
 
@@ -461,6 +463,32 @@ function ProjectileSystem.update_tick(current_tick)
                 active_projectiles[proj_id] = nil
                 table.remove(projectile_order, i)
             else
+                -- Target-lock (ataque básico): se o alvo travado morreu ou sumiu,
+                -- o projétil perde o rastreio e segue em linha reta.
+                if proj.target_id then
+                    if is_entity_dead(proj.target_id) then
+                        proj.target_id = nil
+                    else
+                        local tx, ty = get_entity_xy(proj.target_id)
+                        if tx == nil then
+                            proj.target_id = nil
+                        else
+                            local hdx = tx - px
+                            local hdy = ty - py
+                            local hlen = math.sqrt(hdx * hdx + hdy * hdy)
+                            if hlen > 1e-6 then
+                                local ndx = hdx / hlen
+                                local ndy = hdy / hlen
+                                proj.dir_x, proj.dir_y = ndx, ndy
+                                proj.vx, proj.vy = ndx * proj.speed, ndy * proj.speed
+                                if Loci and Loci.Commands and Loci.Commands.set_velocity then
+                                    Loci.Commands.set_velocity(proj_id, { x = proj.vx, y = proj.vy })
+                                end
+                            end
+                        end
+                    end
+                end
+
                 local dx = px - proj.start_x
                 local dy = py - proj.start_y
                 local dist_sq = dx * dx + dy * dy

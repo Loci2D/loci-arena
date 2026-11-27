@@ -987,4 +987,70 @@ run_test("mage kit: magic_missile direct hit, frost_nova 360 stun, meteor_strike
     assert_near(tonumber(enemy_back.props.hp), 5000 - 220 * (100 / 160), 1e-4)
 end)
 
+run_test("slot 1 target-lock: ranged basic attack homes onto the locked enemy and melee slash hits it consistently", function()
+    local function find_projectile(env)
+        for _, e in pairs(env.entities) do
+            if e.entity_type == "Projectile" or e.is_sensor then return e end
+        end
+        return nil
+    end
+
+    -- Ranged: archer quick_shot persegue o alvo travado mesmo se ele mudar de posição
+    do
+        local env = make_server_env(true)
+        local p1 = env.join_player(1, 0, 0)    -- Time 1 (Arya)
+        local p2 = env.join_player(2, 30, 15)  -- Time 2, dentro do range 52 do quick_shot
+
+        -- Troca p1 para Archer (arya -> warrior -> archer)
+        assert(on_action(1, 999, 0, 0) == true)
+        assert(on_action(1, 999, 0, 0) == true)
+        assert(p1.props.character_name == "archer")
+
+        -- Mira deliberadamente para +X (1,0): o servidor deve sobrescrever para o alvo real
+        with_fixed_random(0.99, function()
+            assert(on_action(1, 1, 1, 0) == true)
+        end)
+
+        local proj = find_projectile(env)
+        assert(proj ~= nil, "quick_shot must spawn a projectile")
+        assert(proj.props.target_id == "2", "projectile must carry the locked target_id")
+
+        -- Velocidade inicial aponta para o alvo em (30,15), não para +X
+        local dl = math.sqrt(30 * 30 + 15 * 15)
+        assert_near(proj.vx, 5.0 * (30 / dl), 1e-3, "homing initial vx toward target")
+        assert_near(proj.vy, 5.0 * (15 / dl), 1e-3, "homing initial vy toward target")
+
+        -- Alvo faz um movimento lateral (juke) após o disparo
+        p2.x, p2.y = 30, 25
+        env.step_ticks(1, 1)
+
+        proj = find_projectile(env)
+        assert(proj ~= nil, "projectile still in flight after 1 tick")
+        local pdx = 30 - proj.x
+        local pdy = 25 - proj.y
+        local pl = math.sqrt(pdx * pdx + pdy * pdy)
+        assert_near(proj.vx, 5.0 * (pdx / pl), 1e-3, "homing must re-aim vx after target moves")
+        assert_near(proj.vy, 5.0 * (pdy / pl), 1e-3, "homing must re-aim vy after target moves")
+
+        -- Prossegue até o impacto: o projétil teleguiado acerta o alvo que desviou
+        local hp_before = tonumber(p2.props.hp)
+        env.step_ticks(2, 20)
+        assert(tonumber(p2.props.hp) < hp_before, "homing projectile must damage the locked target")
+    end
+
+    -- Melee: slash trava no inimigo mais próximo dentro do alcance e acerta
+    -- mesmo quando a mira manual (+X) não cobriria o ângulo do alvo
+    do
+        local env = make_server_env(true)
+        env.join_player(1, 0, 0)    -- Time 1 (Arya)
+        local p2 = env.join_player(2, 10, 8) -- Team 2 a ~12.8u (dentro do range 16, fora do arco de +X)
+
+        local hp_before = tonumber(p2.props.hp)
+        with_fixed_random(0.99, function()
+            assert(on_action(1, 1, 1, 0) == true)
+        end)
+        assert(tonumber(p2.props.hp) < hp_before, "target-locked slash must hit the nearest enemy in range")
+    end
+end)
+
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

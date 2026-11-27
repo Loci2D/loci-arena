@@ -28,7 +28,7 @@ return {
     damage_type = CombatSystem.DamageType.MAGICAL,
     aoe_radius = 0,                 -- sem explosão em área: dano apenas no alvo direto
 
-    on_execute = function(entity_id, aim_x, aim_y, skill_data)
+    on_execute = function(entity_id, aim_x, aim_y, skill_data, opts)
         -- Normaliza vetor de mira
         local len = math.sqrt(aim_x * aim_x + aim_y * aim_y)
         if len > 0 then
@@ -58,6 +58,7 @@ return {
             damage_type = skill_data.damage_type,
             team = caster_team,
             detonate_on_max_range = false,
+            target_id = opts and opts.target_id, -- target-lock: míssil teleguiado ao alvo travado
         })
 
         if Loci and Loci.Log then
