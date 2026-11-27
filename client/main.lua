@@ -1772,6 +1772,50 @@ function draw_arena_grid()
     love.graphics.line(0, -20, 0, 20)
     love.graphics.setColor(0.6, 0.75, 0.9, 0.6)
     love.graphics.print("(0, 0)", 6, 6)
+
+    -- Draw arena obstacles
+    draw_arena_obstacles()
+end
+
+function draw_arena_obstacles()
+    -- Renderizar obstáculos dinamicamente via SDK (loci.get_obstacles)
+    local obstacles = loci.get_obstacles()
+    if not obstacles then return end
+
+    for _, obs in ipairs(obstacles) do
+        local ox = obs.x * VISUAL_SCALE
+        local oy = obs.y * VISUAL_SCALE
+
+        if obs.shape == "circle" then
+            local radius = obs.radius * VISUAL_SCALE
+            love.graphics.setColor(0.30, 0.40, 0.50, 0.85)
+            love.graphics.circle("fill", ox, oy, radius)
+            love.graphics.setColor(0.5, 0.6, 0.7, 0.95)
+            love.graphics.setLineWidth(2)
+            love.graphics.circle("line", ox, oy, radius)
+        elseif obs.shape == "aabb" then
+            local width = obs.width * VISUAL_SCALE
+            local height = obs.height * VISUAL_SCALE
+            local half_w = width / 2
+            local half_h = height / 2
+            local bp = tostring(obs.blueprint or "")
+            local is_crate = (bp:find("crate", 1, true) ~= nil) or (obs.collision_type == "destructible")
+            if is_crate then
+                love.graphics.setColor(0.45, 0.35, 0.25, 0.85)
+            else
+                love.graphics.setColor(0.25, 0.35, 0.45, 0.85)
+            end
+            love.graphics.rectangle("fill", ox - half_w, oy - half_h, width, height)
+            if is_crate then
+                love.graphics.setColor(0.60, 0.50, 0.40, 0.95)
+            else
+                love.graphics.setColor(0.40, 0.50, 0.60, 0.95)
+            end
+            love.graphics.setLineWidth(2)
+            love.graphics.rectangle("line", ox - half_w, oy - half_h, width, height)
+        end
+    end
+    love.graphics.setLineWidth(1)
 end
 
 local TEAM_SHADOW_COLORS = {

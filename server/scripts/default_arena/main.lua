@@ -71,6 +71,7 @@ local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("systems.character_factory")
 local ProjectileSystem = require("systems.projectile_system")
 local RespawnSystem = require("respawn_system")
+local ArenaObstacles = require("data.arena_obstacles")
 
 local function is_player_alive(entity_id)
     if not connected_players[entity_id] then return false end
@@ -206,6 +207,11 @@ function on_tick(current_tick)
     end
 end
 
+function on_init()
+    -- Inicializa obstáculos da arena
+    ArenaObstacles.initialize()
+end
+
 function on_player_join(entity_id)
     -- Proteção contra chamadas duplicadas ([Join] inicial seguido por [Session] re-joined)
     local existing_record = connected_players[entity_id]
@@ -227,7 +233,7 @@ function on_player_join(entity_id)
     if Loci and Loci.Log then
         Loci.Log.info("[Arena] Player joined with entity ID " .. tostring(entity_id))
     end
-    
+
     -- Aloca jogadores no time com menor quantidade ativa para manter o equilíbrio
     local team_id = (team_counts["1"] <= team_counts["2"]) and "1" or "2"
     team_counts[team_id] = team_counts[team_id] + 1
