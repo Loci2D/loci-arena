@@ -318,7 +318,7 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
             return false, "Não é possível trocar de personagem enquanto estiver morto."
         end
 
-        local char_cycle = { "arya", "default", "mage", "warrior" }
+        local char_cycle = { "arya", "default", "mage", "warrior", "archer" }
         local current_char = string.lower(Loci.get_entity_property(entity_id, "character_name") or "unknown")
 
         -- Encontra o índice atual e calcula o próximo

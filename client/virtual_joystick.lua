@@ -44,6 +44,15 @@ local SKILL_BUTTON_CONFIGS = {
         color_bg = {0.6, 0.6, 0.2, 0.6},
         color_pressed = {0.9, 0.9, 0.3, 0.9},
         support_aiming = true   -- Botão 4: suporta drag-to-aim
+    },
+    {
+        skill_id = 5,
+        x_ratio = 0.68,        -- Mais à esquerda do botão 4
+        y_ratio = 0.85,
+        radius = 50,
+        color_bg = {0.2, 0.6, 0.4, 0.6},
+        color_pressed = {0.3, 0.9, 0.6, 0.9},
+        support_aiming = true   -- Botão 5: suporta drag-to-aim
     }
 }
 
@@ -705,7 +714,7 @@ function VirtualJoystick.reset_cooldowns()
 end
 
 -- Aliases para retrocompatibilidade
-for slot = 1, 4 do
+for slot = 1, 5 do
     VirtualJoystick["is_skill_" .. slot .. "_active"] = function() return VirtualJoystick.is_skill_active(slot) end
     VirtualJoystick["can_trigger_skill_" .. slot] = function(t) return VirtualJoystick.can_trigger_skill(slot, t) end
     VirtualJoystick["trigger_skill_" .. slot] = function(t, cd) return VirtualJoystick.trigger_skill(slot, t, cd) end

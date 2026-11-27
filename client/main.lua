@@ -302,6 +302,11 @@ local SKILL_HUD_META = {
     whirlwind_dash = { label = "Dash",     cooldown = 6.0,  mana_cost = 25 },
     blade_throw    = { label = "Lâmina",   cooldown = 14.0, mana_cost = 45 },
     shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 20 },
+    -- Archer skills
+    quick_shot     = { label = "Quick Shot",  cooldown = 0.5,  mana_cost = 15 },
+    tactical_roll  = { label = "Roll",        cooldown = 2.0,  mana_cost = 15 },
+    piercing_arrow = { label = "Piercing",   cooldown = 3.0,  mana_cost = 30 },
+    arrow_rain     = { label = "Arrow Rain",  cooldown = 4.0,  mana_cost = 50 },
 }
 
 local HOTBAR_SLOTS = {
@@ -309,6 +314,7 @@ local HOTBAR_SLOTS = {
     { slot = 2, key = "Q" },
     { slot = 3, key = "E" },
     { slot = 4, key = "R" },
+    { slot = 5, key = "F" },
 }
 
 local cooldown_slots = {
@@ -316,6 +322,7 @@ local cooldown_slots = {
     [2] = { active = false, start_time = 0, duration = 0 },
     [3] = { active = false, start_time = 0, duration = 0 },
     [4] = { active = false, start_time = 0, duration = 0 },
+    [5] = { active = false, start_time = 0, duration = 0 },
 }
 
 -- Gate de cast por slot (tempo do cliente): evita spam de ações rejeitadas pelo
@@ -348,7 +355,7 @@ local function get_client_time()
 end
 
 local function reset_cooldown_slots()
-    for slot = 1, 4 do
+    for slot = 1, 5 do
         cooldown_slots[slot].active = false
         cooldown_slots[slot].start_time = 0
         cooldown_slots[slot].duration = 0
@@ -360,7 +367,7 @@ local function reset_cooldown_slots()
 end
 
 local function start_slot_cooldown(slot, duration, now)
-    if not slot or slot < 1 or slot > 4 then return end
+    if not slot or slot < 1 or slot > 5 then return end
     local cd = tonumber(duration) or 0
     if cd <= 0 then return end
     local t = now or get_client_time()
@@ -415,7 +422,7 @@ local function sync_virtual_joystick_slots(my_entity, current_time)
     local fury_active = (fury_val == true or fury_val == "true")
     local has_allies = nil
 
-    for slot = 1, 4 do
+    for slot = 1, 5 do
         local skill_name = SkillRanges.resolve_entity_skill(my_entity, slot)
         local meta = skill_name and (SKILL_HUD_META[skill_name] or SkillRanges.meta(skill_name)) or nil
         local cd_remaining = get_slot_cooldown_remaining(slot, now)
@@ -820,7 +827,7 @@ function love.load(arg)
         if entity and my_entity and entity.id == my_entity.id then
             procedural_anim.set_facing_vector(entity.id, dx, dy)
             local slot = ability_id
-            if slot >= 1 and slot <= 4 then
+            if slot >= 1 and slot <= 5 then
                 local resolved_skill = skill_name or SkillRanges.resolve_entity_skill(entity, slot)
                 local meta = resolved_skill and (SKILL_HUD_META[resolved_skill] or SkillRanges.meta(resolved_skill))
                 if meta and meta.cooldown and meta.cooldown > 0 then
@@ -908,7 +915,7 @@ end
 -- Para o ataque básico (slot 1), utiliza alcance de detecção amplo (estilo MOBA,
 -- DEFAULT_MAX_RANGE = 64.0) para que o herói corpo a corpo (ex: Arya) sempre
 -- vire e ataque na direção do alvo enquanto se aproxima, evitando golpear no vazio.
--- Para as demais habilidades (slots 2-4), utiliza o alcance autoritativo da skill
+-- Para as demais habilidades (slots 2-5), utiliza o alcance autoritativo da skill
 -- com fallback para o alcance padrão.
 local function auto_aim_range_for_slot(my_entity, slot)
     local skill_name = get_entity_skill_by_slot(my_entity, slot)
@@ -1019,7 +1026,7 @@ function love.update(dt)
         local now = get_client_time()
         sync_virtual_joystick_slots(my_entity, now)
 
-        -- Processar habilidades dos botões virtuais (slots 1 a 4)
+        -- Processar habilidades dos botões virtuais (slots 1 a 5)
         local is_dead = my_entity.is_dead or (my_entity.properties and my_entity.properties["is_dead"] == "true")
         if not is_dead and show_touch_controls then
             local move_dx, move_dy = read_move_input()
@@ -1049,7 +1056,7 @@ function love.update(dt)
             for _, event in ipairs(release_events) do
                 local slot = event.skill_id
                 local skill_name = SkillRanges.resolve_entity_skill(my_entity, slot)
-                if skill_name and slot >= 3 and slot <= 4 and virtual_joystick.can_trigger_skill(slot, now) then
+                if skill_name and slot >= 3 and slot <= 5 and virtual_joystick.can_trigger_skill(slot, now) then
                     -- Não disparar se foi cancelado (arrastou de volta para a zona de cancelamento)
                     if not event.is_cancelled then
                         local meta = SKILL_HUD_META[skill_name] or SkillRanges.meta(skill_name)
@@ -1250,6 +1257,8 @@ function love.keypressed(key)
         cast_ability_at_mouse(3)
     elseif key == "r" then
         cast_ability_at_mouse(4)
+    elseif key == "f" then
+        cast_ability_at_mouse(5)
     elseif key == "k" then
         -- Troca de personagem provisória (cicla: arya -> default -> mage -> warrior -> arya)
         request_swap_hero()
@@ -1757,7 +1766,7 @@ function love.draw()
 
     -- Draw aim indicator (drag-to-aim) dinâmico conforme o personagem e skills_list ativos
     if my_entity and show_touch_controls then
-        for slot = 1, 4 do
+        for slot = 1, 5 do
             local aim_skill = SkillRanges.resolve_entity_skill(my_entity, slot)
             local skill_range_world = aim_skill and SkillRanges.range(aim_skill) or nil
             if aim_skill and skill_range_world and (virtual_joystick.is_aiming(slot) or virtual_joystick.is_skill_cancelled(slot)) then
