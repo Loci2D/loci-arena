@@ -1,5 +1,6 @@
 -- Integration & Skill tests for server combat flow (Phase 3 of Issue #59 + Card #104 ProjectileSystem)
--- Covers slash, fireball, blade_throw, fury_reward, shield, whirlwind_dash AoE damage,
+-- Covers slash, fireball, blade_throw, fury_reward, shield, whirlwind_dash,
+-- shield_bash, earthquake_slam, magic_missile, frost_nova, meteor_strike AoE/CC damage,
 -- ProjectileSystem (spawn_entity, sensor CCD, static/boundary collision),
 -- on_action CC/death/slot guards, character swap (999), and end-to-end duel + KDA + passive + respawn.
 
@@ -169,6 +170,7 @@ local function make_server_env(load_main)
     local CombatSystem = require("core.combat_system")
     local CharacterFactory = require("systems.character_factory")
     local ProjectileSystem = require("systems.projectile_system")
+    local DelayedCasts = require("systems.delayed_casts")
     local RespawnSystem = require("respawn_system")
 
     if load_main then
@@ -216,6 +218,7 @@ local function make_server_env(load_main)
             else
                 CharacterFactory.update_tick(t)
                 ProjectileSystem.update_tick(t)
+                DelayedCasts.update_tick(t)
                 RespawnSystem.process_tick(t)
             end
 
@@ -299,6 +302,7 @@ local function make_server_env(load_main)
         CombatSystem = CombatSystem,
         CharacterFactory = CharacterFactory,
         ProjectileSystem = ProjectileSystem,
+        DelayedCasts = DelayedCasts,
         RespawnSystem = RespawnSystem,
         spawn_entity = spawn_entity,
         join_player = join_player,
@@ -359,20 +363,20 @@ run_test("fireball spawns authoritative Projectile entity, travels across ticks,
     assert(env.ProjectileSystem.get_active_count() == 1, "fireball must spawn an active Projectile entity")
     assert(enemy_in.props.hp == "6000", "projectile must travel over ticks before dealing damage")
 
-    -- Advance 5 ticks (x = 20): still in flight
+    -- Advance 5 ticks (x = 17.5 a 3.5 u/tick): still in flight
     with_fixed_random(0.99, function()
         env.step_ticks(1, 5)
     end)
     assert(env.ProjectileSystem.get_active_count() == 1, "fireball still in flight at tick 5")
     assert(enemy_in.props.hp == "6000", "enemy at x=46 not reached yet at tick 5")
 
-    -- Advance through tick 12: projectile passes ally at x=44 and collides with enemy_in at (46, 2)
+    -- Advance through tick 13: projectile passes ally at x=44 and collides with enemy_in at (46, 2)
     with_fixed_random(0.99, function()
-        env.step_ticks(6, 12)
+        env.step_ticks(6, 13)
     end)
 
-    -- Warrior mag_def=40 -> mitigation = 40/140; fireball dmg=500 -> 500 * (100/140)
-    local expected_dmg = 500 * (100 / 140)
+    -- Warrior mag_def=40 -> mitigation = 40/140; fireball dmg=480 -> 480 * (100/140)
+    local expected_dmg = 480 * (100 / 140)
     assert_near(tonumber(enemy_in.props.hp), 6000 - expected_dmg, 1e-4, "enemy in blast takes magical damage")
     assert_near(enemy_in.x, 46.0, 1e-4, "sensor projectile must not physically push target")
     assert(ally_in.props.hp == "5000", "ally in flight path and blast spared")
@@ -457,7 +461,7 @@ run_test("ProjectileSystem destroys projectiles on static obstacle and boundary 
     assert(on_action(2, 999, 0, 0) == true) -- archer
     assert(on_action(2, 999, 0, 0) == true) -- mage
     p2.x, p2.y = 492.0, 0.0
-    assert(on_action(2, 1, 1, 0) == true) -- fireball towards +X wall
+    assert(on_action(2, 2, 1, 0) == true) -- fireball (slot 2 do kit do Mage) towards +X wall
     assert(env.ProjectileSystem.get_active_count() == 1)
 
     env.step_ticks(11, 14)
@@ -629,19 +633,20 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     env.step_ticks(13, 70)
 
     -- 3. Low-HP p3 gets eliminated by p2's fireball projectile -> KDA updates + p1 (allied Arya) gets passive paralysis + fury
+    --    (fireball speed=3.5 u/tick: de x=10, atinge p3 em x=55 no tick 82)
     p3.props.hp = "100"
     with_fixed_random(0.99, function()
-        assert(on_action(2, 1, 1, 0) == true) -- fireball launched from x=10 towards p3 at x=55
-        env.step_ticks(71, 81)                -- 11 ticks at speed 4.0 reaches x=54 and hits p3 at x=55
+        assert(on_action(2, 2, 1, 0) == true) -- fireball (slot 2) launched from x=10 towards p3 at x=55
+        env.step_ticks(71, 82)                -- 12 ticks at speed 3.5 reaches x=52 and hits p3 at x=55
     end)
     assert(p3.props.hp == "0" and p3.props.is_dead == "true")
     assert(p3.props.deaths == "1" and p2.props.kills == "1")
     assert(p1.props.fury_active == "true")
-    assert(p1.props.paralyzed_until == "171") -- 81 + 90
+    assert(p1.props.paralyzed_until == "172") -- 82 + 90
     assert(on_action(1, 2, 1, 0) == false, "paralyzed p1 cannot cast fury_reward yet")
 
-    -- 4. Advance to tick 171: paralysis expires, p1 moves next to p2 and finishes p2 with fury_reward (slot 2)
-    env.step_ticks(82, 171)
+    -- 4. Advance to tick 172: paralysis expires, p1 moves next to p2 and finishes p2 with fury_reward (slot 2)
+    env.step_ticks(83, 172)
     p2.x, p2.y = 5, 0
     p2.props.hp = "200"
     with_fixed_random(0.99, function()
@@ -651,8 +656,8 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     assert(p2.props.deaths == "1" and p1.props.kills == "1")
     assert(p1.props.fury_active == "false")
 
-    -- 5. Advance to tick 471 (300 ticks after tick 171): both p3 (died at 81) and p2 (died at 171) have respawned
-    env.step_ticks(172, 471)
+    -- 5. Advance to tick 472 (300 ticks after tick 172): both p3 (died at 82) and p2 (died at 172) have respawned
+    env.step_ticks(173, 472)
     assert(p3.props.is_dead == "false" and p3.props.hp == p3.props.max_hp)
     assert(p2.props.is_dead == "false" and p2.props.hp == p2.props.max_hp)
 
@@ -668,10 +673,12 @@ run_test("server publishes skill_ranges from data/skills and the client defaults
     local SkillRanges = require("skill_ranges")
     SkillRanges.reset()
 
-    -- Cada personagem publica alcance:raio das próprias skills (somente as que têm alcance)
+    -- Cada personagem publica alcance:raio das próprias skills (somente as que têm alcance;
+    -- "shield" não tem range e "frost_nova" publica range=0 por ser centrada no conjurador)
     local expected_by_char = {
         arya = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" },
-        mage = { "fireball" },
+        mage = { "magic_missile", "fireball", "frost_nova", "meteor_strike" },
+        warrior = { "slash", "shield_bash", "shield", "earthquake_slam" },
         archer = { "quick_shot" },
         cleric = { "smite" },
         enchanter = { "kinetic_pulse" },
@@ -683,9 +690,13 @@ run_test("server publishes skill_ranges from data/skills and the client defaults
         local published = SkillRanges.parse(ent.props.skill_ranges)
         for _, skill_name in ipairs(skills) do
             local data = require("data.skills." .. skill_name)
-            assert(published[skill_name], char_name .. " must publish skill_ranges for " .. skill_name)
-            assert_near(published[skill_name].range, data.range, 1e-3, skill_name .. " published range")
-            assert_near(published[skill_name].aoe, data.aoe_radius, 1e-3, skill_name .. " published aoe")
+            if data.range == nil then
+                assert(published[skill_name] == nil, char_name .. " must NOT publish " .. skill_name .. " (sem alcance)")
+            else
+                assert(published[skill_name], char_name .. " must publish skill_ranges for " .. skill_name)
+                assert_near(published[skill_name].range, data.range, 1e-3, skill_name .. " published range")
+                assert_near(published[skill_name].aoe, data.aoe_radius, 1e-3, skill_name .. " published aoe")
+            end
         end
     end
 
@@ -883,6 +894,97 @@ run_test("ArenaObstacles.initialize() and cleanup() work without global pairs()"
     for i = 1, 7 do
         assert(destroyed[i] == true, "Obstacle ID " .. i .. " should be destroyed")
     end
+end)
+
+run_test("warrior kit: shield_bash dashes and stuns, earthquake_slam leaps then slams AoE on landing", function()
+    local env = make_server_env(false)
+    local CF = env.CharacterFactory
+
+    CF.update_tick(100)
+    env.spawn_entity(1, "warrior", "1", 0, 0)
+    local enemy_path = env.spawn_entity(2, "default", "2", 10, 0)  -- dentro do cone do shield_bash
+    local enemy_slam = env.spawn_entity(3, "default", "2", 30, 0)  -- perto do ponto de aterrissagem (28,0)
+    local ally = env.spawn_entity(4, "default", "1", 20, 0)        -- mesmo time -> poupado
+
+    with_fixed_random(0.99, function()
+        assert(CF.execute_skill(1, "shield_bash", 1, 0) == true)
+    end)
+    assert(env.entities[1].props.dashing_until == "104", "shield_bash dash = 4 ticks (100 + 4)")
+
+    -- 280 físico vs phys_def=80 -> 280 * (100/180); stun = 100 + 24
+    local expected_bash = 280 * (100 / 180)
+    assert_near(tonumber(enemy_path.props.hp), 5000 - expected_bash, 1e-4)
+    assert(enemy_path.props.stunned_until == "124", "shield_bash stun = cast + 24 ticks")
+    assert(enemy_path.props.casting_until == "0", "shield_bash cancels target cast lock")
+    assert(ally.props.hp == "5000", "ally in bash path must be spared")
+    assert(enemy_slam.props.hp == "5000", "enemy beyond bash reach must be spared")
+
+    -- Cooldown de shield_bash = 210 ticks -> pronto no tick 310
+    CF.update_tick(310)
+    with_fixed_random(0.99, function()
+        assert(CF.execute_skill(1, "earthquake_slam", 1, 0) == true)
+    end)
+    assert(env.entities[1].props.dashing_until == "318", "slam leap = 8 ticks (310 + 8)")
+    assert(enemy_slam.props.hp == "5000", "slam impact must be delayed until landing tick")
+
+    -- Avança até o tick de aterrissagem: impacto em área resolve via DelayedCasts
+    env.step_ticks(311, 318)
+    local expected_slam = 550 * (100 / 180)
+    assert_near(tonumber(enemy_slam.props.hp), 5000 - expected_slam, 1e-4)
+    assert(enemy_slam.props.stunned_until == "354", "slam stun = 310 + 8 + 36")
+    assert(enemy_slam.props.casting_until == "0")
+    assert(ally.props.hp == "5000", "ally inside slam radius must be spared")
+    -- enemy_path em x=10 está a 18u do ponto de impacto (28,0): fora do aoe 14 -> só sofreu o bash
+    assert_near(tonumber(enemy_path.props.hp), 5000 - expected_bash, 1e-4)
+end)
+
+run_test("mage kit: magic_missile direct hit, frost_nova 360 stun, meteor_strike delayed AoE", function()
+    local env = make_server_env(false)
+    local CF = env.CharacterFactory
+
+    CF.update_tick(50)
+    env.spawn_entity(1, "mage", "1", 0, 0)
+    local enemy_front = env.spawn_entity(2, "default", "2", 20, 0)
+    local enemy_back = env.spawn_entity(3, "default", "2", -8, 0)
+
+    -- Slot 1: magic_missile — projétil direto de médio alcance, sem AoE
+    with_fixed_random(0.99, function()
+        assert(CF.execute_skill(1, "magic_missile", 1, 0) == true)
+    end)
+    assert(env.ProjectileSystem.get_active_count() == 1, "magic_missile must spawn a Projectile")
+    assert(enemy_front.props.hp == "5000", "missile must travel before hitting")
+
+    env.step_ticks(51, 56)
+    -- 260 mágico vs mag_def=60 -> 260 * (100/160) = 162.5; sem stun
+    assert_near(tonumber(enemy_front.props.hp), 5000 - 260 * (100 / 160), 1e-4)
+    assert(enemy_front.props.stunned_until == "0", "magic_missile applies no stun")
+    assert(enemy_back.props.hp == "5000", "enemy behind caster must be ignored")
+    assert(env.ProjectileSystem.get_active_count() == 0, "missile destroyed on impact")
+
+    -- Slot 3: frost_nova — onda 360º instantânea centrada no conjurador
+    CF.update_tick(290)
+    with_fixed_random(0.99, function()
+        assert(CF.execute_skill(1, "frost_nova", 1, 0) == true)
+    end)
+    -- enemy_back em (-8,0) está dentro do raio 14; enemy_front em (20,0) está fora
+    assert_near(tonumber(enemy_back.props.hp), 5000 - 220 * (100 / 160), 1e-4)
+    assert(enemy_back.props.stunned_until == "308", "frost_nova stun = 290 + 18")
+    assert_near(tonumber(enemy_front.props.hp), 5000 - 260 * (100 / 160), 1e-4,
+        "enemy_front fora do raio da nova não sofre dano adicional")
+
+    -- Slot 4: meteor_strike — dano agendado para daqui a 24 ticks no ponto mirado (56,0)
+    CF.update_tick(770)
+    enemy_back.props.hp_regen = "0" -- isola a asserção do regen passivo durante a janela do meteoro
+    local enemy_impact = env.spawn_entity(4, "default", "2", 56, 0)
+    with_fixed_random(0.99, function()
+        assert(CF.execute_skill(1, "meteor_strike", 1, 0) == true)
+    end)
+    assert(enemy_impact.props.hp == "5000", "meteor must not deal damage during the warning window")
+
+    env.step_ticks(771, 794)
+    assert_near(tonumber(enemy_impact.props.hp), 5000 - 750 * (100 / 160), 1e-4)
+    -- Inimigos fora do raio 18 do impacto não são atingidos
+    assert_near(tonumber(enemy_back.props.hp), 5000 - 220 * (100 / 160), 1e-4)
 end)
 
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

@@ -70,6 +70,7 @@ end
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("systems.character_factory")
 local ProjectileSystem = require("systems.projectile_system")
+local DelayedCasts = require("systems.delayed_casts")
 local RespawnSystem = require("respawn_system")
 local ArenaObstacles = require("data.arena_obstacles")
 
@@ -155,6 +156,7 @@ end
 function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
     ProjectileSystem.update_tick(current_tick)
+    DelayedCasts.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
 
     -- 1. Salva posições antes da integração de física do tick (apenas para vivos)
