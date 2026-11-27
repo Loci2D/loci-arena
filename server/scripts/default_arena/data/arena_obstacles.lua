@@ -3,87 +3,107 @@
 
 local ArenaObstacles = {}
 
--- Definição dos obstáculos da arena
-ArenaObstacles.blueprints = {
+-- Definição ordenada dos obstáculos da arena (ordem determinística para VFS/replay)
+-- Nota: `position` representa o centro (cx, cy) tanto para AABB quanto para círculo.
+ArenaObstacles.obstacle_list = {
     -- Paredes horizontais (cobertura tática)
-    wall_center_1 = {
+    {
+        name = "wall_center_1",
         shape = "aabb",
-        position = { x = -30, y = -200 },
+        position = { x = 0, y = -200 },
         dimensions = { width = 60, height = 10 },
         is_solid = true,
-        collision_type = "static"
+        collision_type = "solid"
     },
-    wall_center_2 = {
+    {
+        name = "wall_center_2",
         shape = "aabb",
-        position = { x = -30, y = 200 },
+        position = { x = 0, y = 200 },
         dimensions = { width = 60, height = 10 },
         is_solid = true,
-        collision_type = "static"
+        collision_type = "solid"
     },
 
     -- Pilares nos cantos (cobertura)
-    pillar_nw = {
+    {
+        name = "pillar_nw",
         shape = "circle",
         position = { x = -400, y = -400 },
         radius = 30,
         is_solid = true,
-        collision_type = "static"
+        collision_type = "solid"
     },
-    pillar_ne = {
+    {
+        name = "pillar_ne",
         shape = "circle",
         position = { x = 400, y = -400 },
         radius = 30,
         is_solid = true,
-        collision_type = "static"
+        collision_type = "solid"
     },
-    pillar_sw = {
+    {
+        name = "pillar_sw",
         shape = "circle",
         position = { x = -400, y = 400 },
         radius = 30,
         is_solid = true,
-        collision_type = "static"
+        collision_type = "solid"
     },
-    pillar_se = {
+    {
+        name = "pillar_se",
         shape = "circle",
         position = { x = 400, y = 400 },
         radius = 30,
         is_solid = true,
-        collision_type = "static"
+        collision_type = "solid"
     },
 
-    -- Caixa central (destrutível no futuro)
-    crate_center = {
+    -- Caixa tática próxima ao centro (mantém (0, 0) livre para spawn de jogadores)
+    {
+        name = "crate_center",
         shape = "aabb",
-        position = { x = -15, y = -15 },
+        position = { x = 0, y = -100 },
         dimensions = { width = 30, height = 30 },
         is_solid = true,
-        collision_type = "static"
+        collision_type = "solid"
     }
 }
 
--- Tabela para rastrear IDs dos obstáculos criados
+-- Índice por nome para consultas e testes
+ArenaObstacles.blueprints = {}
+for _, blueprint in ipairs(ArenaObstacles.obstacle_list) do
+    ArenaObstacles.blueprints[blueprint.name] = blueprint
+end
+
+-- Tabelas para rastrear IDs dos obstáculos criados
 ArenaObstacles.created_ids = {}
+ArenaObstacles.created_list = {}
 
 -- Função para inicializar os obstáculos da arena
 function ArenaObstacles.initialize()
     -- Verificar se a API de obstáculos está disponível
-    if not Loci.Commands.spawn_static_obstacle then
+    if not (Loci and Loci.Commands and Loci.Commands.spawn_static_obstacle) then
         if Loci and Loci.Log then
             Loci.Log.info("[ArenaObstacles] API de obstáculos não disponível")
         end
         return false
     end
 
-    -- Criar cada obstáculo
-    for name, blueprint in pairs(ArenaObstacles.blueprints) do
+    ArenaObstacles.created_ids = {}
+    ArenaObstacles.created_list = {}
+    local count = 0
+
+    -- Criar cada obstáculo em ordem determinística (ipairs é seguro na VM do loci2d)
+    for _, blueprint in ipairs(ArenaObstacles.obstacle_list) do
+        local name = blueprint.name
         local obstacle_data = {
             blueprint = name,
-            position = blueprint.position,
+            position = { x = blueprint.position.x, y = blueprint.position.y },
             shape = blueprint.shape,
-            is_solid = blueprint.is_solid
+            is_solid = blueprint.is_solid,
+            collision_type = blueprint.collision_type or "solid"
         }
 
-        -- Adicionar dimensões específicas por forma
         -- Nota: AABB exige width e height diretamente na raiz da tabela
         if blueprint.shape == "aabb" then
             obstacle_data.width = blueprint.dimensions.width
@@ -92,10 +112,12 @@ function ArenaObstacles.initialize()
             obstacle_data.radius = blueprint.radius
         end
 
-        local success, obstacle_id = Loci.Commands.spawn_static_obstacle(obstacle_data)
+        local obstacle_id = Loci.Commands.spawn_static_obstacle(obstacle_data)
 
-        if success and obstacle_id then
+        if obstacle_id then
             ArenaObstacles.created_ids[name] = obstacle_id
+            table.insert(ArenaObstacles.created_list, obstacle_id)
+            count = count + 1
             if Loci and Loci.Log then
                 Loci.Log.info(string.format("[ArenaObstacles] Obstáculo %s criado (ID: %s)", name, tostring(obstacle_id)))
             end
@@ -107,23 +129,31 @@ function ArenaObstacles.initialize()
     end
 
     if Loci and Loci.Log then
-        local count = 0
-        for _ in pairs(ArenaObstacles.created_ids) do
-            count = count + 1
-        end
         Loci.Log.info(string.format("[ArenaObstacles] %d obstáculos criados com sucesso", count))
     end
 
-    return true
+    return count > 0
 end
 
--- Função para limpar todos os obstáculos
+-- Função para limpar todos os obstáculos criados
 function ArenaObstacles.cleanup()
-    -- Nota: A API de remoção de obstáculos pode não estar disponível
-    -- Esta função é preparada para uso futuro
-    if Loci and Loci.Log then
-        Loci.Log.info("[ArenaObstacles] Cleanup de obstáculos (remoção não implementada)")
+    local destroy_fn = Loci and Loci.Commands and Loci.Commands.destroy_static_obstacle
+    local removed = 0
+
+    if destroy_fn then
+        for _, obstacle_id in ipairs(ArenaObstacles.created_list) do
+            destroy_fn(obstacle_id)
+            removed = removed + 1
+        end
     end
+
+    ArenaObstacles.created_ids = {}
+    ArenaObstacles.created_list = {}
+
+    if Loci and Loci.Log then
+        Loci.Log.info(string.format("[ArenaObstacles] Cleanup concluído (%d obstáculos removidos)", removed))
+    end
+    return removed
 end
 
 return ArenaObstacles

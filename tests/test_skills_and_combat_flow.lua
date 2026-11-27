@@ -847,4 +847,42 @@ run_test("casting a locked skill during whirlwind_dash ends dashing_until entire
     assert_near(p1.vx, 2.2, 1e-4, "walk speed resumes after cast lock, no dash remnant")
 end)
 
+run_test("ArenaObstacles.initialize() and cleanup() work without global pairs()", function()
+    local saved_pairs = _G.pairs
+    local spawned = {}
+    local destroyed = {}
+    local next_id = 0
+
+    _G.Loci = {
+        Log = { info = function() end, warn = function() end, error = function() end },
+        Commands = {
+            spawn_static_obstacle = function(data)
+                next_id = next_id + 1
+                spawned[next_id] = data
+                return next_id
+            end,
+            destroy_static_obstacle = function(id)
+                destroyed[id] = true
+            end
+        }
+    }
+
+    package.loaded["data.arena_obstacles"] = nil
+    _G.pairs = nil
+    local ok_req, ArenaObstacles = pcall(require, "data.arena_obstacles")
+    assert(ok_req, "require('data.arena_obstacles') failed without pairs(): " .. tostring(ArenaObstacles))
+
+    local ok_init, init_res = pcall(ArenaObstacles.initialize)
+    assert(ok_init and init_res == true, "ArenaObstacles.initialize() failed without pairs(): " .. tostring(init_res))
+    assert(#ArenaObstacles.created_list == 7, "Expected 7 obstacles, got " .. tostring(#ArenaObstacles.created_list))
+
+    local ok_clean, removed = pcall(ArenaObstacles.cleanup)
+    _G.pairs = saved_pairs
+
+    assert(ok_clean and removed == 7, "ArenaObstacles.cleanup() must remove 7 obstacles")
+    for i = 1, 7 do
+        assert(destroyed[i] == true, "Obstacle ID " .. i .. " should be destroyed")
+    end
+end)
+
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

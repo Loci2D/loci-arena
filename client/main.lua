@@ -1798,9 +1798,19 @@ function draw_arena_obstacles()
             local height = obs.height * VISUAL_SCALE
             local half_w = width / 2
             local half_h = height / 2
-            love.graphics.setColor(0.25, 0.35, 0.45, 0.85)
+            local bp = tostring(obs.blueprint or "")
+            local is_crate = (bp:find("crate", 1, true) ~= nil) or (obs.collision_type == "destructible")
+            if is_crate then
+                love.graphics.setColor(0.45, 0.35, 0.25, 0.85)
+            else
+                love.graphics.setColor(0.25, 0.35, 0.45, 0.85)
+            end
             love.graphics.rectangle("fill", ox - half_w, oy - half_h, width, height)
-            love.graphics.setColor(0.4, 0.5, 0.6, 0.95)
+            if is_crate then
+                love.graphics.setColor(0.60, 0.50, 0.40, 0.95)
+            else
+                love.graphics.setColor(0.40, 0.50, 0.60, 0.95)
+            end
             love.graphics.setLineWidth(2)
             love.graphics.rectangle("line", ox - half_w, oy - half_h, width, height)
         end
