@@ -18,12 +18,12 @@ return {
     name = "Fireball",
     description = "Bola de fogo explosiva com dano mágico em área",
     mana_cost = 35,
-    cooldown = 45, -- 1.5s a 30Hz
+    cooldown = 150, -- 5.0s a 30Hz
     cast_lock_ticks = 15, -- 0.5s a 30Hz: tempo de conjuração do projétil
     range = 64.0,                   -- unidades do mundo (cabe na tela: +-80 na horizontal)
-    projectile_speed = 4.0,         -- unidades/tick (16 ticks para alcance máximo a 30Hz)
+    projectile_speed = 3.5,         -- unidades/tick (~19 ticks para alcance máximo a 30Hz)
     projectile_radius = 1.5,        -- raio de colisão do projétil
-    damage = 500,
+    damage = 480,
     damage_type = CombatSystem.DamageType.MAGICAL,
     aoe_radius = 9.0,               -- unidades do mundo
 
@@ -49,7 +49,7 @@ return {
             y = caster_y,
             dir_x = aim_x,
             dir_y = aim_y,
-            speed = skill_data.projectile_speed or 4.0,
+            speed = skill_data.projectile_speed or 3.5,
             range = skill_data.range,
             radius = skill_data.projectile_radius or 1.5,
             aoe_radius = skill_data.aoe_radius,

@@ -24,7 +24,7 @@ return {
     damage_type = CombatSystem.DamageType.PHYSICAL,
     aoe_radius = 7.0,  -- unidades do mundo
 
-    on_execute = function(entity_id, aim_x, aim_y, skill_data)
+    on_execute = function(entity_id, aim_x, aim_y, skill_data, opts)
         -- Normaliza vetor de mira
         local len = math.sqrt(aim_x * aim_x + aim_y * aim_y)
         if len > 0 then
@@ -48,6 +48,13 @@ return {
             { x = caster_x + aim_x * (skill_data.range * 0.25), y = caster_y + aim_y * (skill_data.range * 0.25) },
             { x = target_x, y = target_y }
         }
+
+        -- Target-lock (ataque básico corpo a corpo): a posição exata do alvo
+        -- travado entra como ponto de amostragem para garantir o acerto mesmo
+        -- na borda do alcance do golpe.
+        if opts and opts.target_x and opts.target_y then
+            table.insert(sample_points, { x = opts.target_x, y = opts.target_y })
+        end
 
         for _, pt in ipairs(sample_points) do
             local nearby = Loci.get_entities_in_radius(pt, skill_data.aoe_radius)

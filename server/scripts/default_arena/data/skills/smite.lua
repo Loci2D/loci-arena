@@ -27,7 +27,7 @@ return {
     damage_type = CombatSystem.DamageType.MAGICAL,
     aoe_radius = 4.5,
 
-    on_execute = function(entity_id, aim_x, aim_y, skill_data)
+    on_execute = function(entity_id, aim_x, aim_y, skill_data, opts)
         local len = math.sqrt(aim_x * aim_x + aim_y * aim_y)
         if len > 0 then
             aim_x = aim_x / len
@@ -56,6 +56,7 @@ return {
             damage_type = skill_data.damage_type,
             team = caster_team,
             detonate_on_max_range = true,
+            target_id = opts and opts.target_id, -- target-lock: disparo teleguiado ao alvo travado
         })
         return true
     end

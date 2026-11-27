@@ -123,6 +123,8 @@ function VfxSystem.resolve_projectile_skill(ent)
         return "blade_throw"
     elseif bp:find("fireball", 1, true) then
         return "fireball"
+    elseif bp:find("missile", 1, true) then
+        return "magic_missile"
     end
     return bp ~= "" and bp or nil
 end
@@ -138,7 +140,7 @@ function VfxSystem.is_projectile_entity(ent)
         return true
     end
     local bp = string.lower(tostring(ent.blueprint or ent.name or ""))
-    if bp == "blade_throw" or bp == "fireball" or bp == "thrownblade"
+    if bp == "blade_throw" or bp == "fireball" or bp == "magic_missile" or bp == "thrownblade"
         or bp:find("projectile", 1, true) or bp:find("bullet", 1, true) then
         return true
     end
@@ -237,7 +239,7 @@ function VfxSystem.on_entity_despawned(entity_id, last_entity)
             if not resolved_fx_skill then
                 if fx.ability_id == 4 then resolved_fx_skill = "blade_throw"
                 elseif fx.ability_id == 1 and string.lower(tostring(fx.character_name or "")) == "mage" then
-                    resolved_fx_skill = "fireball"
+                    resolved_fx_skill = "magic_missile"
                 end
             end
             if fx.projectile_id == entity_id or resolved_fx_skill == skill_name then
@@ -317,12 +319,16 @@ function VfxSystem.spawn_skill_fx(params)
     local lifetime = params.lifetime
     if not lifetime then
         lifetime = 0.35
-        if skill_name == "fireball" or (not skill_name and ability_id == 1 and character_name == "mage") then
+        if skill_name == "fireball" or (not skill_name and ability_id == 2 and character_name == "mage") then
             lifetime = 0.40
-        elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3) then
+        elseif skill_name == "whirlwind_dash" or (not skill_name and ability_id == 3 and character_name ~= "mage") then
             lifetime = 0.45
-        elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4) then
+        elseif skill_name == "blade_throw" or (not skill_name and ability_id == 4 and character_name ~= "mage" and character_name ~= "warrior") then
             lifetime = 0.60
+        elseif skill_name == "meteor_strike" then
+            lifetime = 0.8 -- janela de aviso visual de 0.8s sincronizada com o impacto do servidor
+        elseif skill_name == "earthquake_slam" or skill_name == "frost_nova" or skill_name == "shield_bash" then
+            lifetime = 0.45
         end
     end
 
@@ -430,13 +436,19 @@ function VfxSystem.draw_procedural_skill_fx(fx)
     local skill_name = fx.skill_name
     if not skill_name then
         if fx.ability_id == 1 then
-            skill_name = (char_name == "mage") and "fireball" or "slash"
+            skill_name = (char_name == "mage") and "magic_missile" or "slash"
         elseif fx.ability_id == 2 then
-            skill_name = "fury_reward"
+            skill_name = (char_name == "mage") and "fireball" or "fury_reward"
         elseif fx.ability_id == 3 then
-            skill_name = "whirlwind_dash"
+            skill_name = (char_name == "mage") and "frost_nova" or "whirlwind_dash"
         elseif fx.ability_id == 4 then
-            skill_name = "blade_throw"
+            if char_name == "mage" then
+                skill_name = "meteor_strike"
+            elseif char_name == "warrior" then
+                skill_name = "earthquake_slam"
+            else
+                skill_name = "blade_throw"
+            end
         end
     end
 
@@ -548,6 +560,89 @@ function VfxSystem.draw_procedural_skill_fx(fx)
             love.graphics.setLineWidth(3)
             love.graphics.circle("line", blade_x, blade_y, shock_r)
         end
+    elseif skill_name == "magic_missile" then
+        -- Traço violeta do projétil arcano (a entidade Projectile real assume o desenho
+        -- assim que vinculada via projectile_id; este é o fallback do primeiro frame)
+        local max_dist = range_px * 0.9
+        local travel_dist = max_dist * math.min(1.0, inv_prog * 2.5)
+        local bolt_x = fx_start_x + fx.dir_x * travel_dist
+        local bolt_y = fx_start_y + fx.dir_y * travel_dist
+        love.graphics.setColor(0.6, 0.3, 1.0, progress * 0.4)
+        love.graphics.setLineWidth(2)
+        love.graphics.line(fx_start_x, fx_start_y, bolt_x, bolt_y)
+        love.graphics.setColor(0.85, 0.55, 1.0, progress * 0.9)
+        love.graphics.circle("fill", bolt_x, bolt_y, 6)
+        love.graphics.setColor(1.0, 0.9, 1.0, progress * 0.7)
+        love.graphics.circle("line", bolt_x, bolt_y, 6)
+    elseif skill_name == "shield_bash" then
+        -- Arco do escudo no ponto interpolado do avanço
+        local dash_world_dist = SkillRanges.range("shield_bash", 0) * inv_prog
+        local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * dash_world_dist
+        local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * dash_world_dist
+        local clamped_wx, clamped_wy = clamp_coords(raw_wx, raw_wy)
+        local curr_x = clamped_wx * scale
+        local curr_y = (clamped_wy * scale) - body_offset_y
+        local angle = math.atan2(fx.dir_y or 0, fx.dir_x or 1)
+        local radius = (aoe_px or 48) * (0.7 + 0.3 * inv_prog)
+        love.graphics.setColor(0.75, 0.85, 1.0, progress * 0.9)
+        love.graphics.setLineWidth(4)
+        love.graphics.arc("line", "open", curr_x, curr_y, radius, angle - 0.9, angle + 0.9)
+        love.graphics.setColor(0.4, 0.6, 1.0, progress * 0.5)
+        love.graphics.setLineWidth(8)
+        love.graphics.arc("line", "open", curr_x, curr_y, radius * 0.8, angle - 0.7, angle + 0.7)
+    elseif skill_name == "earthquake_slam" then
+        -- Rachadura sísmica no ponto interpolado do salto + anel de impacto
+        local leap_world_dist = SkillRanges.range("earthquake_slam", 0) * inv_prog
+        local raw_wx = (fx.x or 0) + (fx.dir_x or 0) * leap_world_dist
+        local raw_wy = (fx.y or 0) + (fx.dir_y or 0) * leap_world_dist
+        local clamped_wx, clamped_wy = clamp_coords(raw_wx, raw_wy)
+        local curr_x = clamped_wx * scale
+        local curr_y = (clamped_wy * scale) - body_offset_y
+        local r = aoe_px * math.max(0.2, inv_prog)
+        love.graphics.setColor(0.9, 0.55, 0.15, progress * 0.55)
+        love.graphics.circle("fill", curr_x, curr_y, r)
+        love.graphics.setColor(1.0, 0.8, 0.3, progress * 0.9)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", curr_x, curr_y, r)
+        if inv_prog > 0.7 then
+            local flash_r = aoe_px * ((inv_prog - 0.7) / 0.3)
+            love.graphics.setColor(1.0, 0.95, 0.6, (1.0 - progress) * 0.8)
+            love.graphics.circle("fill", curr_x, curr_y, flash_r)
+        end
+    elseif skill_name == "frost_nova" then
+        -- Onda congelante 360º centrada no conjurador
+        local r = aoe_px * (0.3 + 0.7 * inv_prog)
+        love.graphics.setColor(0.55, 0.85, 1.0, progress * 0.35)
+        love.graphics.circle("fill", fx_start_x, fx_start_y, r)
+        love.graphics.setColor(0.85, 0.95, 1.0, progress * 0.9)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", fx_start_x, fx_start_y, r)
+        love.graphics.setColor(0.4, 0.7, 1.0, progress * 0.5)
+        love.graphics.setLineWidth(6)
+        love.graphics.circle("line", fx_start_x, fx_start_y, r * 0.75)
+    elseif skill_name == "meteor_strike" then
+        -- Aviso visual: círculo de alvo pulsante no ponto de impacto durante 0.8s
+        local target_wx = (fx.x or 0) + (fx.dir_x or 0) * SkillRanges.range("meteor_strike", 0)
+        local target_wy = (fx.y or 0) + (fx.dir_y or 0) * SkillRanges.range("meteor_strike", 0)
+        local clamped_wx, clamped_wy = clamp_coords(target_wx, target_wy)
+        local target_px = clamped_wx * scale
+        local target_py = (clamped_wy * scale) - body_offset_y
+        local pulse = 0.75 + 0.25 * math.sin(progress * math.pi * 6)
+        local alpha = progress * pulse
+        love.graphics.setColor(1.0, 0.35, 0.1, alpha * 0.18)
+        love.graphics.circle("fill", target_px, target_py, aoe_px)
+        love.graphics.setColor(1.0, 0.45, 0.15, alpha * 0.6)
+        love.graphics.setLineWidth(2)
+        love.graphics.circle("line", target_px, target_py, aoe_px)
+        love.graphics.setColor(1.0, 0.8, 0.4, alpha * 0.9)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", target_px, target_py, aoe_px * (0.6 + 0.4 * progress))
+        if progress > 0.85 then
+            -- Flash final sincronizado com a queda do meteoro no servidor
+            local flash = (progress - 0.85) / 0.15
+            love.graphics.setColor(1.0, 0.9, 0.5, flash)
+            love.graphics.circle("fill", target_px, target_py, aoe_px * flash)
+        end
     else
         local fx_end_x = fx_start_x + fx.dir_x * 50 * scale
         local fx_end_y = fx_start_y + fx.dir_y * 50 * scale
@@ -609,6 +704,19 @@ function VfxSystem.draw_projectile(ent)
         love.graphics.circle("fill", px, py, radius * 0.6)
         love.graphics.setColor(1.0, 1.0, 0.85, 0.7)
         love.graphics.circle("fill", px, py, radius * 0.3)
+    elseif skill_name == "magic_missile" then
+        local tail_x = px - dir_x * 14
+        local tail_y = py - dir_y * 14
+        love.graphics.setColor(0.6, 0.3, 1.0, 0.5)
+        love.graphics.setLineWidth(2)
+        love.graphics.line(tail_x, tail_y, px, py)
+
+        love.graphics.setColor(0.55, 0.25, 0.95, 0.9)
+        love.graphics.circle("fill", px, py, 7)
+        love.graphics.setColor(0.85, 0.55, 1.0, 0.8)
+        love.graphics.circle("fill", px, py, 4)
+        love.graphics.setColor(1.0, 0.95, 1.0, 0.7)
+        love.graphics.circle("line", px, py, 7)
     else
         love.graphics.setColor(1.0, 0.85, 0.25, 0.95)
         love.graphics.circle("fill", px, py, 6)

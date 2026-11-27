@@ -320,7 +320,7 @@ function CharacterFactory.trigger_cooldown(entity_id, skill_id, cooldown_ticks)
 end
 
 -- Executa a habilidade
-function CharacterFactory.execute_skill(entity_id, skill_name, aim_x, aim_y)
+function CharacterFactory.execute_skill(entity_id, skill_name, aim_x, aim_y, opts)
     local skill_data = CharacterFactory.load_skill(skill_name)
     if not skill_data then
         return false, "Skill '" .. tostring(skill_name) .. "' not found"
@@ -336,7 +336,7 @@ function CharacterFactory.execute_skill(entity_id, skill_name, aim_x, aim_y)
     end
 
     if skill_data.on_execute then
-        local ok, err = skill_data.on_execute(entity_id, aim_x, aim_y, skill_data)
+        local ok, err = skill_data.on_execute(entity_id, aim_x, aim_y, skill_data, opts)
         if not ok then
             return false, err or "Failed to execute skill"
         end

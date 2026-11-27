@@ -70,6 +70,7 @@ end
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("systems.character_factory")
 local ProjectileSystem = require("systems.projectile_system")
+local DelayedCasts = require("systems.delayed_casts")
 local RespawnSystem = require("respawn_system")
 local ArenaObstacles = require("data.arena_obstacles")
 
@@ -90,6 +91,36 @@ local function is_entity_dashing(entity_id)
     local dashing_until = tonumber(Loci.get_entity_property(entity_id, "dashing_until")) or 0
     local current_tick = (CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0
     return current_tick < dashing_until
+end
+
+-- Encontra o inimigo vivo mais próximo dentro de `max_range` (unidades do mundo).
+-- Retorna id, x, y do alvo ou nil. Usado pelo target-lock do ataque básico (slot 1).
+local function find_nearest_enemy_in_range(entity_id, max_range)
+    if not max_range or max_range <= 0 then return nil end
+    local ex, ey = get_current_xy(entity_id)
+    if not ex then return nil end
+
+    local my_team = Loci.get_entity_property(entity_id, "team")
+    local max_d2 = max_range * max_range
+    local best_id, best_d2, best_x, best_y = nil, nil, nil, nil
+
+    for other_id, _ in safe_pairs(connected_players) do
+        if other_id ~= entity_id and is_player_alive(other_id) then
+            local team = Loci.get_entity_property(other_id, "team")
+            if team ~= nil and tostring(team) ~= tostring(my_team) then
+                local ox, oy = get_current_xy(other_id)
+                if ox then
+                    local dx = ox - ex
+                    local dy = oy - ey
+                    local d2 = dx * dx + dy * dy
+                    if d2 <= max_d2 and (best_d2 == nil or d2 < best_d2) then
+                        best_id, best_d2, best_x, best_y = other_id, d2, ox, oy
+                    end
+                end
+            end
+        end
+    end
+    return best_id, best_x, best_y
 end
 
 local function is_entity_casting(entity_id)
@@ -155,6 +186,7 @@ end
 function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
     ProjectileSystem.update_tick(current_tick)
+    DelayedCasts.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
 
     -- 1. Salva posições antes da integração de física do tick (apenas para vivos)
@@ -390,8 +422,30 @@ function on_action(entity_id, ability_id, aim_x, aim_y)
         return false, "Ability not equipped or invalid slot"
     end
 
+    -- Target-lock do ataque básico (slot 1, estilo MOBA): o servidor trava no
+    -- inimigo vivo mais próximo dentro do alcance da skill, sobrescreve a direção
+    -- de mira e entrega o alvo às skills para projéteis teleguiados / hit consistente.
+    local cast_opts = nil
+    if tonumber(ability_id) == 1 then
+        local skill_data = CharacterFactory.load_skill(skill_name)
+        local acquire_range = (skill_data and tonumber(skill_data.range)) or 0
+        local target_id, target_x, target_y = find_nearest_enemy_in_range(entity_id, acquire_range)
+        if target_id then
+            local ex, ey = get_current_xy(entity_id)
+            if ex then
+                local dx = target_x - ex
+                local dy = target_y - ey
+                local len = math.sqrt(dx * dx + dy * dy)
+                if len > 1e-6 then
+                    aim_x, aim_y = dx / len, dy / len
+                    cast_opts = { target_id = target_id, target_x = target_x, target_y = target_y }
+                end
+            end
+        end
+    end
+
     -- Executa a habilidade via CharacterFactory
-    local success, err = CharacterFactory.execute_skill(entity_id, skill_name, aim_x, aim_y)
+    local success, err = CharacterFactory.execute_skill(entity_id, skill_name, aim_x, aim_y, cast_opts)
     if not success then
         return false, err or "Ability execution failed"
     end
