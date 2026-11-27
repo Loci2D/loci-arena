@@ -3,6 +3,16 @@
 
 local ArenaObstacles = {}
 
+-- Função segura de iteração (usa dpairs se disponível, caso contrário pairs)
+local function safe_pairs(t)
+    if type(dpairs) == "function" then
+        return dpairs(t)
+    elseif type(pairs) == "function" then
+        return pairs(t)
+    end
+    return function() return nil end
+end
+
 -- Definição dos obstáculos da arena
 ArenaObstacles.blueprints = {
     -- Paredes horizontais (cobertura tática)
@@ -75,7 +85,7 @@ function ArenaObstacles.initialize()
     end
 
     -- Criar cada obstáculo
-    for name, blueprint in pairs(ArenaObstacles.blueprints) do
+    for name, blueprint in safe_pairs(ArenaObstacles.blueprints) do
         local obstacle_data = {
             blueprint = name,
             position = blueprint.position,
@@ -108,7 +118,7 @@ function ArenaObstacles.initialize()
 
     if Loci and Loci.Log then
         local count = 0
-        for _ in pairs(ArenaObstacles.created_ids) do
+        for _ in safe_pairs(ArenaObstacles.created_ids) do
             count = count + 1
         end
         Loci.Log.info(string.format("[ArenaObstacles] %d obstáculos criados com sucesso", count))
