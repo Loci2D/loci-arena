@@ -21,7 +21,13 @@ SkillRanges.DEFAULTS = {
     fireball       = { range = 64.0, aoe = 9.0 },
     quick_shot     = { range = 52.0, aoe = 4.0 },
     smite          = { range = 38.0, aoe = 4.5 },
-    kinetic_pulse  = { range = 30.0, aoe = 5.0 },
+    kinetic_pulse  = { range = 28.0, aoe = 6.0 },
+    healing_light  = { range = 36.0, aoe = 1.5 },
+    sacred_ground  = { range = 24.0, aoe = 12.0 },
+    divine_resurgence = { range = 0.0, aoe = 24.0 },
+    aegis_barrier  = { range = 36.0, aoe = 1.5 },
+    gravity_surge  = { range = 32.0, aoe = 10.0 },
+    bastion_overload = { range = 0.0, aoe = 22.0 },
 }
 
 -- Metadados de habilidades (cooldown em segundos a 30 Hz e custo de mana, alinhados a data/skills/*.lua)
@@ -33,8 +39,14 @@ SkillRanges.SKILL_META = {
     blade_throw    = { label = "Lâmina",   cooldown = 14.0, mana_cost = 45 },
     shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 20 },
     quick_shot     = { label = "Tiro",     cooldown = 0.6,  mana_cost = 5  },
-    smite          = { label = "Punição",  cooldown = 0.7,  mana_cost = 10 },
+    smite          = { label = "Punição",  cooldown = 2/3,  mana_cost = 10 },
     kinetic_pulse  = { label = "Pulso",    cooldown = 0.6,  mana_cost = 8  },
+    healing_light  = { label = "Cura",     cooldown = 6.0,  mana_cost = 35 },
+    sacred_ground  = { label = "Santuário",cooldown = 9.0,  mana_cost = 40 },
+    divine_resurgence = { label = "Ressurgimento", cooldown = 16.0, mana_cost = 65 },
+    aegis_barrier  = { label = "Égide",    cooldown = 7.0,  mana_cost = 35 },
+    gravity_surge  = { label = "Vórtice",  cooldown = 8.0,  mana_cost = 35 },
+    bastion_overload = { label = "Bastião",cooldown = 15.0, mana_cost = 55 },
 }
 
 -- Fallback de skills por personagem apenas quando a propriedade `skills_list` ainda não chegou da rede
@@ -44,8 +56,8 @@ SkillRanges.CHARACTER_DEFAULT_SKILLS = {
     warrior   = { "slash" },
     archer    = { "quick_shot" },
     mage      = { "fireball" },
-    cleric    = { "smite" },
-    enchanter = { "kinetic_pulse" },
+    cleric    = { "smite", "healing_light", "sacred_ground", "divine_resurgence" },
+    enchanter = { "kinetic_pulse", "aegis_barrier", "gravity_surge", "bastion_overload" },
 }
 
 local function get_entity_str_prop(entity, key)

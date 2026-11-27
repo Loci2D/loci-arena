@@ -85,6 +85,16 @@ function CharacterFactory.update_tick(tick)
                 Loci.Commands.set_property(entity_id, "shield_active", "0")
                 Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
             end
+
+            local speed_boost_until = tonumber(Loci.get_entity_property(entity_id, "speed_boost_until")) or 0
+            if speed_boost_until > 0 and current_tick >= speed_boost_until then
+                Loci.Commands.set_property(entity_id, "speed_boost_until", "0")
+            end
+
+            local mag_def_bonus_until = tonumber(Loci.get_entity_property(entity_id, "mag_def_bonus_until")) or 0
+            if mag_def_bonus_until > 0 and current_tick >= mag_def_bonus_until then
+                Loci.Commands.set_property(entity_id, "mag_def_bonus_until", "0")
+            end
         end
     end
 end
@@ -192,6 +202,10 @@ function CharacterFactory.create_character(entity_id, character_name)
     Loci.Commands.set_property(entity_id, "shield", "0")
     Loci.Commands.set_property(entity_id, "shield_active", "0")
     Loci.Commands.set_property(entity_id, "shield_end_tick", "0")
+    Loci.Commands.set_property(entity_id, "speed_boost_until", "0")
+    Loci.Commands.set_property(entity_id, "speed_boost_mult", "1")
+    Loci.Commands.set_property(entity_id, "mag_def_bonus", "0")
+    Loci.Commands.set_property(entity_id, "mag_def_bonus_until", "0")
     Loci.Commands.set_property(entity_id, "fury_active", "false")
 
     -- 3. Lista de habilidades

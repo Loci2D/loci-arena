@@ -18,7 +18,7 @@ return {
     name = "Punição Sagrada",
     description = "Disparo sagrado com dano mágico em linha reta",
     mana_cost = 10,
-    cooldown = 21,        -- 0.7s a 30Hz
+    cooldown = 20,        -- 0.66s a 30Hz
     cast_lock_ticks = 8,  -- ~0.26s a 30Hz
     range = 38.0,         -- unidades do mundo
     projectile_speed = 4.5,

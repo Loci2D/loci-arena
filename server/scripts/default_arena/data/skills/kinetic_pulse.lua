@@ -20,12 +20,12 @@ return {
     mana_cost = 8,
     cooldown = 18,        -- 0.6s a 30Hz
     cast_lock_ticks = 6,  -- 0.2s a 30Hz
-    range = 30.0,         -- unidades do mundo
+    range = 28.0,         -- unidades do mundo
     projectile_speed = 4.5,
     projectile_radius = 1.4,
     damage = 200,
     damage_type = CombatSystem.DamageType.PHYSICAL,
-    aoe_radius = 5.0,
+    aoe_radius = 6.0,
 
     on_execute = function(entity_id, aim_x, aim_y, skill_data)
         local len = math.sqrt(aim_x * aim_x + aim_y * aim_y)

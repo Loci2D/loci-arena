@@ -18,6 +18,9 @@ return {
     },
     tags = { "SUPPORT", "UTILITY" },
     skills = {
-        "kinetic_pulse"
+        "kinetic_pulse",   -- Habilidade 1: kinetic_pulse (pulso cinético básico)
+        "aegis_barrier",   -- Habilidade 2: aegis_barrier (escudo protetor em aliado)
+        "gravity_surge",   -- Habilidade 3: gravity_surge (vórtice gravitacional de puxão e stun)
+        "bastion_overload" -- Habilidade 4: bastion_overload (ultimate de cúpula com escudo de grupo e aceleração)
     }
 }

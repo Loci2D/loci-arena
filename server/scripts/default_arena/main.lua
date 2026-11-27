@@ -70,6 +70,7 @@ end
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("systems.character_factory")
 local ProjectileSystem = require("systems.projectile_system")
+local ZoneSystem = require("systems.zone_system")
 local RespawnSystem = require("respawn_system")
 
 local function is_player_alive(entity_id)
@@ -96,6 +97,17 @@ local function is_entity_casting(entity_id)
     local casting_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
     local current_tick = (CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0
     return current_tick < casting_until
+end
+
+-- Multiplicador de velocidade ativo (ex.: ultimate Bastion Overload do Enchanter)
+local function get_speed_boost_mult(entity_id)
+    if not (Loci and Loci.get_entity_property) then return 1.0 end
+    local boost_until = tonumber(Loci.get_entity_property(entity_id, "speed_boost_until")) or 0
+    local current_tick = (CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0
+    if current_tick < boost_until then
+        return tonumber(Loci.get_entity_property(entity_id, "speed_boost_mult")) or 1.0
+    end
+    return 1.0
 end
 
 local function is_blocked_by_player(entity_id, dir_x, dir_y)
@@ -154,6 +166,7 @@ end
 function on_tick(current_tick)
     CharacterFactory.update_tick(current_tick)
     ProjectileSystem.update_tick(current_tick)
+    ZoneSystem.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
 
     -- 1. Salva posições antes da integração de física do tick (apenas para vivos)
@@ -197,7 +210,8 @@ function on_tick(current_tick)
                         -- Se já está em contato bloqueado com outro jogador, mantém 100% estático (sem jitter)
                         Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
                     else
-                        local vx, vy = compute_walk_velocity(entity_id, intent.dir_x, intent.dir_y, intent.speed, true)
+                        local vx, vy = compute_walk_velocity(entity_id, intent.dir_x, intent.dir_y,
+                            (intent.speed or SPEED) * get_speed_boost_mult(entity_id), true)
                         Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
                     end
                 end
@@ -281,6 +295,7 @@ function on_move_intent(entity_id, dir_x, dir_y)
     end
 
     local move_speed = tonumber(Loci.get_entity_property(entity_id, "move_speed") or SPEED) or SPEED
+    local effective_speed = move_speed * get_speed_boost_mult(entity_id)
 
     if dir_x == 0 and dir_y == 0 then
         player_intents[entity_id] = nil
@@ -315,7 +330,7 @@ function on_move_intent(entity_id, dir_x, dir_y)
     end
 
     -- Set server authoritative velocity (displacement per tick) já limitada pela barreira da arena
-    local vx, vy = compute_walk_velocity(entity_id, dir_x, dir_y, move_speed, false)
+    local vx, vy = compute_walk_velocity(entity_id, dir_x, dir_y, effective_speed, false)
     Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
     return true
 end
