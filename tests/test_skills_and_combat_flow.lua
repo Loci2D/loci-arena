@@ -453,7 +453,8 @@ run_test("ProjectileSystem destroys projectiles on static obstacle and boundary 
     assert(p2.props.hp == p2.props.max_hp, "enemy behind static wall must not take damage")
 
     -- 2. Cast fireball near map boundary (+X = 500) and verify on_boundary_collision destroys it
-    assert(on_action(2, 999, 0, 0) == true) -- default
+    assert(on_action(2, 999, 0, 0) == true) -- warrior
+    assert(on_action(2, 999, 0, 0) == true) -- archer
     assert(on_action(2, 999, 0, 0) == true) -- mage
     p2.x, p2.y = 492.0, 0.0
     assert(on_action(2, 1, 1, 0) == true) -- fireball towards +X wall
@@ -558,24 +559,34 @@ run_test("main.lua on_action enforces CC/death guards and character swap 999", f
     -- não interferir nas asserções de move_speed dos próximos ticks
     p1.props.casting_until = "0"
 
-    -- Swap character via ability_id == 999 cycles arya -> default -> mage -> warrior -> arya
+    -- Swap character via ability_id == 999 cycles arya -> warrior -> archer -> mage -> cleric -> enchanter -> arya
     assert(on_move_intent(1, -1, 0) == true)
     assert_near(p1.vx, -2.2, 1e-5, "arya base move_speed")
 
     assert(on_action(1, 999, 0, 0) == true)
-    assert(p1.props.character_name == "default")
+    assert(p1.props.character_name == "warrior")
     env.step_ticks(16, 16)
-    assert_near(p1.vx, -2.0, 1e-5, "intent speed updates to default move_speed=2.0")
+    assert_near(p1.vx, -1.9, 1e-5, "intent speed updates to warrior move_speed=1.9")
+
+    assert(on_action(1, 999, 0, 0) == true)
+    assert(p1.props.character_name == "archer")
+    env.step_ticks(17, 17)
+    assert_near(p1.vx, -2.1, 1e-5, "intent speed updates to archer move_speed=2.1")
 
     assert(on_action(1, 999, 0, 0) == true)
     assert(p1.props.character_name == "mage")
-    env.step_ticks(17, 17)
+    env.step_ticks(18, 18)
     assert_near(p1.vx, -2.0, 1e-5, "intent speed updates to mage move_speed=2.0")
 
     assert(on_action(1, 999, 0, 0) == true)
-    assert(p1.props.character_name == "warrior")
-    env.step_ticks(18, 18)
-    assert_near(p1.vx, -1.9, 1e-5, "intent speed updates to warrior move_speed=1.9")
+    assert(p1.props.character_name == "cleric")
+    env.step_ticks(19, 19)
+    assert_near(p1.vx, -2.0, 1e-5, "intent speed updates to cleric move_speed=2.0")
+
+    assert(on_action(1, 999, 0, 0) == true)
+    assert(p1.props.character_name == "enchanter")
+    env.step_ticks(20, 20)
+    assert_near(p1.vx, -2.05, 1e-5, "intent speed updates to enchanter move_speed=2.05")
 
     assert(on_action(1, 999, 0, 0) == true)
     assert(p1.props.character_name == "arya")
@@ -597,7 +608,8 @@ run_test("End-to-end duel: blade_throw stun/disarm -> ally kill triggers Arya pa
     assert(p1.props.team == "1" and p2.props.team == "2" and p3.props.team == "1")
 
     -- Swap p2 to Mage so it has ranged fireball
-    assert(on_action(2, 999, 0, 0) == true) -- default
+    assert(on_action(2, 999, 0, 0) == true) -- warrior
+    assert(on_action(2, 999, 0, 0) == true) -- archer
     assert(on_action(2, 999, 0, 0) == true) -- mage
     assert(p2.props.character_name == "mage")
 
@@ -660,6 +672,9 @@ run_test("server publishes skill_ranges from data/skills and the client defaults
     local expected_by_char = {
         arya = { "slash", "fury_reward", "whirlwind_dash", "blade_throw" },
         mage = { "fireball" },
+        archer = { "quick_shot" },
+        cleric = { "smite" },
+        enchanter = { "kinetic_pulse" },
     }
     local id = 0
     for char_name, skills in pairs(expected_by_char) do
@@ -899,6 +914,94 @@ run_test("Slow CC & test zone [20,30]x[20,30]: rectilinear continuous input dece
     end)
     assert(p1.props.is_dead == "true")
     assert(p1.props.slowed_until == "0" and p1.props.slow_multiplier == "1", "slow cancelled on death")
+end)
+
+run_test("ArenaObstacles.initialize() and cleanup() work without global pairs()", function()
+    local saved_pairs = _G.pairs
+    local spawned = {}
+    local destroyed = {}
+    local next_id = 0
+
+    _G.Loci = {
+        Log = { info = function() end, warn = function() end, error = function() end },
+        Commands = {
+            spawn_static_obstacle = function(data)
+                next_id = next_id + 1
+                spawned[next_id] = data
+                return next_id
+            end,
+            destroy_static_obstacle = function(id)
+                destroyed[id] = true
+            end
+        }
+    }
+
+    package.loaded["data.arena_obstacles"] = nil
+    _G.pairs = nil
+    local ok_req, ArenaObstacles = pcall(require, "data.arena_obstacles")
+    assert(ok_req, "require('data.arena_obstacles') failed without pairs(): " .. tostring(ArenaObstacles))
+
+    local ok_init, init_res = pcall(ArenaObstacles.initialize)
+    assert(ok_init and init_res == true, "ArenaObstacles.initialize() failed without pairs(): " .. tostring(init_res))
+    assert(#ArenaObstacles.created_list == 7, "Expected 7 obstacles, got " .. tostring(#ArenaObstacles.created_list))
+
+    local ok_clean, removed = pcall(ArenaObstacles.cleanup)
+    _G.pairs = saved_pairs
+
+    assert(ok_clean and removed == 7, "ArenaObstacles.cleanup() must remove 7 obstacles")
+    for i = 1, 7 do
+        assert(destroyed[i] == true, "Obstacle ID " .. i .. " should be destroyed")
+    end
+end)
+
+run_test("lethal hit stops a moving player immediately and prevents post-death drift", function()
+    local env = make_server_env(true)
+    local p1 = env.join_player(1, 0, 0)     -- Time 1
+    local p2 = env.join_player(2, 50, 0)    -- Time 2
+
+    env.step_ticks(1, 5)
+    assert(on_move_intent(2, 1, 0) == true)
+    assert(p2.vx > 0, "moving player must have positive vx before death")
+
+    -- Avança 1 tick para consolidar deslocamento e aplica dano letal enquanto anda
+    env.step_ticks(1, 6)
+    local x_before_kill = p2.x
+    p2.props.hp = "100"
+    with_fixed_random(0.99, function()
+        local res = env.CombatSystem.process_hit(1, 2, 1000, env.CombatSystem.DamageType.TRUE)
+        assert(res.success and res.lethal == true, "hit must be lethal")
+    end)
+
+    assert(p2.props.is_dead == "true", "player 2 must be marked dead")
+    assert(p2.vx == 0 and p2.vy == 0, "velocity must be zeroed immediately on lethal hit")
+
+    -- Ticks seguintes: corpo permanece imóvel no local da morte
+    env.step_ticks(5, 11)
+    assert(p2.vx == 0 and p2.vy == 0, "dead player velocity must remain zero")
+    assert_near(p2.x, x_before_kill, 1e-6, "dead player must not drift after death")
+end)
+
+run_test("slot 1 basic attacks cost zero mana and cast at 0 mana for all characters", function()
+    local env = make_server_env(true)
+    local p1 = env.join_player(1, 0, 0)
+    env.step_ticks(1, 5)
+
+    local characters = { "arya", "warrior", "archer", "mage", "cleric", "enchanter", "default" }
+    for _, char_name in ipairs(characters) do
+        env.CharacterFactory.create_character(1, char_name)
+        local slot1_skill = env.CharacterFactory.get_skill_by_slot(1, 1)
+        assert(slot1_skill ~= nil, "missing slot 1 skill for " .. char_name)
+        local skill_data = env.CharacterFactory.load_skill(slot1_skill)
+        assert(skill_data and (skill_data.mana_cost or 0) == 0,
+            string.format("slot 1 skill '%s' (%s) must have mana_cost == 0", tostring(slot1_skill), char_name))
+
+        local tick = 100 + (_ * 100)
+        env.step_ticks(1, tick)
+        p1.props.mana = "0"
+        local ok, err = on_action(1, 1, 1, 0)
+        assert(ok == true, string.format("slot 1 '%s' (%s) failed at 0 mana: %s", tostring(slot1_skill), char_name, tostring(err)))
+        assert(p1.props.mana == "0", "slot 1 cast must not consume mana")
+    end
 end)
 
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

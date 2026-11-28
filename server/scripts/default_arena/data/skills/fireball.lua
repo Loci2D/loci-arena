@@ -17,7 +17,7 @@ return {
     id = "fireball",
     name = "Fireball",
     description = "Bola de fogo explosiva com dano mágico em área",
-    mana_cost = 35,
+    mana_cost = 0,
     cooldown = 45, -- 1.5s a 30Hz
     cast_lock_ticks = 15, -- 0.5s a 30Hz: tempo de conjuração do projétil
     range = 64.0,                   -- unidades do mundo (cabe na tela: +-80 na horizontal)

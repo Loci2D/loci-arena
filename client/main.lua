@@ -109,10 +109,75 @@ local function create_character_placeholder(r, g, b, accent_r, accent_g, accent_
     return canvas
 end
 
+-- Paleta de cores distintivas para os robôs placeholders dos 6 arquétipos da arena 3v3
+local ARCHETYPE_PALETTES = {
+    tank = { 0.35, 0.45, 0.58 },     -- Aço Ardósia / Azul Blindado (Warrior)
+    fighter = { 0.85, 0.30, 0.22 },  -- Carmesim de Combate (Arya / Default)
+    marksman = { 0.18, 0.68, 0.32 }, -- Verde Esmeralda / Caçador (Archer)
+    mage = { 0.58, 0.22, 0.88 },     -- Violeta Arcano (Mage)
+    healer = { 0.94, 0.76, 0.18 },   -- Dourado Solar / Sagrado (Cleric)
+    support = { 0.10, 0.72, 0.75 },  -- Turquesa Tático / Ciano (Enchanter)
+}
+
+local TEAM_VISOR_COLORS = {
+    me = { 0.20, 0.95, 1.00 },       -- Ciano elétrico (Jogador local)
+    team1 = { 0.30, 0.80, 1.00 },    -- Azul celeste (Aliado / Time 1)
+    team2 = { 1.00, 0.30, 0.25 },    -- Vermelho vibrante (Inimigo / Time 2)
+}
+
+local function normalize_archetype_key(role, char_name)
+    local r = string.lower(tostring(role or ""))
+    local c = string.lower(tostring(char_name or ""))
+    if r == "tank" or c == "warrior" then
+        return "tank"
+    elseif r == "marksman" or r == "archer" or c == "archer" then
+        return "marksman"
+    elseif r == "mage" or c == "mage" then
+        return "mage"
+    elseif r == "healer" or r == "cleric" or c == "cleric" then
+        return "healer"
+    elseif r == "support" or r == "enchanter" or c == "enchanter" then
+        return "support"
+    else
+        return "fighter" -- Arya, default, fighter fallback
+    end
+end
+
 local function init_placeholders()
     placeholder_canvases["me"] = create_character_placeholder(0.2, 0.6, 0.95, 0.3, 0.9, 1.0)
     placeholder_canvases["enemy"] = create_character_placeholder(0.9, 0.3, 0.25, 1.0, 0.85, 0.2)
     placeholder_canvases["dead"] = create_character_placeholder(0.35, 0.35, 0.38, 0.5, 0.5, 0.5)
+
+    -- Robôs customizados por arquétipo com visores de identificação de time
+    for arch_key, body_rgb in pairs(ARCHETYPE_PALETTES) do
+        for team_key, visor_rgb in pairs(TEAM_VISOR_COLORS) do
+            local key = arch_key .. "_" .. team_key
+            placeholder_canvases[key] = create_character_placeholder(
+                body_rgb[1], body_rgb[2], body_rgb[3],
+                visor_rgb[1], visor_rgb[2], visor_rgb[3]
+            )
+        end
+    end
+end
+
+local function get_placeholder_for_entity(ent, is_me, is_dead)
+    if is_dead then
+        return placeholder_canvases["dead"]
+    end
+    local role = (type(ent.get) == "function" and ent:get("role", "")) or ent.role or (ent.properties and ent.properties["role"]) or ""
+    local char_name = (type(ent.get) == "function" and ent:get("character_name", "")) or ent.character_name or (ent.properties and ent.properties["character_name"]) or ""
+    local arch_key = normalize_archetype_key(role, char_name)
+
+    local team_key = "team2"
+    if is_me then
+        team_key = "me"
+    else
+        local team = tostring((type(ent.get) == "function" and ent:get("team", "2")) or ent.team or (ent.properties and ent.properties["team"]) or "2")
+        team_key = (team == "1") and "team1" or "team2"
+    end
+
+    local key = arch_key .. "_" .. team_key
+    return placeholder_canvases[key] or (is_me and placeholder_canvases["me"] or placeholder_canvases["enemy"])
 end
 
 local function get_entity_skill_by_slot(entity, slot_index)
@@ -162,6 +227,11 @@ local PREDICTED_SAFE_MIN_X = ARENA_MIN + PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MAX_X = ARENA_MAX - PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MIN_Y = ARENA_MIN + PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MAX_Y = ARENA_MAX - PLAYER_COLLIDER_RADIUS
+
+-- Espelha `BODYBLOCK_DIST` e `FRONTAL_LOCK_DOT` de `server/scripts/default_arena/main.lua`
+-- (6.5u = 52px centro-a-centro = largura da sombra na base do sprite 64x64px).
+local PLAYER_BODYBLOCK_DIST = 6.5
+local BODYBLOCK_FRONTAL_LOCK_DOT = 0.98
 
 local function clamp_arena_coords(x, y)
     local cx = math.max(PREDICTED_SAFE_MIN_X, math.min(PREDICTED_SAFE_MAX_X, x or 0))
@@ -265,18 +335,110 @@ local function clamp_entity_to_arena(ent, clamp_recon_error, compensate_overshoo
     return clamped_x, clamped_y
 end
 
+local function is_entity_solid_for_bodyblock(other, cur_tick)
+    if not other or not should_clamp_entity(other) then return false end
+    local dead_prop = (other.get and other:get("is_dead"))
+        or other.is_dead
+        or (other.properties and other.properties["is_dead"])
+    if dead_prop == true or dead_prop == "true" or dead_prop == 1 or dead_prop == "1" then
+        return false
+    end
+    local dashing_until = tonumber(
+        (other.get and other:get("dashing_until"))
+        or other.dashing_until
+        or (other.properties and other.properties["dashing_until"])
+    ) or 0
+    if dashing_until > 0 and cur_tick < dashing_until then
+        return false
+    end
+    return true
+end
+
+local function project_predicted_step_bodyblock(ent, step_x, step_y)
+    if not (loci and loci.get_entities) then
+        return step_x, step_y
+    end
+    local entities = loci.get_entities()
+    if not entities then
+        return step_x, step_y
+    end
+
+    local orig_sx, orig_sy = step_x, step_y
+    local cur_tick = tonumber(loci._last_state_tick) or 0
+    local my_x = ent.x or 0
+    local my_y = ent.y or 0
+    local min_dist = PLAYER_BODYBLOCK_DIST
+    local min_dist_sq = min_dist * min_dist
+
+    for _ = 1, 2 do
+        local changed = false
+        for _, other in ipairs(entities) do
+            if other and other.id ~= ent.id and other.x and other.y and is_entity_solid_for_bodyblock(other, cur_tick) then
+                local step_len_sq = step_x * step_x + step_y * step_y
+                if step_len_sq <= 1e-12 then
+                    return 0, 0
+                end
+                local dx = other.x - my_x
+                local dy = other.y - my_y
+                local cur_dist_sq = dx * dx + dy * dy
+                local step_len = math.sqrt(step_len_sq)
+                local max_reach = min_dist + step_len + 0.25
+
+                if cur_dist_sq <= max_reach * max_reach and cur_dist_sq > 1e-8 then
+                    local cur_dist = math.sqrt(cur_dist_sq)
+                    local nx = dx / cur_dist
+                    local ny = dy / cur_dist
+                    local s_into = step_x * nx + step_y * ny
+
+                    if s_into > 0 then
+                        local dir_dot = s_into / step_len
+                        if dir_dot >= BODYBLOCK_FRONTAL_LOCK_DOT then
+                            local max_forward = math.max(0.0, cur_dist - min_dist)
+                            if s_into > max_forward then
+                                if max_forward <= 1e-6 then
+                                    step_x, step_y = 0, 0
+                                else
+                                    step_x, step_y = nx * max_forward, ny * max_forward
+                                end
+                                changed = true
+                            end
+                        else
+                            local tx = step_x - s_into * nx
+                            local ty = step_y - s_into * ny
+                            local t_sq = tx * tx + ty * ty
+                            local needed_normal_dist = (t_sq >= min_dist_sq) and 0.0 or math.sqrt(min_dist_sq - t_sq)
+                            local max_normal = math.max(0.0, cur_dist - needed_normal_dist)
+                            if s_into > max_normal then
+                                step_x = tx + nx * max_normal
+                                step_y = ty + ny * max_normal
+                                changed = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if not changed then break end
+    end
+
+    if (orig_sx * step_x + orig_sy * step_y) <= 1e-8 then
+        return 0, 0
+    end
+    return step_x, step_y
+end
+
 -- Replica propositalmente a cinemática padrão de caminhada do `sdk-love2d`
 -- (`move_speed * tick_rate * dt`) via `_prediction_handler` em vez de depender só
--- do clamp pós-`loci.update`. Isso aplica `clamp_entity_to_arena` *antes* de `decay_error`
--- e `reconcile_position`, evitando que passos maiores (FPS baixo ou buff de velocidade)
--- ultrapassem ±498 e distorçam a reconciliação contra a parede. Se o SDK passar a expor
--- um hook de pós-predição/clamp antes da reconciliação, esta cópia pode ser removida.
--- A lógica vive em src/local_prediction.lua (inclui o cast lock `casting_until`).
+-- do clamp pós-`loci.update`. Isso aplica bodyblock tangencial e `clamp_entity_to_arena`
+-- *antes* de `decay_error` e `reconcile_position`, evitando overshoot nas paredes e tremor
+-- visual ao contornar outros jogadores.
+-- A lógica base vive em src/local_prediction.lua (inclui o cast lock `casting_until`).
 local function predict_local_movement(ent, dx, dy, dt)
     LocalPrediction.predict_local_movement(ent, dx, dy, dt, {
         cur_tick = tonumber(loci._last_state_tick) or 0,
         tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0,
         default_speed = loci.netcode and loci.netcode.default_move_speed,
+        project_step = project_predicted_step_bodyblock,
         clamp = function(e) clamp_entity_to_arena(e, true, false) end,
     })
 end
@@ -284,14 +446,7 @@ end
 -- Metadados de habilidades para HUD/Hotbar (alinhados a server/scripts/default_arena/data/skills/*.lua a 30 Hz)
 local RESPAWN_DURATION_SECONDS = 10.0 -- 300 ticks a 30 Hz (respawn_system.lua)
 
-local SKILL_HUD_META = {
-    slash          = { label = "Slash",    cooldown = 0.5,  mana_cost = 10 },
-    fireball       = { label = "Fireball", cooldown = 1.5,  mana_cost = 35 },
-    fury_reward    = { label = "Fúria",    cooldown = 5.0,  mana_cost = 0  },
-    whirlwind_dash = { label = "Dash",     cooldown = 6.0,  mana_cost = 25 },
-    blade_throw    = { label = "Lâmina",   cooldown = 14.0, mana_cost = 45 },
-    shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 20 },
-}
+local SKILL_HUD_META = SkillRanges.SKILL_META
 
 local HOTBAR_SLOTS = {
     { slot = 1, key = "Space" },
@@ -720,11 +875,19 @@ function love.load(arg)
             local dead = (new_val == true or new_val == "true")
             if entity then
                 sprite_anim.set_dead(entity.id, dead)
+                if dead then
+                    entity.vx = 0
+                    entity.vy = 0
+                end
             end
             local my_entity = loci.get_my_entity()
             if entity and my_entity and entity.id == my_entity.id then
                 local was_dead = (old_val == true or old_val == "true")
                 if dead and not was_dead then
+                    if entity.server_x ~= nil then entity.x = entity.server_x end
+                    if entity.server_y ~= nil then entity.y = entity.server_y end
+                    entity._error_x = 0
+                    entity._error_y = 0
                     AudioSystem.play("death")
                 end
                 if dead and not respawn_state.active then
@@ -1198,7 +1361,7 @@ function love.keypressed(key)
     elseif key == "r" then
         cast_ability_at_mouse(4)
     elseif key == "k" then
-        -- Troca de personagem provisória (cicla: arya -> default -> mage -> warrior -> arya)
+        -- Troca de personagem provisória (cicla: arya -> warrior -> archer -> mage -> cleric -> enchanter -> arya)
         request_swap_hero()
     elseif key == "m" then
         local enabled = AudioSystem.toggle_mute()
@@ -1429,7 +1592,7 @@ local function draw_hotbar(my_entity)
             love.graphics.print("-", x + slot_width / 2 - 3, y + 14)
             love.graphics.print(entry.key, x + 5, y + slot_height - 17)
         else
-            local meta = SKILL_HUD_META[skill_name] or { label = skill_name, cooldown = 0, mana_cost = 0 }
+            local meta = SkillRanges.meta(skill_name) or SKILL_HUD_META[skill_name] or { label = skill_name, cooldown = 0, mana_cost = 0 }
             local cd_remaining = 0
             if cooldown_slots[slot].active then
                 local rem = cooldown_slots[slot].duration - (current_time - cooldown_slots[slot].start_time)
@@ -1740,6 +1903,50 @@ function draw_arena_grid()
     love.graphics.line(0, -20, 0, 20)
     love.graphics.setColor(0.6, 0.75, 0.9, 0.6)
     love.graphics.print("(0, 0)", 6, 6)
+
+    -- Draw arena obstacles
+    draw_arena_obstacles()
+end
+
+function draw_arena_obstacles()
+    -- Renderizar obstáculos dinamicamente via SDK (loci.get_obstacles)
+    local obstacles = loci.get_obstacles()
+    if not obstacles then return end
+
+    for _, obs in ipairs(obstacles) do
+        local ox = obs.x * VISUAL_SCALE
+        local oy = obs.y * VISUAL_SCALE
+
+        if obs.shape == "circle" then
+            local radius = obs.radius * VISUAL_SCALE
+            love.graphics.setColor(0.30, 0.40, 0.50, 0.85)
+            love.graphics.circle("fill", ox, oy, radius)
+            love.graphics.setColor(0.5, 0.6, 0.7, 0.95)
+            love.graphics.setLineWidth(2)
+            love.graphics.circle("line", ox, oy, radius)
+        elseif obs.shape == "aabb" then
+            local width = obs.width * VISUAL_SCALE
+            local height = obs.height * VISUAL_SCALE
+            local half_w = width / 2
+            local half_h = height / 2
+            local bp = tostring(obs.blueprint or "")
+            local is_crate = (bp:find("crate", 1, true) ~= nil) or (obs.collision_type == "destructible")
+            if is_crate then
+                love.graphics.setColor(0.45, 0.35, 0.25, 0.85)
+            else
+                love.graphics.setColor(0.25, 0.35, 0.45, 0.85)
+            end
+            love.graphics.rectangle("fill", ox - half_w, oy - half_h, width, height)
+            if is_crate then
+                love.graphics.setColor(0.60, 0.50, 0.40, 0.95)
+            else
+                love.graphics.setColor(0.40, 0.50, 0.60, 0.95)
+            end
+            love.graphics.setLineWidth(2)
+            love.graphics.rectangle("line", ox - half_w, oy - half_h, width, height)
+        end
+    end
+    love.graphics.setLineWidth(1)
 end
 
 local TEAM_SHADOW_COLORS = {
@@ -1852,9 +2059,8 @@ function draw_entity(ent, is_me)
             ox, oy
         )
     else
-        -- Renderizar placeholder padronizado de 32x32 com indicador de facing
-        local ph = is_dead and placeholder_canvases["dead"] or 
-                   (is_me and placeholder_canvases["me"] or placeholder_canvases["enemy"])
+        -- Renderizar placeholder padronizado de 32x32 com cor por arquétipo e indicador de facing
+        local ph = get_placeholder_for_entity(ent, is_me, is_dead)
         love.graphics.setColor(1, 1, 1, 1)
         love.graphics.draw(
             ph,

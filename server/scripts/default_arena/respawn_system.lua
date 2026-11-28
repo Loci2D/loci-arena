@@ -28,6 +28,7 @@ function respawn_system.mark_dead(entity_id)
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
+    Loci.Commands.set_property(entity_id, "casting_until", "0")
     Loci.Commands.set_property(entity_id, "slowed_until", "0")
     Loci.Commands.set_property(entity_id, "slow_multiplier", "1")
     Loci.Commands.set_property(entity_id, "shield", "0")
@@ -36,6 +37,11 @@ function respawn_system.mark_dead(entity_id)
     local cs = package.loaded["core.combat_system"]
     if cs and cs.clear_slow then
         cs.clear_slow(entity_id, current_tick_internal)
+    end
+    -- Zera a velocidade física no momento do abate para o corpo não continuar
+    -- deslizando na direção do movimento enquanto a animação de morte toca.
+    if Loci.Commands.set_velocity then
+        Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
     end
 end
 
@@ -50,6 +56,7 @@ function respawn_system.mark_alive(entity_id)
     Loci.Commands.set_property(entity_id, "disarmed_until", "0")
     Loci.Commands.set_property(entity_id, "paralyzed_until", "0")
     Loci.Commands.set_property(entity_id, "dashing_until", "0")
+    Loci.Commands.set_property(entity_id, "casting_until", "0")
     Loci.Commands.set_property(entity_id, "slowed_until", "0")
     Loci.Commands.set_property(entity_id, "slow_multiplier", "1")
     Loci.Commands.set_property(entity_id, "shield", "0")

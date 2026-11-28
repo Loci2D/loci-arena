@@ -80,7 +80,7 @@ run_test("All character definitions have valid attributes and loadable skills", 
     local env = make_env()
     local CF = env.CharacterFactory
 
-    for _, char_name in ipairs({ "arya", "default", "mage", "warrior" }) do
+    for _, char_name in ipairs({ "arya", "warrior", "archer", "mage", "cleric", "enchanter", "default" }) do
         local data = CF.load_character(char_name)
         assert(type(data) == "table", "failed to load character: " .. char_name)
         assert(type(data.name) == "string" and #data.name > 0)
@@ -104,12 +104,12 @@ run_test("create_character initializes attributes, falls back to default, and av
 
     assert(CF.create_character(1, "arya") == true)
     assert(env.props[1].character_name == "arya")
-    assert(env.props[1].role == "tank")
-    assert(env.props[1].max_hp == "5500" and env.props[1].hp == "5500")
-    assert(env.props[1].phys_def == "130" and env.props[1].mag_def == "50")
+    assert(env.props[1].role == "fighter")
+    assert(env.props[1].max_hp == "5000" and env.props[1].hp == "5000")
+    assert(env.props[1].phys_def == "85" and env.props[1].mag_def == "55")
     assert(env.props[1].mana == "100" and env.props[1].max_mana == "100")
     assert(env.props[1].move_speed == "2.2")
-    assert(env.props[1].hp_regen == "20" and env.props[1].mana_regen == "10")
+    assert(env.props[1].hp_regen == "12" and env.props[1].mana_regen == "10")
     assert(env.props[1].skills_list == "slash,fury_reward,whirlwind_dash,blade_throw")
     assert(env.props[1].fury_active == "false")
     assert(env.props[1].slowed_until == "0")
@@ -117,9 +117,9 @@ run_test("create_character initializes attributes, falls back to default, and av
 
     -- Re-creating same entity must not duplicate it in active_entities (regen ticks once)
     assert(CF.create_character(1, "arya") == true)
-    env.props[1].hp = "5000"
+    env.props[1].hp = "4800"
     CF.update_tick(30)
-    assert(env.props[1].hp == "5020", "regen should apply exactly once (+20), got " .. tostring(env.props[1].hp))
+    assert(env.props[1].hp == "4812", "regen should apply exactly once (+12), got " .. tostring(env.props[1].hp))
 
     -- Unknown character falls back to default
     assert(CF.create_character(2, "unknown_hero_xyz") == true)
@@ -235,8 +235,8 @@ run_test("update_tick handles 30-tick HP/mana regen caps and status/dash/shield 
     local CF = env.CharacterFactory
     local CS = env.CombatSystem
 
-    CF.create_character(1, "arya") -- max_hp=5500, hp_regen=20, max_mana=100, mana_regen=10
-    env.props[1].hp = "5490"
+    CF.create_character(1, "arya") -- max_hp=5000, hp_regen=12, max_mana=100, mana_regen=10
+    env.props[1].hp = "4990"
     env.props[1].mana = "95"
     env.props[1].stunned_until = "10"
     env.props[1].disarmed_until = "12"
@@ -246,7 +246,7 @@ run_test("update_tick handles 30-tick HP/mana regen caps and status/dash/shield 
 
     -- Tick 9: nothing expired yet, no regen
     CF.update_tick(9)
-    assert(env.props[1].hp == "5490" and env.props[1].mana == "95")
+    assert(env.props[1].hp == "4990" and env.props[1].mana == "95")
     assert(env.props[1].stunned_until == "10")
 
     -- Tick 10: stun expires
@@ -277,7 +277,7 @@ run_test("update_tick handles 30-tick HP/mana regen caps and status/dash/shield 
 
     -- Tick 30: regen applies and clamps to max_hp / max_mana
     CF.update_tick(30)
-    assert(env.props[1].hp == "5500", "hp regen must clamp to max_hp")
+    assert(env.props[1].hp == "5000", "hp regen must clamp to max_hp")
     assert(env.props[1].mana == "100", "mana regen must clamp to max_mana")
 
     -- Dead entity skips regen and status expiration; on_entity_remove unregisters entity
@@ -341,10 +341,12 @@ run_test("RespawnSystem tracks death, clears status/shields, revives after 300 t
         disarmed_until = "999",
         paralyzed_until = "999",
         dashing_until = "999",
+        casting_until = "999",
         shield = "400",
         shield_active = "1",
         shield_end_tick = "999",
     }
+    env.velocities[1] = { x = 2.2, y = -1.1 }
     env.props[2] = { max_hp = "4000", hp = "0" }
     env.props[3] = { max_hp = "6000", hp = "0" }
 
@@ -357,9 +359,11 @@ run_test("RespawnSystem tracks death, clears status/shields, revives after 300 t
     assert(env.props[1].disarmed_until == "0")
     assert(env.props[1].paralyzed_until == "0")
     assert(env.props[1].dashing_until == "0")
+    assert(env.props[1].casting_until == "0")
     assert(env.props[1].shield == "0")
     assert(env.props[1].shield_active == "0")
     assert(env.props[1].shield_end_tick == "0")
+    assert(env.velocities[1].x == 0 and env.velocities[1].y == 0, "mark_dead must zero entity velocity")
 
     -- Player 2 dies at tick 100 as well; Player 3 dies at tick 150 then disconnects
     RS.mark_dead(2)
@@ -386,11 +390,13 @@ run_test("RespawnSystem tracks death, clears status/shields, revives after 300 t
     -- Manual mark_alive removes dead state and clears active flags
     RS.mark_dead(1)
     env.props[1].stunned_until = "500"
+    env.props[1].casting_until = "500"
     env.props[1].shield = "100"
     RS.mark_alive(1)
     assert(RS.is_dead(1) == false)
     assert(env.props[1].is_dead == "false")
     assert(env.props[1].stunned_until == "0")
+    assert(env.props[1].casting_until == "0")
     assert(env.props[1].shield == "0")
 
     -- Fallback max_hp=100 when max_hp property is missing

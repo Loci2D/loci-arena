@@ -1035,4 +1035,42 @@ love.draw()
 assert(not contains_text(captured_prints, "* SLOW *"), "* SLOW * indicator must clear once slow expires")
 print("  -> Passed: Slow CC visual feedback, floor zone rendering, and local prediction verified.")
 
+-- ============================================================================
+-- Test 13: Local Player Death Clears Velocity & Reconciliation Drift (Card #116)
+-- ============================================================================
+print("[Test 13] Testing Local Player Death Clears Velocity & Reconciliation Error...")
+local hero_dead = loci.get_my_entity()
+assert(hero_dead ~= nil, "Local hero entity must exist for death test")
+hero_dead.x = 18.0
+hero_dead.y = -4.0
+hero_dead.server_x = 12.5
+hero_dead.server_y = -4.0
+hero_dead.vx = 2.2
+hero_dead.vy = 0.0
+hero_dead._error_x = -5.5
+hero_dead._error_y = 0.5
+
+loci.on_property_changed(hero_dead, "is_dead", "false", "true")
+assert(hero_dead.vx == 0 and hero_dead.vy == 0, "is_dead -> true must zero entity velocity")
+assert(hero_dead._error_x == 0 and hero_dead._error_y == 0, "is_dead -> true must clear reconciliation error")
+assert(math.abs(hero_dead.x - 12.5) < 1e-4 and math.abs(hero_dead.y - (-4.0)) < 1e-4,
+    "is_dead -> true must snap local hero to authoritative death coordinates")
+print("  -> Passed: Local player death clears velocity and reconciliation drift.")
+
+-- ============================================================================
+-- Test 14: Slot 1 Basic Attack Never Shows MANA Lock at 0 Mana (Card #118)
+-- ============================================================================
+print("[Test 14] Testing Slot 1 Basic Attack Remains Unlocked at 0 Mana...")
+hero_dead.is_dead = false
+hero_dead.properties.is_dead = "false"
+hero_dead.properties.mana = "0"
+hero_dead.properties.skills_list = "slash,fury_reward,whirlwind_dash,blade_throw"
+hero_dead.properties.character_name = "arya"
+love.update(0.016)
+local slot1_state = virtual_joystick.get_skill_slot_state and virtual_joystick.get_skill_slot_state(1)
+if slot1_state then
+    assert(slot1_state.locked_reason ~= "MANA", "Slot 1 basic attack must not be locked for MANA at 0 mana")
+end
+print("  -> Passed: Slot 1 basic attack remains unlocked at 0 mana.")
+
 print("\n>>> ALL CLIENT INTEGRATION TESTS PASSED SUCCESSFULLY! <<<")

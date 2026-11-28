@@ -19,6 +19,7 @@ end
 print("=== [1/4] Syntax Checks (loadfile) ===")
 local files_to_syntax_check = {
     "server/scripts/default_arena/core/arena_bounds.lua",
+    "server/scripts/default_arena/data/arena_obstacles.lua",
     "server/scripts/default_arena/main.lua",
     "server/scripts/default_arena/data/skills/whirlwind_dash.lua",
     "client/main.lua"
@@ -433,22 +434,102 @@ do
     print("  OK High-speed dash_speed=22.0 (straight & corner, zero tunneling)")
 end
 
--- Test E: Player-vs-Player collision near arena boundary (no regression & clamped)
+-- Test E: Player-vs-Player collision near arena boundary (calibrated bodyblock 6.5u & clamped)
 do
     local h = create_server_harness()
-    local p1 = h.spawn_player(1, 493.0, 0.0, 3.2)
-    local p2 = h.spawn_player(2, 497.5, 0.0, 3.2)
+    local p1 = h.spawn_player(1, 488.0, 0.0, 2.2)
+    local p2 = h.spawn_player(2, 497.5, 0.0, 2.2)
     h.step_tick() -- populate last_tick_positions
     h.move_intent(1, 1, 0) -- P1 walks into P2 sitting against the right wall
-    for _ = 1, 8 do
+    for _ = 1, 10 do
         h.step_tick()
         assert_bounds(p1.x, p1.y, "P1 near-wall collision")
         assert_bounds(p2.x, p2.y, "P2 near-wall collision")
         local dist = math.sqrt((p1.x - p2.x)^2 + (p1.y - p2.y)^2)
-        assert(dist >= 3.99, string.format("Players overlapped near wall: dist=%.3f", dist))
+        assert(dist >= 6.49, string.format("Players overlapped near wall: dist=%.3f", dist))
     end
-    assert(p2.x <= 498.0 + 1e-6 and p1.x <= 494.5, "P2 held in bounds and P1 blocked behind P2")
-    print("  OK Player-vs-player collision near boundary preserves separation & bounds")
+    assert(p2.x <= 498.0 + 1e-6 and p1.x <= 491.5 + 1e-3,
+        string.format("P2 held in bounds (%.3f) and P1 blocked at >=6.5u behind P2 (%.3f)", p2.x, p1.x))
+    print("  OK Player-vs-player collision near boundary preserves 6.5u separation & bounds")
+end
+
+-- Test E1: Calibrated Bodyblock (6.5u = 52px), Frontal Stop, Tangential Sliding, Mutual Collision & Dash Passthrough
+do
+    -- 1) Horizontal & Vertical frontal collision stop at exact 6.5u without penetration or jitter
+    for _, case in ipairs({
+        { name = "Horizontal", x1 = 0.0, y1 = 0.0, x2 = 12.0, y2 = 0.0, dx = 1, dy = 0 },
+        { name = "Vertical",   x1 = 0.0, y1 = 0.0, x2 = 0.0,  y2 = 12.0, dx = 0, dy = 1 },
+    }) do
+        local h = create_server_harness()
+        local p1 = h.spawn_player(1, case.x1, case.y1, 2.2)
+        local p2 = h.spawn_player(2, case.x2, case.y2, 2.2)
+        h.step_tick()
+        h.move_intent(1, case.dx, case.dy)
+        for _ = 1, 10 do
+            h.step_tick()
+            local dist = math.sqrt((p1.x - p2.x)^2 + (p1.y - p2.y)^2)
+            assert(dist >= 6.49, string.format("%s frontal penetrated: dist=%.4f", case.name, dist))
+        end
+        local final_dist = math.sqrt((p1.x - p2.x)^2 + (p1.y - p2.y)^2)
+        assert_near(final_dist, 6.5, 0.02, case.name .. " frontal contact distance")
+        assert_near(p1.vx, 0.0, 1e-5, case.name .. " frontal vx zeroed")
+        assert_near(p1.vy, 0.0, 1e-5, case.name .. " frontal vy zeroed")
+        assert_near(p2.x, case.x2, 1e-4, case.name .. " stationary P2 unmoved X")
+        assert_near(p2.y, case.y2, 1e-4, case.name .. " stationary P2 unmoved Y")
+    end
+
+    -- 2) Off-center / angled collision slides smoothly around stationary player without sticking or penetrating
+    do
+        local h = create_server_harness()
+        local p1 = h.spawn_player(1, 0.0, 2.5, 2.2)
+        local p2 = h.spawn_player(2, 10.0, 0.0, 2.2)
+        h.step_tick()
+        h.move_intent(1, 1, 0) -- Walking East while offset +2.5u in Y -> should slide up and around P2
+        for _ = 1, 16 do
+            h.step_tick()
+            local dist = math.sqrt((p1.x - p2.x)^2 + (p1.y - p2.y)^2)
+            assert(dist >= 6.49, string.format("Tangential slide penetrated: dist=%.4f", dist))
+        end
+        assert(p1.x > p2.x + 2.0, string.format("P1 must smoothly slide past P2 on +X (p1.x=%.2f, p2.x=%.2f)", p1.x, p2.x))
+        assert(p1.y > 5.0, string.format("P1 must deflect along +Y perimeter while sliding (p1.y=%.2f)", p1.y))
+        assert_near(p2.x, 10.0, 1e-4, "Stationary P2 stays fixed during P1 slide X")
+        assert_near(p2.y, 0.0, 1e-4, "Stationary P2 stays fixed during P1 slide Y")
+    end
+
+    -- 3) Mutual head-on collision stops symmetrically at 6.5u with zero penetration
+    do
+        local h = create_server_harness()
+        local p1 = h.spawn_player(1, -10.0, 0.0, 2.0)
+        local p2 = h.spawn_player(2, 10.0, 0.0, 2.0)
+        h.step_tick()
+        h.move_intent(1, 1, 0)
+        h.move_intent(2, -1, 0)
+        for _ = 1, 10 do
+            h.step_tick()
+            local dist = math.sqrt((p1.x - p2.x)^2 + (p1.y - p2.y)^2)
+            assert(dist >= 6.49, string.format("Mutual head-on penetrated: dist=%.4f", dist))
+        end
+        local final_dist = math.sqrt((p1.x - p2.x)^2 + (p1.y - p2.y)^2)
+        assert_near(final_dist, 6.5, 0.02, "Mutual head-on stops at 6.5u")
+        assert_near(p1.vx, 0.0, 1e-5, "Mutual P1 vx zeroed")
+        assert_near(p2.vx, 0.0, 1e-5, "Mutual P2 vx zeroed")
+    end
+
+    -- 4) Whirlwind Dash passes cleanly through living player without interruption
+    do
+        local h = create_server_harness()
+        local p1 = h.spawn_player(1, 0.0, 0.0, 2.2)
+        local p2 = h.spawn_player(2, 12.0, 0.0, 2.2)
+        h.step_tick()
+        assert(h.action_intent(1, 3, 1, 0), "Whirlwind dash executes toward P2")
+        local ww = require("data.skills.whirlwind_dash")
+        for _ = 1, ww.dash_duration_ticks + 2 do
+            h.step_tick()
+        end
+        assert(p1.x > p2.x + 10.0, string.format("Dash must pass straight through P2 (p1.x=%.2f, p2.x=%.2f)", p1.x, p2.x))
+    end
+
+    print("  OK Calibrated 6.5u bodyblock, tangential sliding, mutual collision & dash passthrough")
 end
 
 -- Test E2: on_move_intent updates player_intents during active dash (pre-existing bug fix)
@@ -585,7 +666,9 @@ local function create_client_harness()
             getDimensions = function() return 1280, 720 end,
             setColor = function() end,
             setLineWidth = function() end,
-            rectangle = function() end,
+            rectangle = function(mode, x, y, w, h)
+                table.insert(drawn_ops, { kind = "rectangle", mode = mode, x = x, y = y, w = w, h = h })
+            end,
             ellipse = function() end,
             polygon = function() end,
             arc = function() end,
@@ -1060,6 +1143,195 @@ do
     assert_near(c.loci.entities[3].x, 505.0, 1e-4, "Projectile entity_type skipped by player clamp")
     assert_near(c.loci.entities[4].x, -505.0, 1e-4, "Projectile blueprint skipped by player clamp")
     print("  OK Client clamp filter applies to players while sparing projectiles")
+end
+
+-- Client Test F8: Local prediction mirrors 6.5u bodyblock, tangential sliding & dead-player passthrough
+do
+    -- 1) Frontal stop in local prediction
+    local c1 = create_client_harness()
+    c1.push_snapshot(1, 100, {
+        { id = 1, name = "LocalHero", x = 0.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "2.2" } },
+        { id = 2, name = "EnemyHero", x = 10.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "2.2" } }
+    })
+    c1.keys_down["d"] = true
+    local me1 = c1.loci.get_my_entity()
+    for _ = 1, 20 do
+        c1.advance_time(1 / 60)
+        love.update(1 / 60)
+        local dist = math.sqrt((me1.x - 10.0)^2 + (me1.y - 0.0)^2)
+        assert(dist >= 6.49, string.format("Client frontal prediction penetrated: dist=%.4f", dist))
+    end
+    assert_near(me1.x, 3.5, 0.02, "Client frontal prediction stops at 6.5u from other player")
+
+    -- 2) Off-center tangential slide in local prediction
+    local c2 = create_client_harness()
+    c2.push_snapshot(1, 100, {
+        { id = 1, name = "LocalHero", x = 0.0, y = 2.5, vx = 0, vy = 0, props = { move_speed = "2.2" } },
+        { id = 2, name = "EnemyHero", x = 10.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "2.2" } }
+    })
+    c2.keys_down["d"] = true
+    local me2 = c2.loci.get_my_entity()
+    for _ = 1, 35 do
+        c2.advance_time(1 / 60)
+        love.update(1 / 60)
+        local dist = math.sqrt((me2.x - 10.0)^2 + (me2.y - 0.0)^2)
+        assert(dist >= 6.49, string.format("Client slide prediction penetrated: dist=%.4f", dist))
+    end
+    assert(me2.x > 11.0, string.format("Client prediction must smoothly slide past other player (me2.x=%.2f)", me2.x))
+
+    -- 3) Dead player does not block local prediction
+    local c3 = create_client_harness()
+    c3.push_snapshot(1, 100, {
+        { id = 1, name = "LocalHero", x = 0.0, y = 0.0, vx = 0, vy = 0, props = { move_speed = "2.2" } },
+        { id = 2, name = "DeadHero", x = 8.0, y = 0.0, vx = 0, vy = 0, props = { is_dead = "true" } }
+    })
+    c3.keys_down["d"] = true
+    local me3 = c3.loci.get_my_entity()
+    for _ = 1, 15 do
+        c3.advance_time(1 / 60)
+        love.update(1 / 60)
+    end
+    assert(me3.x > 10.0, string.format("Dead player must not block local prediction (me3.x=%.2f)", me3.x))
+    print("  OK Client local prediction mirrors 6.5u bodyblock, tangential sliding & dead passthrough")
+end
+
+-- Server Test E3: on_init() spawns all 7 obstacles deterministically without global pairs()
+do
+    reset_lua_env()
+    package.path = "./server/scripts/default_arena/?.lua;" .. original_path
+
+    local spawned_obstacles = {}
+    local destroyed_obstacles = {}
+    local next_obs_id = 0
+    local saved_pairs = _G.pairs
+    _G.pairs = nil -- Simula VM determinística do loci2d onde pairs global é nil
+    _G.dpairs = saved_pairs
+    _G.Loci = {
+        Log = { info = function() end, warn = function() end, error = function() end },
+        Commands = {
+            spawn_static_obstacle = function(data)
+                next_obs_id = next_obs_id + 1
+                data.id = next_obs_id
+                table.insert(spawned_obstacles, data)
+                return next_obs_id -- Retorno único numérico, igual à engine Rust
+            end,
+            destroy_static_obstacle = function(id)
+                table.insert(destroyed_obstacles, id)
+            end
+        }
+    }
+
+    local ok, err = pcall(function()
+        dofile("server/scripts/default_arena/main.lua")
+        on_init()
+    end)
+    _G.pairs = saved_pairs
+    assert(ok, "on_init() must succeed without global pairs(): " .. tostring(err))
+    assert(#spawned_obstacles == 7, "Expected 7 obstacles from on_init(), got " .. tostring(#spawned_obstacles))
+
+    for _, obs in ipairs(spawned_obstacles) do
+        assert(obs.position and type(obs.position.x) == "number" and type(obs.position.y) == "number",
+            "Obstacle missing numeric position: " .. tostring(obs.blueprint))
+        assert(obs.collision_type == "solid" or obs.collision_type == "destructible" or obs.collision_type == "trigger",
+            "Invalid collision_type: " .. tostring(obs.collision_type))
+        if obs.shape == "aabb" then
+            assert(type(obs.width) == "number" and obs.width > 0, "AABB obstacle must have numeric width at root")
+            assert(type(obs.height) == "number" and obs.height > 0, "AABB obstacle must have numeric height at root")
+            assert(obs.dimensions == nil, "AABB obstacle must not nest dimensions")
+            -- Garante que o ponto de spawn padrão (0, 0) não nasce dentro de um obstáculo sólido
+            local hw, hh = obs.width * 0.5, obs.height * 0.5
+            local overlaps_origin = math.abs(obs.position.x) <= hw + 2.0 and math.abs(obs.position.y) <= hh + 2.0
+            assert(not overlaps_origin, "Obstacle " .. tostring(obs.blueprint) .. " overlaps player spawn (0, 0)")
+        elseif obs.shape == "circle" then
+            assert(type(obs.radius) == "number" and obs.radius > 0, "Circle obstacle must have numeric radius at root")
+        else
+            error("Unexpected obstacle shape: " .. tostring(obs.shape))
+        end
+    end
+
+    local ArenaObstacles = require("data.arena_obstacles")
+    local removed = ArenaObstacles.cleanup()
+    assert(removed == 7 and #destroyed_obstacles == 7, "cleanup() must destroy all 7 created obstacles")
+    print("  OK Server on_init() spawns 7 deterministic obstacles without pairs() and keeps (0, 0) clear")
+end
+
+-- Client Test F8: Dynamic obstacle rendering (draw_arena_obstacles) & predictive obstacle collision
+do
+    local c = create_client_harness()
+    local obs_mod = require("loci.obstacle")
+
+    local function register_obstacle(id, blueprint, shape, x, y, w_or_r, h)
+        local obs = obs_mod.new_obstacle(id, blueprint)
+        obs.shape = shape
+        obs.x = x
+        obs.y = y
+        obs.is_solid = true
+        obs.collision_type = "solid"
+        if shape == "aabb" then
+            obs.width = w_or_r
+            obs.height = h
+        else
+            obs.radius = w_or_r
+        end
+        c.loci.obstacles[id] = obs
+    end
+
+    register_obstacle(1, "wall_center_1", "aabb", 0, -200, 60, 10)
+    register_obstacle(2, "pillar_nw", "circle", -400, -400, 30)
+    c.loci._obstacles_list_cache = nil
+
+    for i = #c.drawn_ops, 1, -1 do c.drawn_ops[i] = nil end
+    draw_arena_obstacles()
+
+    local saw_aabb, saw_circle = false, false
+    for _, op in ipairs(c.drawn_ops) do
+        if op.kind == "rectangle" and op.mode == "fill" and math.abs(op.x - (-30 * 8)) < 1e-4 and math.abs(op.w - 60 * 8) < 1e-4 then
+            saw_aabb = true
+        elseif op.kind == "circle" and op.mode == "fill" and math.abs(op.x - (-400 * 8)) < 1e-4 and math.abs(op.r - 30 * 8) < 1e-4 then
+            saw_circle = true
+        end
+    end
+    assert(saw_aabb, "draw_arena_obstacles must render AABB obstacle at (x - w/2, y - h/2) * VISUAL_SCALE")
+    assert(saw_circle, "draw_arena_obstacles must render circle obstacle at (x, y, r) * VISUAL_SCALE")
+
+    -- Test client predictive collision & wall-slide against wall_center_1 (y in [-205, -195], player radius=2.0 => y >= -193)
+    c.push_snapshot(1, 100, {
+        { id = 1, name = "LocalHero", x = 0.0, y = -190.0, vx = 0, vy = 0, props = { move_speed = "3.2" } }
+    })
+    register_obstacle(1, "wall_center_1", "aabb", 0, -200, 60, 10)
+    register_obstacle(2, "pillar_nw", "circle", -400, -400, 30)
+    c.loci._obstacles_list_cache = nil
+    local me = c.loci.get_my_entity()
+    c.keys_down["w"] = true
+    c.keys_down["d"] = true
+    c.advance_time(0.016)
+    love.update(0.016)
+    for _ = 1, 10 do
+        c.advance_time(1 / 30)
+        love.update(1 / 30)
+        assert(me.y >= -193.0 - 1e-4, "Local walk prediction must stop outside AABB obstacle y=-193, got " .. tostring(me.y))
+    end
+    assert(me.x > 5.0, "Local walk prediction must slide tangentially (+X) along AABB obstacle")
+
+    -- Test client predictive collision during whirlwind_dash toward pillar_nw (-400, -400, r=30)
+    c.keys_down["w"] = false
+    c.keys_down["d"] = false
+    c.push_snapshot(20, 2000, {
+        { id = 1, name = "LocalHero", x = -365.0, y = -400.0, vx = -6.67, vy = 0, props = { move_speed = "3.2", dashing_until = "30" } }
+    })
+    register_obstacle(1, "wall_center_1", "aabb", 0, -200, 60, 10)
+    register_obstacle(2, "pillar_nw", "circle", -400, -400, 30)
+    c.loci._obstacles_list_cache = nil
+    me = c.loci.get_my_entity()
+    me.vx = -6.67
+    me.vy = 0
+    for _ = 1, 5 do
+        c.advance_time(1 / 30)
+        love.update(1 / 30)
+        local dist = math.sqrt((me.x - (-400))^2 + (me.y - (-400))^2)
+        assert(dist >= 32.0 - 1e-4, "Dash prediction must not penetrate circular pillar (r=30 + player=2), dist=" .. tostring(dist))
+    end
+    print("  OK Client draw_arena_obstacles() and predictive obstacle collision (walk & dash)")
 end
 
 print("=== [4/4] All automated wall collision tests PASSED ===")
