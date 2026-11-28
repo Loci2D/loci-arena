@@ -29,10 +29,11 @@ local function is_dead(ent)
 end
 
 -- env:
---   cur_tick        tick autoritativo do servidor (loci._last_state_tick)
---   tick_rate       ticks por segundo (loci.get_server_tick_rate())
---   default_speed   fallback de velocidade (loci.netcode.default_move_speed)
---   clamp(ent)      função de clamp aos limites da arena (opcional)
+--   cur_tick              tick autoritativo do servidor (loci._last_state_tick)
+--   tick_rate             ticks por segundo (loci.get_server_tick_rate())
+--   default_speed         fallback de velocidade (loci.netcode.default_move_speed)
+--   project_step(e,x,y)   projeção opcional de deslocamento (ex.: bodyblock tangencial)
+--   clamp(ent)            função de clamp aos limites da arena (opcional)
 function LocalPrediction.predict_local_movement(ent, dx, dy, dt, env)
     if not ent then return end
     env = env or {}
@@ -59,10 +60,21 @@ function LocalPrediction.predict_local_movement(ent, dx, dy, dt, env)
         local tick_rate = tonumber(env.tick_rate) or 30.0
         local speed_sec = move_speed * tick_rate
 
-        ent.x = (ent.x or 0) + ndx * speed_sec * dt
-        ent.y = (ent.y or 0) + ndy * speed_sec * dt
-        ent.vx = ndx * move_speed
-        ent.vy = ndy * move_speed
+        local step_x = ndx * speed_sec * dt
+        local step_y = ndy * speed_sec * dt
+        if type(env.project_step) == "function" then
+            step_x, step_y = env.project_step(ent, step_x, step_y)
+        end
+
+        ent.x = (ent.x or 0) + step_x
+        ent.y = (ent.y or 0) + step_y
+        if dt > 0 and tick_rate > 0 then
+            ent.vx = step_x / (tick_rate * dt)
+            ent.vy = step_y / (tick_rate * dt)
+        else
+            ent.vx = ndx * move_speed
+            ent.vy = ndy * move_speed
+        end
     else
         ent.vx = 0
         ent.vy = 0

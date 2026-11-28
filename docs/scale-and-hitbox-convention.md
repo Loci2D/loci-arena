@@ -20,8 +20,8 @@ Mantemos o colisor físico travado à engine `loci2d` (`MapBounds::default_arena
 | Constante | Valor Canônico | Equivalente em Pixels / Mundo | Fonte no Código |
 | :--- | :---: | :--- | :--- |
 | `VISUAL_SCALE` | `8` | `1.0u = 8 px` (`1280×720` = `160×90u`) | `client/main.lua`, `server/scripts/default_arena/core/combat_system.lua` (`CombatSystem.CONST.VISUAL_SCALE`) |
-| `PLAYER_COLLIDER_RADIUS` | `2.0u` | `16 px` de raio (`32 px` de diâmetro); `SAFE_MIN/MAX = ±498` | `server/scripts/default_arena/core/arena_bounds.lua`, `client/main.lua` |
-| `MIN_COLLISION_DIST` | `4.05u` | `32.4 px` entre centros (`PLAYER_DIAMETER + 0.05`) | `server/scripts/default_arena/main.lua` |
+| `PLAYER_COLLIDER_RADIUS` | `2.0u` | `16 px` de raio (`32 px` de diâmetro); `SAFE_MIN/MAX = ±498` (paredes/engine Rust) | `server/scripts/default_arena/core/arena_bounds.lua`, `client/main.lua` |
+| `BODYBLOCK_DIST` (`MIN_COLLISION_DIST`) | `6.5u` | `52 px` entre centros (contato externo da sombra de `52 px`, com *sliding* tangencial) | `server/scripts/default_arena/main.lua`, `client/main.lua` |
 | `SPRITE_BASE_SIZE` | `32 px` | Base lógica do modelo/placeholder | `client/main.lua` |
 | `SPRITE_SCALE` | `2` | `64 px` (`8.0u`) de altura visual de referência | `client/main.lua` |
 | Velocidade base (`SPEED`) | `2.0 u/tick` | `60 u/s` a `30 Hz` (`480 px/s` = `7.5` alturas/s); arquétipos podem variar (ex.: Arya `2.2 u/tick`) | `server/scripts/default_arena/main.lua`, `server/scripts/default_arena/data/characters/*.lua`, `loci.netcode.default_move_speed` |

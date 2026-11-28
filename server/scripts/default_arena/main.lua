@@ -8,10 +8,13 @@ local SPEED = 2.0
 
 -- Limites seguros da arena e projeção de velocidade nas bordas (via VFS nativo do Loci2D)
 local ArenaBounds = require("core.arena_bounds")
-local PLAYER_DIAMETER = (ArenaBounds.PLAYER_COLLIDER_RADIUS or 2.0) * 2.0
-local MIN_BLOCK_DIST = PLAYER_DIAMETER + 0.15
-local MIN_BLOCK_DIST_SQ = MIN_BLOCK_DIST * MIN_BLOCK_DIST
-local MIN_COLLISION_DIST = PLAYER_DIAMETER + 0.05
+-- Bodyblock entre jogadores calibrado ao tamanho visual da base/sombra:
+-- Sprite 32x32 @ SPRITE_SCALE=2 -> 64x64px; sombra nos pés: 52px de largura (shadow_radius_x = 26px).
+-- A VISUAL_SCALE = 8: 6.5 unidades de mundo = 52px centro-a-centro (contato externo das sombras/silhuetas).
+-- Mantém ArenaBounds.PLAYER_COLLIDER_RADIUS = 2.0 intacto para paridade com as paredes [-498, +498] da engine Rust.
+local BODYBLOCK_DIST = 6.5
+local MIN_COLLISION_DIST = BODYBLOCK_DIST
+local FRONTAL_LOCK_DOT = 0.98 -- ~11.5° de tolerância frontal pura para evitar oscilação esquerda/direita
 
 -- Rastreamento de jogadores conectados e contagem de times ativos
 local connected_players = {} -- [entity_id] = { team = "1" ou "2" }
@@ -46,21 +49,6 @@ local function get_current_xy(entity_id)
     return get_coords(pos)
 end
 
-local function compute_walk_velocity(entity_id, dir_x, dir_y, speed, use_post_step)
-    local x, y = get_current_xy(entity_id)
-    if not x then return 0, 0 end
-
-    if use_post_step then
-        x, y = ArenaBounds.predict_post_step_xy(entity_id, x, y)
-    end
-
-    local effective_speed = speed or SPEED
-    local vx = (dir_x or 0) * effective_speed
-    local vy = (dir_y or 0) * effective_speed
-
-    return ArenaBounds.project_velocity(x, y, vx, vy)
-end
-
 local function set_position_clamped(entity_id, x, y)
     local cx, cy = ArenaBounds.clamp_xy(x, y)
     Loci.Commands.set_position(entity_id, { x = cx, y = cy })
@@ -92,64 +80,287 @@ local function is_entity_dashing(entity_id)
     return current_tick < dashing_until
 end
 
-local function is_entity_casting(entity_id)
+local function is_entity_casting(entity_id, current_tick)
     if not (Loci and Loci.get_entity_property) then return false end
     local casting_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
-    local current_tick = (CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0
-    return current_tick < casting_until
+    local tick = current_tick or ((CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0)
+    return tick < casting_until
 end
 
-local function is_blocked_by_player(entity_id, dir_x, dir_y)
-    if not dir_x or not dir_y or (dir_x == 0 and dir_y == 0) then
-        return false
+local function is_entity_incapacitated(entity_id, current_tick)
+    if not (Loci and Loci.get_entity_property) then return false end
+    local tick = current_tick or ((CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0)
+    local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
+    local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
+    return tick < paralyzed_until or tick < stunned_until or is_entity_casting(entity_id, tick)
+end
+
+local function get_expected_intent_velocity(entity_id)
+    local intent = player_intents[entity_id]
+    if not intent or (intent.dir_x == 0 and intent.dir_y == 0) then
+        return 0, 0
     end
-    if not is_player_alive(entity_id) or is_entity_dashing(entity_id) then
-        return false
+    if not is_player_alive(entity_id) or is_entity_dashing(entity_id) or is_entity_incapacitated(entity_id) then
+        return 0, 0
+    end
+    local spd = intent.speed or SPEED
+    return intent.dir_x * spd, intent.dir_y * spd
+end
+
+local function get_bodyblock_xy(entity_id, use_post_step, override_positions)
+    if override_positions and override_positions[entity_id] then
+        local p = override_positions[entity_id]
+        return p.x, p.y
+    end
+    local x, y = get_current_xy(entity_id)
+    if not x then
+        local lp = last_tick_positions[entity_id]
+        if lp then return lp.x, lp.y end
+        return nil, nil
+    end
+    if use_post_step then
+        x, y = ArenaBounds.predict_post_step_xy(entity_id, x, y)
+    end
+    return x, y
+end
+
+-- Projeta o vetor de velocidade (vx, vy) contra o círculo de bodyblock de outro jogador em (ox, oy),
+-- preservando o deslizamento tangencial suave (slide normal vector) em colisões anguladas
+-- e aplicando trava limpa em colisões estritamente frontais (dot >= FRONTAL_LOCK_DOT).
+local function project_velocity_against_player(my_x, my_y, ox, oy, vx, vy, other_vx, other_vy, orig_vx, orig_vy)
+    local v_len_sq = vx * vx + vy * vy
+    if v_len_sq <= 1e-10 then
+        return 0, 0, false
     end
 
-    local my_pos = last_tick_positions[entity_id]
-    local my_x, my_y
-    if my_pos then
-        my_x, my_y = my_pos.x, my_pos.y
-    else
-        local my_pos_ud = Loci.get_entity_position(entity_id)
-        if not my_pos_ud then return false end
-        my_x, my_y = get_coords(my_pos_ud)
+    local dx = ox - my_x
+    local dy = oy - my_y
+    local cur_dist_sq = dx * dx + dy * dy
+
+    local v_len = math.sqrt(v_len_sq)
+    local other_spd = math.sqrt((other_vx or 0) * (other_vx or 0) + (other_vy or 0) * (other_vy or 0))
+    local max_reach = MIN_COLLISION_DIST + v_len + other_spd + 0.25
+    if cur_dist_sq > max_reach * max_reach then
+        return vx, vy, false
     end
 
-    for other_id, _ in safe_pairs(connected_players) do
-        if other_id ~= entity_id and is_player_alive(other_id) and not is_entity_dashing(other_id) then
-            local other_pos = last_tick_positions[other_id]
-            local ox, oy
-            if other_pos then
-                ox, oy = other_pos.x, other_pos.y
-            else
-                local other_pos_ud = Loci.get_entity_position(other_id)
-                if other_pos_ud then
-                    ox, oy = get_coords(other_pos_ud)
-                end
+    local cur_dist = math.sqrt(cur_dist_sq)
+    if cur_dist <= 1e-6 then
+        return 0, 0, true
+    end
+
+    local nx = dx / cur_dist
+    local ny = dy / cur_dist
+
+    -- Componente de velocidade avançando na direção do outro jogador
+    local v_into = vx * nx + vy * ny
+    if v_into <= 0 then
+        return vx, vy, false
+    end
+
+    local dir_dot = v_into / v_len
+    local other_into = math.max(0.0, -((other_vx or 0) * nx + (other_vy or 0) * ny))
+    -- Usa a intenção original para calcular a divisão de folga em colisões mútuas,
+    -- tornando a projeção idempotente em múltiplas passagens (evita sub-encolhimento no passo 2).
+    local share_into = math.max(v_into, ((orig_vx or vx) * nx + (orig_vy or vy) * ny))
+
+    -- Colisão estritamente frontal: para suavemente no contato exato sem oscilação lateral
+    if dir_dot >= FRONTAL_LOCK_DOT then
+        local gap = math.max(0.0, cur_dist - MIN_COLLISION_DIST)
+        local max_forward = gap
+        if other_into > 1e-6 and share_into > 1e-6 then
+            max_forward = gap * (share_into / (share_into + other_into))
+        end
+        if v_into > max_forward + 1e-6 then
+            if max_forward <= 1e-5 then
+                return 0, 0, true
             end
+            return nx * max_forward, ny * max_forward, true
+        end
+        return vx, vy, false
+    end
 
-            if ox and oy then
-                local dx = ox - my_x
-                local dy = oy - my_y
-                local dist_sq = dx * dx + dy * dy
+    -- Colisão em ângulo: decompõe em componente normal e tangencial para deslizar pelo perímetro
+    local tx = vx - v_into * nx
+    local ty = vy - v_into * ny
+    local t_sq = tx * tx + ty * ty
+    local min_sq = MIN_COLLISION_DIST * MIN_COLLISION_DIST
 
-                if dist_sq <= MIN_BLOCK_DIST_SQ and dist_sq > 0.0001 then
-                    local dist = math.sqrt(dist_sq)
-                    local nx = dx / dist
-                    local ny = dy / dist
-                    -- Produto escalar entre direção pretendida e vetor até o outro jogador
-                    local dot = dir_x * nx + dir_y * ny
-                    -- Bloqueia se o movimento estiver apontando diretamente contra o outro corpo (> 60 graus)
-                    if dot > 0.5 then
-                        return true
+    local needed_normal_dist = (t_sq >= min_sq) and 0.0 or math.sqrt(min_sq - t_sq)
+    local max_normal = math.max(0.0, cur_dist - needed_normal_dist)
+    if other_into > 1e-6 and share_into > 1e-6 then
+        max_normal = max_normal * (share_into / (share_into + other_into))
+    end
+
+    if v_into > max_normal + 1e-6 then
+        return tx + nx * max_normal, ty + ny * max_normal, true
+    end
+
+    return vx, vy, false
+end
+
+-- Projeta velocidade considerando paredes da arena e todos os outros jogadores vivos (não em dash),
+-- permitindo contornar suavemente o perímetro sem penetração, travamento ou fuga das bordas.
+local function project_bodyblock_velocity(entity_id, my_x, my_y, vx, vy, use_post_step, override_positions)
+    local orig_vx, orig_vy = vx, vy
+    vx, vy = ArenaBounds.project_velocity(my_x, my_y, vx, vy)
+
+    if not is_player_alive(entity_id) or is_entity_dashing(entity_id) then
+        return vx, vy
+    end
+    if vx * vx + vy * vy <= 1e-10 then
+        return 0, 0
+    end
+
+    for _ = 1, 2 do
+        local changed = false
+        for other_id, _ in safe_pairs(connected_players) do
+            if other_id ~= entity_id and is_player_alive(other_id) and not is_entity_dashing(other_id) then
+                local ox, oy = get_bodyblock_xy(other_id, use_post_step, override_positions)
+                if ox and oy then
+                    local other_vx, other_vy = get_expected_intent_velocity(other_id)
+                    local new_vx, new_vy, did_project = project_velocity_against_player(
+                        my_x, my_y, ox, oy, vx, vy, other_vx, other_vy, orig_vx, orig_vy
+                    )
+                    if did_project then
+                        vx, vy = new_vx, new_vy
+                        changed = true
                     end
                 end
             end
         end
+
+        local wvx, wvy = ArenaBounds.project_velocity(my_x, my_y, vx, vy)
+        if math.abs(wvx - vx) > 1e-6 or math.abs(wvy - vy) > 1e-6 then
+            vx, vy = wvx, wvy
+            changed = true
+        end
+
+        if not changed then
+            break
+        end
     end
-    return false
+
+    -- Evita inversão/oscilação quando espremido em cunha entre dois corpos ou corpo + parede
+    if (orig_vx * vx + orig_vy * vy) <= 1e-6 or (vx * vx + vy * vy) <= 1e-8 then
+        return 0, 0
+    end
+
+    return vx, vy
+end
+
+local function compute_walk_velocity(entity_id, dir_x, dir_y, speed, use_post_step, override_positions)
+    local x, y = get_bodyblock_xy(entity_id, use_post_step, override_positions)
+    if not x then return 0, 0 end
+
+    local effective_speed = speed or SPEED
+    local vx = (dir_x or 0) * effective_speed
+    local vy = (dir_y or 0) * effective_speed
+
+    return project_bodyblock_velocity(entity_id, x, y, vx, vy, use_post_step, override_positions)
+end
+
+-- Resolve eventuais sobreposições residuais de bodyblock (ex.: término de dash sobre outro jogador,
+-- spawn sobreposto ou intenções simultâneas no mesmo tick) mantendo limites seguros da arena.
+local function resolve_bodyblock_overlaps(post_positions)
+    local ids = {}
+    for entity_id, _ in safe_pairs(connected_players) do
+        if post_positions[entity_id] and is_player_alive(entity_id) and not is_entity_dashing(entity_id) then
+            table.insert(ids, entity_id)
+        end
+    end
+    if #ids < 2 then return end
+    table.sort(ids)
+
+    local modified = {}
+    local min_sep_sq = (MIN_COLLISION_DIST - 1e-3) * (MIN_COLLISION_DIST - 1e-3)
+
+    for _ = 1, 2 do
+        local any_overlap = false
+        for i = 1, #ids do
+            for j = i + 1, #ids do
+                local id_a = ids[i]
+                local id_b = ids[j]
+                local pa = post_positions[id_a]
+                local pb = post_positions[id_b]
+
+                local dx = pb.x - pa.x
+                local dy = pb.y - pa.y
+                local dist_sq = dx * dx + dy * dy
+
+                if dist_sq < min_sep_sq then
+                    any_overlap = true
+                    local dist = math.sqrt(dist_sq)
+                    local nx, ny = 1.0, 0.0
+                    if dist > 1e-4 then
+                        nx = dx / dist
+                        ny = dy / dist
+                    end
+
+                    local overlap = MIN_COLLISION_DIST - dist
+                    local intent_a = player_intents[id_a]
+                    local intent_b = player_intents[id_b]
+                    local moving_a = intent_a and (intent_a.dir_x ~= 0 or intent_a.dir_y ~= 0) and not is_entity_casting(id_a)
+                    local moving_b = intent_b and (intent_b.dir_x ~= 0 or intent_b.dir_y ~= 0) and not is_entity_casting(id_b)
+
+                    local old_ax, old_ay = pa.x, pa.y
+                    local old_bx, old_by = pb.x, pb.y
+
+                    if moving_a and not moving_b then
+                        local nax, nay = ArenaBounds.clamp_xy(pa.x - nx * overlap, pa.y - ny * overlap)
+                        local moved_a = math.sqrt((nax - old_ax) ^ 2 + (nay - old_ay) ^ 2)
+                        pa.x, pa.y = nax, nay
+                        local rem = math.max(0.0, overlap - moved_a)
+                        if rem > 1e-4 then
+                            pb.x, pb.y = ArenaBounds.clamp_xy(pb.x + nx * rem, pb.y + ny * rem)
+                            modified[id_b] = true
+                        end
+                        modified[id_a] = true
+                    elseif moving_b and not moving_a then
+                        local nbx, nby = ArenaBounds.clamp_xy(pb.x + nx * overlap, pb.y + ny * overlap)
+                        local moved_b = math.sqrt((nbx - old_bx) ^ 2 + (nby - old_by) ^ 2)
+                        pb.x, pb.y = nbx, nby
+                        local rem = math.max(0.0, overlap - moved_b)
+                        if rem > 1e-4 then
+                            pa.x, pa.y = ArenaBounds.clamp_xy(pa.x - nx * rem, pa.y - ny * rem)
+                            modified[id_a] = true
+                        end
+                        modified[id_b] = true
+                    else
+                        local half = overlap * 0.5
+                        local nax, nay = ArenaBounds.clamp_xy(pa.x - nx * half, pa.y - ny * half)
+                        local nbx, nby = ArenaBounds.clamp_xy(pb.x + nx * half, pb.y + ny * half)
+                        local sep_dx = nbx - nax
+                        local sep_dy = nby - nay
+                        local sep_dist = math.sqrt(sep_dx * sep_dx + sep_dy * sep_dy)
+                        if sep_dist < MIN_COLLISION_DIST - 1e-4 then
+                            local rem = MIN_COLLISION_DIST - sep_dist
+                            -- Compensa o lado bloqueado pela parede empurrando o lado livre
+                            local ax_clamped = (math.abs(nax - (pa.x - nx * half)) > 1e-4) or (math.abs(nay - (pa.y - ny * half)) > 1e-4)
+                            local bx_clamped = (math.abs(nbx - (pb.x + nx * half)) > 1e-4) or (math.abs(nby - (pb.y + ny * half)) > 1e-4)
+                            if bx_clamped and not ax_clamped then
+                                nax, nay = ArenaBounds.clamp_xy(nax - nx * rem, nay - ny * rem)
+                            elseif ax_clamped and not bx_clamped then
+                                nbx, nby = ArenaBounds.clamp_xy(nbx + nx * rem, nby + ny * rem)
+                            end
+                        end
+                        pa.x, pa.y = nax, nay
+                        pb.x, pb.y = nbx, nby
+                        modified[id_a] = true
+                        modified[id_b] = true
+                    end
+                end
+            end
+        end
+        if not any_overlap then break end
+    end
+
+    for entity_id, _ in safe_pairs(modified) do
+        local p = post_positions[entity_id]
+        if p then
+            set_position_clamped(entity_id, p.x, p.y)
+        end
+    end
 end
 
 function on_tick(current_tick)
@@ -157,8 +368,9 @@ function on_tick(current_tick)
     ProjectileSystem.update_tick(current_tick)
     RespawnSystem.process_tick(current_tick)
 
-    -- 1. Salva posições antes da integração de física do tick (apenas para vivos)
-    --    e projeta dash ativo para impedir avanço contínuo contra a borda após atingi-la.
+    -- 1. Salva posições antes da integração de física do tick (apenas para vivos),
+    --    calcula posições pós-step previstas e projeta dash ativo contra as bordas.
+    local post_positions = {}
     for entity_id, _ in safe_pairs(connected_players) do
         if is_player_alive(entity_id) then
             local pos = Loci.get_entity_position(entity_id)
@@ -166,10 +378,12 @@ function on_tick(current_tick)
                 local px, py = get_coords(pos)
                 last_tick_positions[entity_id] = { x = px, y = py }
 
+                local cur_vx, cur_vy = ArenaBounds.get_current_velocity(entity_id)
+                local post_x, post_y = ArenaBounds.predict_post_step_xy(entity_id, px, py, cur_vx, cur_vy)
+                post_positions[entity_id] = { x = post_x, y = post_y }
+
                 if is_entity_dashing(entity_id) then
-                    local cur_vx, cur_vy = ArenaBounds.get_current_velocity(entity_id)
                     if cur_vx ~= 0 or cur_vy ~= 0 then
-                        local post_x, post_y = ArenaBounds.predict_post_step_xy(entity_id, px, py, cur_vx, cur_vy)
                         local proj_vx, proj_vy = ArenaBounds.project_velocity(post_x, post_y, cur_vx, cur_vy)
                         if math.abs(proj_vx - cur_vx) > 1e-6 or math.abs(proj_vy - cur_vy) > 1e-6 then
                             Loci.Commands.set_velocity(entity_id, { x = proj_vx, y = proj_vy })
@@ -182,25 +396,19 @@ function on_tick(current_tick)
         end
     end
 
-    -- 2. Atualiza velocidade pretendida para jogadores vivos
+    -- 1.5. Separa qualquer sobreposição residual de bodyblock (ex.: pós-dash ou spawn sobreposto)
+    resolve_bodyblock_overlaps(post_positions)
+
+    -- 2. Atualiza velocidade pretendida para jogadores vivos (com bodyblock + deslizamento tangencial + paredes)
     for entity_id, intent in safe_pairs(player_intents) do
         if not is_player_alive(entity_id) then
             player_intents[entity_id] = nil
         elseif intent and (intent.dir_x ~= 0 or intent.dir_y ~= 0) then
             -- Se estiver executando dash, a velocidade física da habilidade prevalece
             if not is_entity_dashing(entity_id) then
-                local paralyzed_until = tonumber(Loci.get_entity_property(entity_id, "paralyzed_until")) or 0
-                local stunned_until = tonumber(Loci.get_entity_property(entity_id, "stunned_until")) or 0
-                local casting_until = tonumber(Loci.get_entity_property(entity_id, "casting_until")) or 0
-
-                if current_tick >= paralyzed_until and current_tick >= stunned_until and current_tick >= casting_until then
-                    if is_blocked_by_player(entity_id, intent.dir_x, intent.dir_y) then
-                        -- Se já está em contato bloqueado com outro jogador, mantém 100% estático (sem jitter)
-                        Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
-                    else
-                        local vx, vy = compute_walk_velocity(entity_id, intent.dir_x, intent.dir_y, intent.speed, true)
-                        Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
-                    end
+                if not is_entity_incapacitated(entity_id, current_tick) then
+                    local vx, vy = compute_walk_velocity(entity_id, intent.dir_x, intent.dir_y, intent.speed, true, post_positions)
+                    Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
                 end
             end
         end
@@ -314,13 +522,7 @@ function on_move_intent(entity_id, dir_x, dir_y)
         return true
     end
 
-    -- Se já estiver bloqueado por outro jogador nessa direção, trava estático imediatamente
-    if is_blocked_by_player(entity_id, dir_x, dir_y) then
-        Loci.Commands.set_velocity(entity_id, { x = 0, y = 0 })
-        return true
-    end
-
-    -- Set server authoritative velocity (displacement per tick) já limitada pela barreira da arena
+    -- Velocidade autoritativa já projetada contra bodyblock (com deslizamento tangencial) e paredes da arena
     local vx, vy = compute_walk_velocity(entity_id, dir_x, dir_y, move_speed, false)
     Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
     return true
@@ -436,149 +638,79 @@ function on_collision(entity_a, entity_b)
     local moving_a = intent_a and (intent_a.dir_x ~= 0 or intent_a.dir_y ~= 0) and not is_entity_casting(entity_a)
     local moving_b = intent_b and (intent_b.dir_x ~= 0 or intent_b.dir_y ~= 0) and not is_entity_casting(entity_b)
 
-    -- Raio dos personagens da arena derivado de ArenaBounds.PLAYER_COLLIDER_RADIUS + folga de 0.05
+    -- Separação calibrada de bodyblock (6.5u = 52px centro-a-centro)
     local MIN_DIST = MIN_COLLISION_DIST
 
     -- Vetor relativo de B para A (onde A está em relação a B)
     local rel_x = cur_a_x - cur_b_x
     local rel_y = cur_a_y - cur_b_y
     local rel_dist = math.sqrt(rel_x * rel_x + rel_y * rel_y)
+    local nx = (rel_dist > 1e-4) and (rel_x / rel_dist) or ((entity_a < entity_b) and -1.0 or 1.0)
+    local ny = (rel_dist > 1e-4) and (rel_y / rel_dist) or 0.0
+
+    local res_a_x, res_a_y = cur_a_x, cur_a_y
+    local res_b_x, res_b_y = cur_b_x, cur_b_y
 
     -- Caso 1: Jogador A está se movendo e Jogador B está parado
     if moving_a and not moving_b then
-        -- Se A estiver se afastando de B, não interfere
-        if rel_dist > 0.001 then
-            local dot_away = intent_a.dir_x * (rel_x / rel_dist) + intent_a.dir_y * (rel_y / rel_dist)
+        if rel_dist > 1e-4 then
+            local dot_away = intent_a.dir_x * nx + intent_a.dir_y * ny
             if dot_away > 0.1 then
                 return
             end
         end
 
-        -- Trava B estritamente na sua posição anterior sem sofrer empurrão espúrio
-        set_position_clamped(entity_b, prev_b.x, prev_b.y)
+        -- Mantém B estritamente parado na posição anterior
+        res_b_x, res_b_y = ArenaBounds.clamp_xy(prev_b.x, prev_b.y)
+        res_a_x, res_a_y = ArenaBounds.clamp_xy(res_b_x + nx * MIN_DIST, res_b_y + ny * MIN_DIST)
+        set_position_clamped(entity_b, res_b_x, res_b_y)
         Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
+        set_position_clamped(entity_a, res_a_x, res_a_y)
 
-        local target_x = cur_a_x
-        local target_y = cur_a_y
-
-        -- Se A andava puramente na horizontal
-        if intent_a.dir_y == 0 and intent_a.dir_x ~= 0 then
-            target_y = prev_a.y
-            local dy = target_y - prev_b.y
-            local dy2 = dy * dy
-            if dy2 < MIN_DIST * MIN_DIST then
-                local needed_dx = math.sqrt(MIN_DIST * MIN_DIST - dy2)
-                -- Lado determinado pela posição relativa real de A em relação a B (evita teletransporte)
-                target_x = (cur_a_x >= prev_b.x) and (prev_b.x + needed_dx) or (prev_b.x - needed_dx)
-            else
-                target_x = prev_a.x
-            end
-
-        -- Se A andava puramente na vertical
-        elseif intent_a.dir_x == 0 and intent_a.dir_y ~= 0 then
-            target_x = prev_a.x
-            local dx = target_x - prev_b.x
-            local dx2 = dx * dx
-            if dx2 < MIN_DIST * MIN_DIST then
-                local needed_dy = math.sqrt(MIN_DIST * MIN_DIST - dx2)
-                -- Lado determinado pela posição relativa real de A em relação a B
-                target_y = (cur_a_y >= prev_b.y) and (prev_b.y + needed_dy) or (prev_b.y - needed_dy)
-            else
-                target_y = prev_a.y
-            end
-
-        -- Se A andava em diagonal: separa ao longo do vetor normal relativo
-        else
-            if rel_dist > 0.001 then
-                target_x = prev_b.x + (rel_x / rel_dist) * MIN_DIST
-                target_y = prev_b.y + (rel_y / rel_dist) * MIN_DIST
-            else
-                target_x = prev_b.x - MIN_DIST
-                target_y = prev_b.y
-            end
-        end
-
-        -- Bate e para: trava posição no contato e zera velocidade
-        set_position_clamped(entity_a, target_x, target_y)
-        Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
+        local overrides = { [entity_a] = { x = res_a_x, y = res_a_y }, [entity_b] = { x = res_b_x, y = res_b_y } }
+        local vx, vy = compute_walk_velocity(entity_a, intent_a.dir_x, intent_a.dir_y, intent_a.speed, false, overrides)
+        Loci.Commands.set_velocity(entity_a, { x = vx, y = vy })
 
     -- Caso 2: Jogador B está se movendo e Jogador A está parado
     elseif moving_b and not moving_a then
-        -- Vetor relativo de A para B (onde B está em relação a A)
-        local inv_rel_x = cur_b_x - cur_a_x
-        local inv_rel_y = cur_b_y - cur_a_y
-        local inv_dist = math.sqrt(inv_rel_x * inv_rel_x + inv_rel_y * inv_rel_y)
-
-        -- Se B estiver se afastando de A, não interfere
-        if inv_dist > 0.001 then
-            local dot_away = intent_b.dir_x * (inv_rel_x / inv_dist) + intent_b.dir_y * (inv_rel_y / inv_dist)
+        local inv_nx, inv_ny = -nx, -ny
+        if rel_dist > 1e-4 then
+            local dot_away = intent_b.dir_x * inv_nx + intent_b.dir_y * inv_ny
             if dot_away > 0.1 then
                 return
             end
         end
 
-        set_position_clamped(entity_a, prev_a.x, prev_a.y)
+        res_a_x, res_a_y = ArenaBounds.clamp_xy(prev_a.x, prev_a.y)
+        res_b_x, res_b_y = ArenaBounds.clamp_xy(res_a_x + inv_nx * MIN_DIST, res_a_y + inv_ny * MIN_DIST)
+        set_position_clamped(entity_a, res_a_x, res_a_y)
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
+        set_position_clamped(entity_b, res_b_x, res_b_y)
 
-        local target_x = cur_b_x
-        local target_y = cur_b_y
+        local overrides = { [entity_a] = { x = res_a_x, y = res_a_y }, [entity_b] = { x = res_b_x, y = res_b_y } }
+        local vx, vy = compute_walk_velocity(entity_b, intent_b.dir_x, intent_b.dir_y, intent_b.speed, false, overrides)
+        Loci.Commands.set_velocity(entity_b, { x = vx, y = vy })
 
-        if intent_b.dir_y == 0 and intent_b.dir_x ~= 0 then
-            target_y = prev_b.y
-            local dy = target_y - prev_a.y
-            local dy2 = dy * dy
-            if dy2 < MIN_DIST * MIN_DIST then
-                local needed_dx = math.sqrt(MIN_DIST * MIN_DIST - dy2)
-                target_x = (cur_b_x >= prev_a.x) and (prev_a.x + needed_dx) or (prev_a.x - needed_dx)
-            else
-                target_x = prev_b.x
-            end
-
-        elseif intent_b.dir_x == 0 and intent_b.dir_y ~= 0 then
-            target_x = prev_b.x
-            local dx = target_x - prev_a.x
-            local dx2 = dx * dx
-            if dx2 < MIN_DIST * MIN_DIST then
-                local needed_dy = math.sqrt(MIN_DIST * MIN_DIST - dx2)
-                target_y = (cur_b_y >= prev_a.y) and (prev_a.y + needed_dy) or (prev_a.y - needed_dy)
-            else
-                target_y = prev_b.y
-            end
-
-        else
-            if inv_dist > 0.001 then
-                target_x = prev_a.x + (inv_rel_x / inv_dist) * MIN_DIST
-                target_y = prev_a.y + (inv_rel_y / inv_dist) * MIN_DIST
-            else
-                target_x = prev_a.x + MIN_DIST
-                target_y = prev_a.y
-            end
-        end
-
-        set_position_clamped(entity_b, target_x, target_y)
-        Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
-
-    -- Caso 3: Ambos estão se movendo (colisão mútua / de frente)
+    -- Caso 3: Ambos estão se movendo (colisão mútua)
     elseif moving_a and moving_b then
-        local nx = (rel_dist > 0.001) and (rel_x / rel_dist) or 1
-        local ny = (rel_dist > 0.001) and (rel_y / rel_dist) or 0
-
         local mid_x = (prev_a.x + prev_b.x) * 0.5
         local mid_y = (prev_a.y + prev_b.y) * 0.5
+        res_a_x, res_a_y = ArenaBounds.clamp_xy(mid_x + nx * (MIN_DIST * 0.5), mid_y + ny * (MIN_DIST * 0.5))
+        res_b_x, res_b_y = ArenaBounds.clamp_xy(mid_x - nx * (MIN_DIST * 0.5), mid_y - ny * (MIN_DIST * 0.5))
 
-        set_position_clamped(entity_a, mid_x + nx * (MIN_DIST * 0.5), mid_y + ny * (MIN_DIST * 0.5))
-        set_position_clamped(entity_b, mid_x - nx * (MIN_DIST * 0.5), mid_y - ny * (MIN_DIST * 0.5))
-        Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
-        Loci.Commands.set_velocity(entity_b, { x = 0, y = 0 })
+        set_position_clamped(entity_a, res_a_x, res_a_y)
+        set_position_clamped(entity_b, res_b_x, res_b_y)
+
+        local overrides = { [entity_a] = { x = res_a_x, y = res_a_y }, [entity_b] = { x = res_b_x, y = res_b_y } }
+        local vax, vay = compute_walk_velocity(entity_a, intent_a.dir_x, intent_a.dir_y, intent_a.speed, false, overrides)
+        local vbx, vby = compute_walk_velocity(entity_b, intent_b.dir_x, intent_b.dir_y, intent_b.speed, false, overrides)
+        Loci.Commands.set_velocity(entity_a, { x = vax, y = vay })
+        Loci.Commands.set_velocity(entity_b, { x = vbx, y = vby })
 
     -- Caso 4: Ambos parados
     else
-        local nx = (rel_dist > 0.001) and (rel_x / rel_dist) or 1
-        local ny = (rel_dist > 0.001) and (rel_y / rel_dist) or 0
-
         local mid_x = (prev_a.x + prev_b.x) * 0.5
         local mid_y = (prev_a.y + prev_b.y) * 0.5
-
         set_position_clamped(entity_a, mid_x + nx * (MIN_DIST * 0.5), mid_y + ny * (MIN_DIST * 0.5))
         set_position_clamped(entity_b, mid_x - nx * (MIN_DIST * 0.5), mid_y - ny * (MIN_DIST * 0.5))
         Loci.Commands.set_velocity(entity_a, { x = 0, y = 0 })
