@@ -599,6 +599,36 @@ run_test("LocalPrediction normal kinematics: diagonal normalization, idle stop a
     assert(sdk_like.vx == 0 and sdk_like.x == 0, "ent:get('casting_until') must gate prediction")
 end)
 
+run_test("LocalPrediction stops displacement and zeroes velocity when is_dead is active", function()
+    package.loaded["local_prediction"] = nil
+    local LocalPrediction = require("local_prediction")
+
+    local env = {
+        cur_tick = 100,
+        tick_rate = 30.0,
+        default_speed = 2.0,
+        clamp = function() end,
+    }
+
+    local dead_str = {
+        id = 1, x = 15, y = -8, vx = 2.2, vy = 1.1,
+        properties = { is_dead = "true", move_speed = "2.2" },
+    }
+    LocalPrediction.predict_local_movement(dead_str, 1, 0, 0.016, env)
+    assert_near(dead_str.x, 15, 1e-6, "dead entity (string) must not move x")
+    assert_near(dead_str.y, -8, 1e-6, "dead entity (string) must not move y")
+    assert(dead_str.vx == 0 and dead_str.vy == 0, "dead entity (string) velocity must be zeroed")
+
+    local dead_bool = {
+        id = 2, x = 30, y = 40, vx = -2.0, vy = 0.5,
+        get = function(_, key) return ({ is_dead = true, move_speed = 2.0 })[key] end,
+    }
+    LocalPrediction.predict_local_movement(dead_bool, 0, 1, 0.016, env)
+    assert_near(dead_bool.x, 30, 1e-6, "dead entity (boolean) must not move x")
+    assert_near(dead_bool.y, 40, 1e-6, "dead entity (boolean) must not move y")
+    assert(dead_bool.vx == 0 and dead_bool.vy == 0, "dead entity (boolean) velocity must be zeroed")
+end)
+
 -- ---------------------------------------------------------------------------
 -- VfxSystem: desacoplamento de VFX, renderização de projéteis e impacto no despawn (Cards #100 e #105)
 -- ---------------------------------------------------------------------------

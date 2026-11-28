@@ -336,10 +336,12 @@ run_test("RespawnSystem tracks death, clears status/shields, revives after 300 t
         disarmed_until = "999",
         paralyzed_until = "999",
         dashing_until = "999",
+        casting_until = "999",
         shield = "400",
         shield_active = "1",
         shield_end_tick = "999",
     }
+    env.velocities[1] = { x = 2.2, y = -1.1 }
     env.props[2] = { max_hp = "4000", hp = "0" }
     env.props[3] = { max_hp = "6000", hp = "0" }
 
@@ -352,9 +354,11 @@ run_test("RespawnSystem tracks death, clears status/shields, revives after 300 t
     assert(env.props[1].disarmed_until == "0")
     assert(env.props[1].paralyzed_until == "0")
     assert(env.props[1].dashing_until == "0")
+    assert(env.props[1].casting_until == "0")
     assert(env.props[1].shield == "0")
     assert(env.props[1].shield_active == "0")
     assert(env.props[1].shield_end_tick == "0")
+    assert(env.velocities[1].x == 0 and env.velocities[1].y == 0, "mark_dead must zero entity velocity")
 
     -- Player 2 dies at tick 100 as well; Player 3 dies at tick 150 then disconnects
     RS.mark_dead(2)
@@ -381,11 +385,13 @@ run_test("RespawnSystem tracks death, clears status/shields, revives after 300 t
     -- Manual mark_alive removes dead state and clears active flags
     RS.mark_dead(1)
     env.props[1].stunned_until = "500"
+    env.props[1].casting_until = "500"
     env.props[1].shield = "100"
     RS.mark_alive(1)
     assert(RS.is_dead(1) == false)
     assert(env.props[1].is_dead == "false")
     assert(env.props[1].stunned_until == "0")
+    assert(env.props[1].casting_until == "0")
     assert(env.props[1].shield == "0")
 
     -- Fallback max_hp=100 when max_hp property is missing
