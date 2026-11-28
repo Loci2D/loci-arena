@@ -912,4 +912,27 @@ run_test("lethal hit stops a moving player immediately and prevents post-death d
     assert_near(p2.x, x_before_kill, 1e-6, "dead player must not drift after death")
 end)
 
+run_test("slot 1 basic attacks cost zero mana and cast at 0 mana for all characters", function()
+    local env = make_server_env(true)
+    local p1 = env.join_player(1, 0, 0)
+    env.step_ticks(1, 5)
+
+    local characters = { "arya", "warrior", "archer", "mage", "cleric", "enchanter", "default" }
+    for _, char_name in ipairs(characters) do
+        env.CharacterFactory.create_character(1, char_name)
+        local slot1_skill = env.CharacterFactory.get_skill_by_slot(1, 1)
+        assert(slot1_skill ~= nil, "missing slot 1 skill for " .. char_name)
+        local skill_data = env.CharacterFactory.load_skill(slot1_skill)
+        assert(skill_data and (skill_data.mana_cost or 0) == 0,
+            string.format("slot 1 skill '%s' (%s) must have mana_cost == 0", tostring(slot1_skill), char_name))
+
+        local tick = 100 + (_ * 100)
+        env.step_ticks(1, tick)
+        p1.props.mana = "0"
+        local ok, err = on_action(1, 1, 1, 0)
+        assert(ok == true, string.format("slot 1 '%s' (%s) failed at 0 mana: %s", tostring(slot1_skill), char_name, tostring(err)))
+        assert(p1.props.mana == "0", "slot 1 cast must not consume mana")
+    end
+end)
+
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

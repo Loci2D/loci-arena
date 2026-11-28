@@ -438,14 +438,7 @@ end
 -- Metadados de habilidades para HUD/Hotbar (alinhados a server/scripts/default_arena/data/skills/*.lua a 30 Hz)
 local RESPAWN_DURATION_SECONDS = 10.0 -- 300 ticks a 30 Hz (respawn_system.lua)
 
-local SKILL_HUD_META = {
-    slash          = { label = "Slash",    cooldown = 0.5,  mana_cost = 10 },
-    fireball       = { label = "Fireball", cooldown = 1.5,  mana_cost = 35 },
-    fury_reward    = { label = "Fúria",    cooldown = 5.0,  mana_cost = 0  },
-    whirlwind_dash = { label = "Dash",     cooldown = 6.0,  mana_cost = 25 },
-    blade_throw    = { label = "Lâmina",   cooldown = 14.0, mana_cost = 45 },
-    shield         = { label = "Escudo",   cooldown = 10.0, mana_cost = 20 },
-}
+local SKILL_HUD_META = SkillRanges.SKILL_META
 
 local HOTBAR_SLOTS = {
     { slot = 1, key = "Space" },
@@ -1579,7 +1572,7 @@ local function draw_hotbar(my_entity)
             love.graphics.print("-", x + slot_width / 2 - 3, y + 14)
             love.graphics.print(entry.key, x + 5, y + slot_height - 17)
         else
-            local meta = SKILL_HUD_META[skill_name] or { label = skill_name, cooldown = 0, mana_cost = 0 }
+            local meta = SkillRanges.meta(skill_name) or SKILL_HUD_META[skill_name] or { label = skill_name, cooldown = 0, mana_cost = 0 }
             local cd_remaining = 0
             if cooldown_slots[slot].active then
                 local rem = cooldown_slots[slot].duration - (current_time - cooldown_slots[slot].start_time)
