@@ -19,6 +19,7 @@ end
 print("=== [1/4] Syntax Checks (loadfile) ===")
 local files_to_syntax_check = {
     "server/scripts/default_arena/core/arena_bounds.lua",
+    "server/scripts/default_arena/data/arena_obstacles.lua",
     "server/scripts/default_arena/main.lua",
     "server/scripts/default_arena/data/skills/whirlwind_dash.lua",
     "client/main.lua"
@@ -635,7 +636,9 @@ local function create_client_harness()
             getDimensions = function() return 1280, 720 end,
             setColor = function() end,
             setLineWidth = function() end,
-            rectangle = function() end,
+            rectangle = function(mode, x, y, w, h)
+                table.insert(drawn_ops, { kind = "rectangle", mode = mode, x = x, y = y, w = w, h = h })
+            end,
             ellipse = function() end,
             polygon = function() end,
             arc = function() end,
@@ -1160,6 +1163,145 @@ do
     end
     assert(me3.x > 10.0, string.format("Dead player must not block local prediction (me3.x=%.2f)", me3.x))
     print("  OK Client local prediction mirrors 6.5u bodyblock, tangential sliding & dead passthrough")
+end
+
+-- Server Test E3: on_init() spawns all 7 obstacles deterministically without global pairs()
+do
+    reset_lua_env()
+    package.path = "./server/scripts/default_arena/?.lua;" .. original_path
+
+    local spawned_obstacles = {}
+    local destroyed_obstacles = {}
+    local next_obs_id = 0
+    local saved_pairs = _G.pairs
+    _G.pairs = nil -- Simula VM determinística do loci2d onde pairs global é nil
+    _G.dpairs = saved_pairs
+    _G.Loci = {
+        Log = { info = function() end, warn = function() end, error = function() end },
+        Commands = {
+            spawn_static_obstacle = function(data)
+                next_obs_id = next_obs_id + 1
+                data.id = next_obs_id
+                table.insert(spawned_obstacles, data)
+                return next_obs_id -- Retorno único numérico, igual à engine Rust
+            end,
+            destroy_static_obstacle = function(id)
+                table.insert(destroyed_obstacles, id)
+            end
+        }
+    }
+
+    local ok, err = pcall(function()
+        dofile("server/scripts/default_arena/main.lua")
+        on_init()
+    end)
+    _G.pairs = saved_pairs
+    assert(ok, "on_init() must succeed without global pairs(): " .. tostring(err))
+    assert(#spawned_obstacles == 7, "Expected 7 obstacles from on_init(), got " .. tostring(#spawned_obstacles))
+
+    for _, obs in ipairs(spawned_obstacles) do
+        assert(obs.position and type(obs.position.x) == "number" and type(obs.position.y) == "number",
+            "Obstacle missing numeric position: " .. tostring(obs.blueprint))
+        assert(obs.collision_type == "solid" or obs.collision_type == "destructible" or obs.collision_type == "trigger",
+            "Invalid collision_type: " .. tostring(obs.collision_type))
+        if obs.shape == "aabb" then
+            assert(type(obs.width) == "number" and obs.width > 0, "AABB obstacle must have numeric width at root")
+            assert(type(obs.height) == "number" and obs.height > 0, "AABB obstacle must have numeric height at root")
+            assert(obs.dimensions == nil, "AABB obstacle must not nest dimensions")
+            -- Garante que o ponto de spawn padrão (0, 0) não nasce dentro de um obstáculo sólido
+            local hw, hh = obs.width * 0.5, obs.height * 0.5
+            local overlaps_origin = math.abs(obs.position.x) <= hw + 2.0 and math.abs(obs.position.y) <= hh + 2.0
+            assert(not overlaps_origin, "Obstacle " .. tostring(obs.blueprint) .. " overlaps player spawn (0, 0)")
+        elseif obs.shape == "circle" then
+            assert(type(obs.radius) == "number" and obs.radius > 0, "Circle obstacle must have numeric radius at root")
+        else
+            error("Unexpected obstacle shape: " .. tostring(obs.shape))
+        end
+    end
+
+    local ArenaObstacles = require("data.arena_obstacles")
+    local removed = ArenaObstacles.cleanup()
+    assert(removed == 7 and #destroyed_obstacles == 7, "cleanup() must destroy all 7 created obstacles")
+    print("  OK Server on_init() spawns 7 deterministic obstacles without pairs() and keeps (0, 0) clear")
+end
+
+-- Client Test F8: Dynamic obstacle rendering (draw_arena_obstacles) & predictive obstacle collision
+do
+    local c = create_client_harness()
+    local obs_mod = require("loci.obstacle")
+
+    local function register_obstacle(id, blueprint, shape, x, y, w_or_r, h)
+        local obs = obs_mod.new_obstacle(id, blueprint)
+        obs.shape = shape
+        obs.x = x
+        obs.y = y
+        obs.is_solid = true
+        obs.collision_type = "solid"
+        if shape == "aabb" then
+            obs.width = w_or_r
+            obs.height = h
+        else
+            obs.radius = w_or_r
+        end
+        c.loci.obstacles[id] = obs
+    end
+
+    register_obstacle(1, "wall_center_1", "aabb", 0, -200, 60, 10)
+    register_obstacle(2, "pillar_nw", "circle", -400, -400, 30)
+    c.loci._obstacles_list_cache = nil
+
+    for i = #c.drawn_ops, 1, -1 do c.drawn_ops[i] = nil end
+    draw_arena_obstacles()
+
+    local saw_aabb, saw_circle = false, false
+    for _, op in ipairs(c.drawn_ops) do
+        if op.kind == "rectangle" and op.mode == "fill" and math.abs(op.x - (-30 * 8)) < 1e-4 and math.abs(op.w - 60 * 8) < 1e-4 then
+            saw_aabb = true
+        elseif op.kind == "circle" and op.mode == "fill" and math.abs(op.x - (-400 * 8)) < 1e-4 and math.abs(op.r - 30 * 8) < 1e-4 then
+            saw_circle = true
+        end
+    end
+    assert(saw_aabb, "draw_arena_obstacles must render AABB obstacle at (x - w/2, y - h/2) * VISUAL_SCALE")
+    assert(saw_circle, "draw_arena_obstacles must render circle obstacle at (x, y, r) * VISUAL_SCALE")
+
+    -- Test client predictive collision & wall-slide against wall_center_1 (y in [-205, -195], player radius=2.0 => y >= -193)
+    c.push_snapshot(1, 100, {
+        { id = 1, name = "LocalHero", x = 0.0, y = -190.0, vx = 0, vy = 0, props = { move_speed = "3.2" } }
+    })
+    register_obstacle(1, "wall_center_1", "aabb", 0, -200, 60, 10)
+    register_obstacle(2, "pillar_nw", "circle", -400, -400, 30)
+    c.loci._obstacles_list_cache = nil
+    local me = c.loci.get_my_entity()
+    c.keys_down["w"] = true
+    c.keys_down["d"] = true
+    c.advance_time(0.016)
+    love.update(0.016)
+    for _ = 1, 10 do
+        c.advance_time(1 / 30)
+        love.update(1 / 30)
+        assert(me.y >= -193.0 - 1e-4, "Local walk prediction must stop outside AABB obstacle y=-193, got " .. tostring(me.y))
+    end
+    assert(me.x > 5.0, "Local walk prediction must slide tangentially (+X) along AABB obstacle")
+
+    -- Test client predictive collision during whirlwind_dash toward pillar_nw (-400, -400, r=30)
+    c.keys_down["w"] = false
+    c.keys_down["d"] = false
+    c.push_snapshot(20, 2000, {
+        { id = 1, name = "LocalHero", x = -365.0, y = -400.0, vx = -6.67, vy = 0, props = { move_speed = "3.2", dashing_until = "30" } }
+    })
+    register_obstacle(1, "wall_center_1", "aabb", 0, -200, 60, 10)
+    register_obstacle(2, "pillar_nw", "circle", -400, -400, 30)
+    c.loci._obstacles_list_cache = nil
+    me = c.loci.get_my_entity()
+    me.vx = -6.67
+    me.vy = 0
+    for _ = 1, 5 do
+        c.advance_time(1 / 30)
+        love.update(1 / 30)
+        local dist = math.sqrt((me.x - (-400))^2 + (me.y - (-400))^2)
+        assert(dist >= 32.0 - 1e-4, "Dash prediction must not penetrate circular pillar (r=30 + player=2), dist=" .. tostring(dist))
+    end
+    print("  OK Client draw_arena_obstacles() and predictive obstacle collision (walk & dash)")
 end
 
 print("=== [4/4] All automated wall collision tests PASSED ===")

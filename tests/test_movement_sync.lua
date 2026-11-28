@@ -135,4 +135,23 @@ do
     assert(#new_sdk.sent_moves == 1, "must avoid duplicate sends when SDK handles keepalive natively")
 end
 
+-- 7. Cast lock autoritativo (casting_until) suprime send_move e ressincroniza ao expirar
+ do
+    local sync = MovementSync.new()
+    local loci = make_mock_loci(true)
+    local ent = { id = 1, properties = { casting_until = "150" } }
+
+    -- Conjurando no tick 100 com tecla pressionada: não emite move intent
+    local emitted = sync:step(ent, 1, 0, 100, 10.000, loci)
+    assert(emitted == false and #loci.sent_moves == 0, "must not emit move intent during cast lock")
+
+    emitted = sync:step(ent, 1, 0, 120, 10.500, loci)
+    assert(emitted == false and #loci.sent_moves == 0)
+
+    -- Cast lock expira no tick 150 ainda segurando a tecla -> resync imediato
+    emitted = sync:step(ent, 1, 0, 150, 11.000, loci)
+    assert(emitted == true and #loci.sent_moves == 1, "must resend held move when cast lock expires")
+    assert(loci.sent_moves[1].dx == 1 and loci.sent_moves[1].dy == 0)
+end
+
 print("All loci-arena MovementSync unit tests passed!")
