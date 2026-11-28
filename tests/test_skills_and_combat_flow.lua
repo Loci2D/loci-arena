@@ -847,6 +847,75 @@ run_test("casting a locked skill during whirlwind_dash ends dashing_until entire
     assert_near(p1.vx, 2.2, 1e-4, "walk speed resumes after cast lock, no dash remnant")
 end)
 
+run_test("Slow CC & test zone [20,30]x[20,30]: rectilinear continuous input decelerates same tick, restores after expiry, and cancels on death", function()
+    local env = make_server_env(true)
+    local p1 = env.join_player(1, 12.0, 25.0) -- Arya (move_speed = 2.2), aligned with y=25 towards [20, 30] x [20, 30]
+    local p2 = env.join_player(2, -50.0, -50.0) -- Enemy far away
+
+    -- Player sends a SINGLE move intent East (1, 0) and holds straight line without any further on_move_intent
+    assert(on_move_intent(1, 1, 0) == true)
+    assert_near(p1.vx, 2.2, 1e-5, "initial full walk speed 2.2")
+
+    -- Tick 1..3: 12.0 -> 14.2 -> 16.4 -> 18.6 (still outside x >= 20, post_x at tick 3 was 18.6 < 20)
+    env.step_ticks(1, 3)
+    assert_near(p1.x, 18.6, 1e-4)
+    assert(p1.props.slowed_until == "0")
+    assert_near(p1.vx, 2.2, 1e-5)
+
+    -- Tick 4: from 18.6, post_x = 20.8 enters [20, 30] x [20, 30]!
+    -- Slow is applied immediately without any new on_move_intent!
+    env.step_ticks(4, 4)
+    assert(tonumber(p1.props.slowed_until) == 64, "slowed_until = 4 + 60 = 64")
+    assert(p1.props.slow_multiplier == "0.5", "slow_multiplier = 0.5")
+    assert_near(p1.vx, 1.1, 1e-5, "rectilinear velocity immediately halved to 1.1")
+
+    -- Advance across the entire [20, 30] zone until p1 exits past x > 30 (still zero new on_move_intent!)
+    local last_refresh_tick = 4
+    local tick = 4
+    while p1.x <= 30.0 do
+        tick = tick + 1
+        env.step_ticks(tick, tick)
+        assert_near(p1.vx, 1.1, 1e-5, "maintains 50% speed throughout slow zone without compounding")
+        if tonumber(p1.props.slowed_until) == tick + 60 then
+            last_refresh_tick = tick
+        end
+    end
+
+    local expected_expiry_tick = tonumber(p1.props.slowed_until)
+    assert(expected_expiry_tick == last_refresh_tick + 60, "slow lingers for 60 ticks after leaving zone")
+
+    -- 1 tick before expiration: still slowed at 1.1
+    env.step_ticks(tick + 1, expected_expiry_tick - 1)
+    assert(tonumber(p1.props.slowed_until) == expected_expiry_tick)
+    assert_near(p1.vx, 1.1, 1e-5, "still slowed 1 tick before expiry")
+
+    -- Exact expiration tick: slowed_until resets to 0 and velocity restores to 2.2 automatically!
+    env.step_ticks(expected_expiry_tick, expected_expiry_tick)
+    assert(p1.props.slowed_until == "0" and p1.props.slow_multiplier == "1")
+    assert_near(p1.vx, 2.2, 1e-5, "normal velocity 2.2 automatically restored after slow expires")
+
+    -- Also verify on_move_intent while slowed multiplies speed by slow_multiplier, and death cancels slow
+    local t_now = expected_expiry_tick + 1
+    env.CombatSystem.apply_slow(1, 0.5, 90, t_now)
+    assert(on_move_intent(1, 0, 1) == true) -- change direction while slowed
+    assert_near(p1.vx, 0.0, 1e-5)
+    assert_near(p1.vy, 1.1, 1e-5, "on_move_intent respects active slow_multiplier")
+
+    -- Direct set_property (slowed_until / slow_multiplier) right after create_character / tick 0 is also respected in on_move_intent
+    local p3 = env.join_player(3, -20.0, -20.0)
+    Loci.Commands.set_property(3, "slowed_until", tostring(t_now + 50))
+    Loci.Commands.set_property(3, "slow_multiplier", "0.25")
+    assert(on_move_intent(3, 1, 0) == true)
+    assert_near(p3.vx, 2.2 * 0.25, 1e-5, "direct set_property slowed_until/slow_multiplier respected by on_move_intent")
+
+    with_fixed_random(0.99, function()
+        local res = env.CombatSystem.process_hit(2, 1, 99999, env.CombatSystem.DamageType.TRUE, false)
+        assert(res.lethal == true)
+    end)
+    assert(p1.props.is_dead == "true")
+    assert(p1.props.slowed_until == "0" and p1.props.slow_multiplier == "1", "slow cancelled on death")
+end)
+
 run_test("ArenaObstacles.initialize() and cleanup() work without global pairs()", function()
     local saved_pairs = _G.pairs
     local spawned = {}

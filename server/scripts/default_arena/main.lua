@@ -58,8 +58,16 @@ end
 local CombatSystem = require("core.combat_system")
 local CharacterFactory = require("systems.character_factory")
 local ProjectileSystem = require("systems.projectile_system")
+local SlowZone = require("systems.slow_zone")
 local RespawnSystem = require("respawn_system")
 local ArenaObstacles = require("data.arena_obstacles")
+
+local function get_effective_walk_speed(entity_id, base_speed, current_tick)
+    local spd = base_speed or SPEED
+    local cur_tick = current_tick or ((CharacterFactory and CharacterFactory.get_current_tick) and CharacterFactory.get_current_tick() or 0)
+    local slow_mult = CombatSystem.get_slow_multiplier(entity_id, cur_tick)
+    return spd * slow_mult
+end
 
 local function is_player_alive(entity_id)
     if not connected_players[entity_id] then return false end
@@ -103,7 +111,7 @@ local function get_expected_intent_velocity(entity_id)
     if not is_player_alive(entity_id) or is_entity_dashing(entity_id) or is_entity_incapacitated(entity_id) then
         return 0, 0
     end
-    local spd = intent.speed or SPEED
+    local spd = get_effective_walk_speed(entity_id, intent.speed)
     return intent.dir_x * spd, intent.dir_y * spd
 end
 
@@ -380,6 +388,9 @@ function on_tick(current_tick)
 
                 local cur_vx, cur_vy = ArenaBounds.get_current_velocity(entity_id)
                 local post_x, post_y = ArenaBounds.predict_post_step_xy(entity_id, px, py, cur_vx, cur_vy)
+
+                -- Área de teste de Slow CC: retângulo [20, 30] x [20, 30]
+                SlowZone.process_entity(entity_id, px, py, post_x, post_y, current_tick)
                 post_positions[entity_id] = { x = post_x, y = post_y }
 
                 if is_entity_dashing(entity_id) then
@@ -407,7 +418,8 @@ function on_tick(current_tick)
             -- Se estiver executando dash, a velocidade física da habilidade prevalece
             if not is_entity_dashing(entity_id) then
                 if not is_entity_incapacitated(entity_id, current_tick) then
-                    local vx, vy = compute_walk_velocity(entity_id, intent.dir_x, intent.dir_y, intent.speed, true, post_positions)
+                    local effective_speed = get_effective_walk_speed(entity_id, intent.speed, current_tick)
+                    local vx, vy = compute_walk_velocity(entity_id, intent.dir_x, intent.dir_y, effective_speed, true, post_positions)
                     Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
                 end
             end
@@ -522,8 +534,20 @@ function on_move_intent(entity_id, dir_x, dir_y)
         return true
     end
 
-    -- Velocidade autoritativa já projetada contra bodyblock (com deslizamento tangencial) e paredes da arena
-    local vx, vy = compute_walk_velocity(entity_id, dir_x, dir_y, move_speed, false)
+    -- Velocidade autoritativa já projetada contra bodyblock (com deslizamento tangencial), slow e paredes da arena
+    local current_tick = CharacterFactory.get_current_tick()
+    local px, py = get_current_xy(entity_id)
+    if px and py then
+        SlowZone.process_entity(entity_id, px, py, px, py, current_tick)
+    end
+
+    local effective_speed = move_speed
+    local is_slowed, slow_mult, slowed_until = CombatSystem.get_slow_state(entity_id, current_tick)
+    if is_slowed and current_tick < slowed_until then
+        effective_speed = move_speed * slow_mult
+    end
+
+    local vx, vy = compute_walk_velocity(entity_id, dir_x, dir_y, effective_speed, false)
     Loci.Commands.set_velocity(entity_id, { x = vx, y = vy })
     return true
 end

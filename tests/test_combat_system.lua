@@ -13,6 +13,7 @@ end
 
 local function make_env()
     local props = {}
+    local velocities = {}
     local logs = {}
 
     local function ensure_entity(id)
@@ -32,11 +33,16 @@ local function make_env()
             local ent = props[id]
             return ent and ent[key] or nil
         end,
+        get_velocity = function(id)
+            return velocities[id]
+        end,
         Commands = {
             set_property = function(id, key, value)
                 ensure_entity(id)[key] = tostring(value)
             end,
-            set_velocity = function() end,
+            set_velocity = function(id, vec)
+                velocities[id] = { x = vec.x, y = vec.y }
+            end,
         },
     }
 
@@ -51,6 +57,7 @@ local function make_env()
 
     return {
         props = props,
+        velocities = velocities,
         logs = logs,
         CombatSystem = CombatSystem,
         RespawnSystem = RespawnSystem,
@@ -104,6 +111,8 @@ run_test("init_entity initializes base stats and status flags as strings", funct
     assert(p.shield == "0")
     assert(p.shield_active == "0")
     assert(p.shield_end_tick == "0")
+    assert(p.slowed_until == "0")
+    assert(p.slow_multiplier == "1")
 end)
 
 run_test("calculate_mitigation handles negative, zero, and diminishing returns values", function()
@@ -318,6 +327,41 @@ run_test("lethal self-damage or nil attacker increments deaths without awarding 
         assert(r_env.lethal == true)
         assert(env.props[6].deaths == "1")
     end)
+end)
+
+run_test("apply_slow reduces moving velocity immediately, avoids compounding on refresh, and cancels on death", function()
+    local env = make_env()
+    local CS = env.CombatSystem
+
+    CS.init_entity(1, 1000, 0, 0)
+    env.velocities[1] = { x = 2.0, y = 0.0 }
+
+    -- 50% slow for 60 ticks at tick 10 -> immediately halves velocity on the same tick
+    assert(CS.apply_slow(1, 0.5, 60, 10) == true)
+    assert(env.props[1].slowed_until == "70")
+    assert(env.props[1].slow_multiplier == "0.5")
+    assert_near(env.velocities[1].x, 1.0, 1e-6, "immediate 50% velocity reduction")
+    assert_near(env.velocities[1].y, 0.0, 1e-6)
+
+    -- Refreshing same 0.5 slow at tick 20 extends duration without compounding velocity to 0.5
+    assert(CS.apply_slow(1, 0.5, 60, 20) == true)
+    assert(env.props[1].slowed_until == "80")
+    assert_near(env.velocities[1].x, 1.0, 1e-6, "refresh must not compound velocity")
+
+    -- Stronger slow (0.25 -> 75% slow) scales velocity from 1.0 to 0.5 (= 2.0 * 0.25)
+    assert(CS.apply_slow(1, 0.25, 30, 25) == true)
+    assert(env.props[1].slow_multiplier == "0.25")
+    assert(env.props[1].slowed_until == "80", "longer existing duration preserved")
+    assert_near(env.velocities[1].x, 0.5, 1e-6, "stronger slow scales velocity proportionally")
+
+    -- Lethal hit cancels active slow immediately
+    with_fixed_random(0.99, function()
+        local r = CS.process_hit(nil, 1, 2000, CS.DamageType.TRUE, false)
+        assert(r.lethal == true)
+    end)
+    assert(env.props[1].slowed_until == "0", "death must reset slowed_until")
+    assert(env.props[1].slow_multiplier == "1", "death must reset slow_multiplier")
+    assert(CS.apply_slow(1, 0.5, 60, 30) == false, "dead entity cannot be slowed")
 end)
 
 print(string.format("\n>>> Phase 1: All %d CombatSystem unit tests passed! <<<", passed))

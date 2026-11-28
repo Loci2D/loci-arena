@@ -28,6 +28,9 @@ local function make_env()
             local ent = props[id]
             return ent and ent[key] or nil
         end,
+        get_velocity = function(id)
+            return velocities[id]
+        end,
         Commands = {
             set_property = function(id, key, value)
                 ensure_entity(id)[key] = tostring(value)
@@ -109,6 +112,8 @@ run_test("create_character initializes attributes, falls back to default, and av
     assert(env.props[1].hp_regen == "12" and env.props[1].mana_regen == "10")
     assert(env.props[1].skills_list == "slash,fury_reward,whirlwind_dash,blade_throw")
     assert(env.props[1].fury_active == "false")
+    assert(env.props[1].slowed_until == "0")
+    assert(env.props[1].slow_multiplier == "1")
 
     -- Re-creating same entity must not duplicate it in active_entities (regen ticks once)
     assert(CF.create_character(1, "arya") == true)
@@ -400,6 +405,39 @@ run_test("RespawnSystem tracks death, clears status/shields, revives after 300 t
     RS.mark_dead(4)
     RS.process_tick(800)
     assert(env.props[4].hp == "100" and env.props[4].is_dead == "false")
+end)
+
+run_test("Slow CC expires in CharacterFactory.update_tick, restores moving velocity, and clears on death/respawn", function()
+    local env = make_env()
+    local CF = env.CharacterFactory
+    local CS = env.CombatSystem
+    local RS = env.RespawnSystem
+
+    CF.create_character(1, "arya") -- move_speed = 2.2
+    CF.update_tick(10)
+    env.velocities[1] = { x = 2.2, y = 0.0 }
+
+    -- Apply 50% slow for 15 ticks (slowed_until = 25) -> velocity immediately drops to 1.1
+    assert(CS.apply_slow(1, 0.5, 15, 10) == true)
+    assert(math.abs(env.velocities[1].x - 1.1) < 1e-6)
+    assert(env.props[1].slowed_until == "25" and env.props[1].slow_multiplier == "0.5")
+
+    -- Tick 24: still slowed
+    CF.update_tick(24)
+    assert(env.props[1].slowed_until == "25")
+    assert(math.abs(env.velocities[1].x - 1.1) < 1e-6)
+
+    -- Tick 25: slow expires and automatically restores velocity to 2.2
+    CF.update_tick(25)
+    assert(env.props[1].slowed_until == "0" and env.props[1].slow_multiplier == "1")
+    assert(math.abs(env.velocities[1].x - 2.2) < 1e-6, "velocity must restore to 2.2 upon slow expiration")
+
+    -- Re-apply slow and test cancellation via RespawnSystem.mark_dead & CharacterFactory.on_entity_die
+    assert(CS.apply_slow(1, 0.4, 60, 30) == true)
+    assert(env.props[1].slowed_until == "90" and env.props[1].slow_multiplier == "0.4")
+    RS.mark_dead(1)
+    CF.on_entity_die(1)
+    assert(env.props[1].slowed_until == "0" and env.props[1].slow_multiplier == "1")
 end)
 
 print(string.format("\n>>> Phase 2: All %d CharacterFactory & RespawnSystem unit tests passed! <<<", passed))

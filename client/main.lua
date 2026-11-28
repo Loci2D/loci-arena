@@ -208,6 +208,14 @@ local ARENA_MIN = -500
 local ARENA_MAX = 500
 local ARENA_SIZE = ARENA_MAX - ARENA_MIN
 
+-- Área de teste de Slow CC no mapa: retângulo (20,20), (30,20), (20,30), (30,30)
+local SLOW_TEST_ZONE = {
+    min_x = 20,
+    max_x = 30,
+    min_y = 20,
+    max_y = 30,
+}
+
 -- A engine clampa o centro do colisor circular (raio 2.0) dentro de [-500, +500].
 -- A predição local do cliente precisa respeitar o mesmo limite seguro para não
 -- desenhar o próprio jogador além da barreira enquanto a tecla fica pressionada.
@@ -1015,7 +1023,19 @@ local function update_movement(my_entity)
     end
     local cur_tick = tonumber(loci._last_state_tick) or 0
     local now = (love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
-    movement_sync:step(my_entity, dx, dy, cur_tick, now, loci)
+    if movement_sync:step(my_entity, dx, dy, cur_tick, now, loci) and my_entity then
+        -- Mantém paridade imediata de velocidade local com cast lock e slow no frame de envio
+        if LocalPrediction.is_casting(my_entity, cur_tick) then
+            my_entity.vx = 0
+            my_entity.vy = 0
+        else
+            local slow_mult = LocalPrediction.get_slow_multiplier(my_entity, cur_tick)
+            if slow_mult < 1.0 then
+                my_entity.vx = (my_entity.vx or 0) * slow_mult
+                my_entity.vy = (my_entity.vy or 0) * slow_mult
+            end
+        end
+    end
 end
 
 -- Alcance de detecção de auto-aim para o slot:
@@ -1863,6 +1883,19 @@ function draw_arena_grid()
     love.graphics.setLineWidth(2)
     love.graphics.rectangle("line", v_min, v_min, v_size, v_size)
 
+    -- Test Slow Zone [20, 30] x [20, 30]
+    local sz_x = SLOW_TEST_ZONE.min_x * VISUAL_SCALE
+    local sz_y = SLOW_TEST_ZONE.min_y * VISUAL_SCALE
+    local sz_w = (SLOW_TEST_ZONE.max_x - SLOW_TEST_ZONE.min_x) * VISUAL_SCALE
+    local sz_h = (SLOW_TEST_ZONE.max_y - SLOW_TEST_ZONE.min_y) * VISUAL_SCALE
+    love.graphics.setColor(0.15, 0.70, 0.95, 0.22)
+    love.graphics.rectangle("fill", sz_x, sz_y, sz_w, sz_h)
+    love.graphics.setColor(0.35, 0.85, 1.0, 0.80)
+    love.graphics.setLineWidth(2)
+    love.graphics.rectangle("line", sz_x, sz_y, sz_w, sz_h)
+    love.graphics.setColor(0.65, 0.92, 1.0, 0.85)
+    love.graphics.print("SLOW ZONE", sz_x + 4, sz_y + 4)
+
     -- Origin crosshair at (0, 0)
     love.graphics.setColor(0.4, 0.6, 0.85, 0.7)
     love.graphics.setLineWidth(1.5)
@@ -2087,9 +2120,10 @@ function draw_entity(ent, is_me)
     local label_y = bar_y - 14
     love.graphics.print(label, px - tw / 2, label_y)
 
-    -- Status effects (Stun / Desarme)
+    -- Status effects (Stun / Desarme / Slow)
     local stunned_until = tonumber(ent.stunned_until or (ent.properties and ent.properties["stunned_until"])) or 0
     local disarmed_until = tonumber(ent.disarmed_until or (ent.properties and ent.properties["disarmed_until"])) or 0
+    local slowed_until = tonumber(ent.slowed_until or (ent.properties and ent.properties["slowed_until"])) or 0
     if not is_dead then
         local status_y = label_y - 14
         if stunned_until > 0 then
@@ -2102,6 +2136,11 @@ function draw_entity(ent, is_me)
             local txt = "[DESARMADA]"
             local tw_d = font:getWidth(txt)
             love.graphics.print(txt, px - tw_d / 2, status_y)
+        elseif slowed_until > 0 then
+            love.graphics.setColor(0.35, 0.85, 1.0, 0.95)
+            local txt = "* SLOW *"
+            local tw_sl = font:getWidth(txt)
+            love.graphics.print(txt, px - tw_sl / 2, status_y)
         end
     end
 end
@@ -2249,8 +2288,16 @@ function draw_character_sheet(sw, sh, my_entity)
 
     love.graphics.setColor(0.7, 0.9, 0.7, 1)
     love.graphics.print("Velocidade:", x + 14, cur_y)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("%.1f px/tick", move_speed), x + 135, cur_y)
+    local cur_tick = tonumber(loci._last_state_tick) or 0
+    local slowed_until = tonumber(my_entity:get("slowed_until", 0)) or 0
+    local slow_mult = tonumber(my_entity:get("slow_multiplier", 1.0)) or 1.0
+    if slowed_until > cur_tick and slow_mult < 1.0 then
+        love.graphics.setColor(0.35, 0.85, 1.0, 1)
+        love.graphics.print(string.format("%.1f px/tick (SLOW %d%%)", move_speed * slow_mult, math.floor((1.0 - slow_mult) * 100 + 0.5)), x + 135, cur_y)
+    else
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.print(string.format("%.1f px/tick", move_speed), x + 135, cur_y)
+    end
     cur_y = cur_y + 20
 
     love.graphics.setColor(0.8, 0.85, 0.95, 1)
