@@ -220,6 +220,11 @@ local PREDICTED_SAFE_MAX_X = ARENA_MAX - PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MIN_Y = ARENA_MIN + PLAYER_COLLIDER_RADIUS
 local PREDICTED_SAFE_MAX_Y = ARENA_MAX - PLAYER_COLLIDER_RADIUS
 
+-- Espelha `BODYBLOCK_DIST` e `FRONTAL_LOCK_DOT` de `server/scripts/default_arena/main.lua`
+-- (6.5u = 52px centro-a-centro = largura da sombra na base do sprite 64x64px).
+local PLAYER_BODYBLOCK_DIST = 6.5
+local BODYBLOCK_FRONTAL_LOCK_DOT = 0.98
+
 local function clamp_arena_coords(x, y)
     local cx = math.max(PREDICTED_SAFE_MIN_X, math.min(PREDICTED_SAFE_MAX_X, x or 0))
     local cy = math.max(PREDICTED_SAFE_MIN_Y, math.min(PREDICTED_SAFE_MAX_Y, y or 0))
@@ -322,18 +327,110 @@ local function clamp_entity_to_arena(ent, clamp_recon_error, compensate_overshoo
     return clamped_x, clamped_y
 end
 
+local function is_entity_solid_for_bodyblock(other, cur_tick)
+    if not other or not should_clamp_entity(other) then return false end
+    local dead_prop = (other.get and other:get("is_dead"))
+        or other.is_dead
+        or (other.properties and other.properties["is_dead"])
+    if dead_prop == true or dead_prop == "true" or dead_prop == 1 or dead_prop == "1" then
+        return false
+    end
+    local dashing_until = tonumber(
+        (other.get and other:get("dashing_until"))
+        or other.dashing_until
+        or (other.properties and other.properties["dashing_until"])
+    ) or 0
+    if dashing_until > 0 and cur_tick < dashing_until then
+        return false
+    end
+    return true
+end
+
+local function project_predicted_step_bodyblock(ent, step_x, step_y)
+    if not (loci and loci.get_entities) then
+        return step_x, step_y
+    end
+    local entities = loci.get_entities()
+    if not entities then
+        return step_x, step_y
+    end
+
+    local orig_sx, orig_sy = step_x, step_y
+    local cur_tick = tonumber(loci._last_state_tick) or 0
+    local my_x = ent.x or 0
+    local my_y = ent.y or 0
+    local min_dist = PLAYER_BODYBLOCK_DIST
+    local min_dist_sq = min_dist * min_dist
+
+    for _ = 1, 2 do
+        local changed = false
+        for _, other in ipairs(entities) do
+            if other and other.id ~= ent.id and other.x and other.y and is_entity_solid_for_bodyblock(other, cur_tick) then
+                local step_len_sq = step_x * step_x + step_y * step_y
+                if step_len_sq <= 1e-12 then
+                    return 0, 0
+                end
+                local dx = other.x - my_x
+                local dy = other.y - my_y
+                local cur_dist_sq = dx * dx + dy * dy
+                local step_len = math.sqrt(step_len_sq)
+                local max_reach = min_dist + step_len + 0.25
+
+                if cur_dist_sq <= max_reach * max_reach and cur_dist_sq > 1e-8 then
+                    local cur_dist = math.sqrt(cur_dist_sq)
+                    local nx = dx / cur_dist
+                    local ny = dy / cur_dist
+                    local s_into = step_x * nx + step_y * ny
+
+                    if s_into > 0 then
+                        local dir_dot = s_into / step_len
+                        if dir_dot >= BODYBLOCK_FRONTAL_LOCK_DOT then
+                            local max_forward = math.max(0.0, cur_dist - min_dist)
+                            if s_into > max_forward then
+                                if max_forward <= 1e-6 then
+                                    step_x, step_y = 0, 0
+                                else
+                                    step_x, step_y = nx * max_forward, ny * max_forward
+                                end
+                                changed = true
+                            end
+                        else
+                            local tx = step_x - s_into * nx
+                            local ty = step_y - s_into * ny
+                            local t_sq = tx * tx + ty * ty
+                            local needed_normal_dist = (t_sq >= min_dist_sq) and 0.0 or math.sqrt(min_dist_sq - t_sq)
+                            local max_normal = math.max(0.0, cur_dist - needed_normal_dist)
+                            if s_into > max_normal then
+                                step_x = tx + nx * max_normal
+                                step_y = ty + ny * max_normal
+                                changed = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if not changed then break end
+    end
+
+    if (orig_sx * step_x + orig_sy * step_y) <= 1e-8 then
+        return 0, 0
+    end
+    return step_x, step_y
+end
+
 -- Replica propositalmente a cinemática padrão de caminhada do `sdk-love2d`
 -- (`move_speed * tick_rate * dt`) via `_prediction_handler` em vez de depender só
--- do clamp pós-`loci.update`. Isso aplica `clamp_entity_to_arena` *antes* de `decay_error`
--- e `reconcile_position`, evitando que passos maiores (FPS baixo ou buff de velocidade)
--- ultrapassem ±498 e distorçam a reconciliação contra a parede. Se o SDK passar a expor
--- um hook de pós-predição/clamp antes da reconciliação, esta cópia pode ser removida.
--- A lógica vive em src/local_prediction.lua (inclui o cast lock `casting_until`).
+-- do clamp pós-`loci.update`. Isso aplica bodyblock tangencial e `clamp_entity_to_arena`
+-- *antes* de `decay_error` e `reconcile_position`, evitando overshoot nas paredes e tremor
+-- visual ao contornar outros jogadores.
+-- A lógica base vive em src/local_prediction.lua (inclui o cast lock `casting_until`).
 local function predict_local_movement(ent, dx, dy, dt)
     LocalPrediction.predict_local_movement(ent, dx, dy, dt, {
         cur_tick = tonumber(loci._last_state_tick) or 0,
         tick_rate = (loci.get_server_tick_rate and loci.get_server_tick_rate()) or 30.0,
         default_speed = loci.netcode and loci.netcode.default_move_speed,
+        project_step = project_predicted_step_bodyblock,
         clamp = function(e) clamp_entity_to_arena(e, true, false) end,
     })
 end
@@ -777,11 +874,19 @@ function love.load(arg)
             local dead = (new_val == true or new_val == "true")
             if entity then
                 sprite_anim.set_dead(entity.id, dead)
+                if dead then
+                    entity.vx = 0
+                    entity.vy = 0
+                end
             end
             local my_entity = loci.get_my_entity()
             if entity and my_entity and entity.id == my_entity.id then
                 local was_dead = (old_val == true or old_val == "true")
                 if dead and not was_dead then
+                    if entity.server_x ~= nil then entity.x = entity.server_x end
+                    if entity.server_y ~= nil then entity.y = entity.server_y end
+                    entity._error_x = 0
+                    entity._error_y = 0
                     AudioSystem.play("death")
                 end
                 if dead and not respawn_state.active then
