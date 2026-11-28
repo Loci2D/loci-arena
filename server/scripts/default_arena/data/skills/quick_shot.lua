@@ -17,7 +17,7 @@ return {
     id = "quick_shot",
     name = "Tiro Rápido",
     description = "Dispara uma flecha veloz com dano físico",
-    mana_cost = 5,
+    mana_cost = 0,
     cooldown = 18,        -- 0.6s a 30Hz
     cast_lock_ticks = 6,  -- 0.2s a 30Hz
     range = 52.0,         -- unidades do mundo

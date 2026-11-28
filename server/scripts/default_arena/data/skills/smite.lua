@@ -17,7 +17,7 @@ return {
     id = "smite",
     name = "Punição Sagrada",
     description = "Disparo sagrado com dano mágico em linha reta",
-    mana_cost = 10,
+    mana_cost = 0,
     cooldown = 21,        -- 0.7s a 30Hz
     cast_lock_ticks = 8,  -- ~0.26s a 30Hz
     range = 38.0,         -- unidades do mundo

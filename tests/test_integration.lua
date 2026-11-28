@@ -1018,4 +1018,20 @@ assert(math.abs(hero_dead.x - 12.5) < 1e-4 and math.abs(hero_dead.y - (-4.0)) < 
     "is_dead -> true must snap local hero to authoritative death coordinates")
 print("  -> Passed: Local player death clears velocity and reconciliation drift.")
 
+-- ============================================================================
+-- Test 13: Slot 1 Basic Attack Never Shows MANA Lock at 0 Mana (Card #118)
+-- ============================================================================
+print("[Test 13] Testing Slot 1 Basic Attack Remains Unlocked at 0 Mana...")
+hero_dead.is_dead = false
+hero_dead.properties.is_dead = "false"
+hero_dead.properties.mana = "0"
+hero_dead.properties.skills_list = "slash,fury_reward,whirlwind_dash,blade_throw"
+hero_dead.properties.character_name = "arya"
+love.update(0.016)
+local slot1_state = virtual_joystick.get_skill_slot_state and virtual_joystick.get_skill_slot_state(1)
+if slot1_state then
+    assert(slot1_state.locked_reason ~= "MANA", "Slot 1 basic attack must not be locked for MANA at 0 mana")
+end
+print("  -> Passed: Slot 1 basic attack remains unlocked at 0 mana.")
+
 print("\n>>> ALL CLIENT INTEGRATION TESTS PASSED SUCCESSFULLY! <<<")

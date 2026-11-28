@@ -17,7 +17,7 @@ return {
     id = "kinetic_pulse",
     name = "Pulso Cinético",
     description = "Disparo de impacto cinético",
-    mana_cost = 8,
+    mana_cost = 0,
     cooldown = 18,        -- 0.6s a 30Hz
     cast_lock_ticks = 6,  -- 0.2s a 30Hz
     range = 30.0,         -- unidades do mundo
