@@ -996,4 +996,26 @@ love.update(0.1)
 love.draw()
 print("  -> Passed: VfxSystem projectile rendering and despawn impact synchronization verified.")
 
+-- ============================================================================
+-- Test 12: Local Player Death Clears Velocity & Reconciliation Drift (Card #116)
+-- ============================================================================
+print("[Test 12] Testing Local Player Death Clears Velocity & Reconciliation Error...")
+local hero_dead = loci.get_my_entity()
+assert(hero_dead ~= nil, "Local hero entity must exist for death test")
+hero_dead.x = 18.0
+hero_dead.y = -4.0
+hero_dead.server_x = 12.5
+hero_dead.server_y = -4.0
+hero_dead.vx = 2.2
+hero_dead.vy = 0.0
+hero_dead._error_x = -5.5
+hero_dead._error_y = 0.5
+
+loci.on_property_changed(hero_dead, "is_dead", "false", "true")
+assert(hero_dead.vx == 0 and hero_dead.vy == 0, "is_dead -> true must zero entity velocity")
+assert(hero_dead._error_x == 0 and hero_dead._error_y == 0, "is_dead -> true must clear reconciliation error")
+assert(math.abs(hero_dead.x - 12.5) < 1e-4 and math.abs(hero_dead.y - (-4.0)) < 1e-4,
+    "is_dead -> true must snap local hero to authoritative death coordinates")
+print("  -> Passed: Local player death clears velocity and reconciliation drift.")
+
 print("\n>>> ALL CLIENT INTEGRATION TESTS PASSED SUCCESSFULLY! <<<")

@@ -874,11 +874,19 @@ function love.load(arg)
             local dead = (new_val == true or new_val == "true")
             if entity then
                 sprite_anim.set_dead(entity.id, dead)
+                if dead then
+                    entity.vx = 0
+                    entity.vy = 0
+                end
             end
             local my_entity = loci.get_my_entity()
             if entity and my_entity and entity.id == my_entity.id then
                 local was_dead = (old_val == true or old_val == "true")
                 if dead and not was_dead then
+                    if entity.server_x ~= nil then entity.x = entity.server_x end
+                    if entity.server_y ~= nil then entity.y = entity.server_y end
+                    entity._error_x = 0
+                    entity._error_y = 0
                     AudioSystem.play("death")
                 end
                 if dead and not respawn_state.active then

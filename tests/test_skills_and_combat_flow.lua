@@ -885,4 +885,31 @@ run_test("ArenaObstacles.initialize() and cleanup() work without global pairs()"
     end
 end)
 
+run_test("lethal hit stops a moving player immediately and prevents post-death drift", function()
+    local env = make_server_env(true)
+    local p1 = env.join_player(1, 0, 0)     -- Time 1
+    local p2 = env.join_player(2, 50, 0)    -- Time 2
+
+    env.step_ticks(1, 5)
+    assert(on_move_intent(2, 1, 0) == true)
+    assert(p2.vx > 0, "moving player must have positive vx before death")
+
+    -- Avança 1 tick para consolidar deslocamento e aplica dano letal enquanto anda
+    env.step_ticks(1, 6)
+    local x_before_kill = p2.x
+    p2.props.hp = "100"
+    with_fixed_random(0.99, function()
+        local res = env.CombatSystem.process_hit(1, 2, 1000, env.CombatSystem.DamageType.TRUE)
+        assert(res.success and res.lethal == true, "hit must be lethal")
+    end)
+
+    assert(p2.props.is_dead == "true", "player 2 must be marked dead")
+    assert(p2.vx == 0 and p2.vy == 0, "velocity must be zeroed immediately on lethal hit")
+
+    -- Ticks seguintes: corpo permanece imóvel no local da morte
+    env.step_ticks(5, 11)
+    assert(p2.vx == 0 and p2.vy == 0, "dead player velocity must remain zero")
+    assert_near(p2.x, x_before_kill, 1e-6, "dead player must not drift after death")
+end)
+
 print(string.format("\n>>> Phase 3: All %d Skills & Combat Flow tests passed! <<<", passed))

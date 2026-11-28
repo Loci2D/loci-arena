@@ -23,6 +23,11 @@ function LocalPrediction.is_casting(ent, cur_tick)
     return casting_until > (tonumber(cur_tick) or 0)
 end
 
+local function is_dead(ent)
+    local d = get_entity_prop(ent, "is_dead")
+    return d == true or d == "true" or d == 1 or d == "1"
+end
+
 -- env:
 --   cur_tick              tick autoritativo do servidor (loci._last_state_tick)
 --   tick_rate             ticks por segundo (loci.get_server_tick_rate())
@@ -33,7 +38,7 @@ function LocalPrediction.predict_local_movement(ent, dx, dy, dt, env)
     if not ent then return end
     env = env or {}
 
-    if LocalPrediction.is_casting(ent, env.cur_tick) then
+    if is_dead(ent) or LocalPrediction.is_casting(ent, env.cur_tick) then
         ent.vx = 0
         ent.vy = 0
         if env.clamp then env.clamp(ent) end
